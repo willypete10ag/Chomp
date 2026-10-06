@@ -543,7 +543,7 @@ def build_server(
         with connect() as conn:
             row = store.food_by_gtin(conn, code)
             if row is not None:
-                return result(row, "saved")
+                return result(store.mark_saved(conn, row["id"]), "saved")
             failures = 0
             for name, client, enabled in (
                 ("fdc", fdc, fdc.enabled),
@@ -560,7 +560,7 @@ def build_server(
                     continue
                 if rec is not None:
                     row, _ = store.cache_record(conn, rec)
-                    return result(row, name, rec.flags)
+                    return result(store.mark_saved(conn, row["id"]), name, rec.flags)
         if failures and failures == (2 if fdc.enabled else 1):
             next_step = (
                 "Barcode sources could not be reached. Try again shortly, or ask for a photo "

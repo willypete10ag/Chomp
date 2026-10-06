@@ -142,6 +142,17 @@ async def test_search_saved_matches_plurals_but_not_other_words(server, conn, up
 
 
 @pytest.mark.anyio
+async def test_search_saved_limit_skips_prefix_only_hits(server, conn, upstream):
+    upstream.add(SEARCH, {"foods": []})
+    for i in range(8):
+        add_food(conn, f"Eggplant {i}", 25, 1, 6, 0.2)
+    egg = add_food(conn, "Egg, whole, cooked, scrambled, with milk and butter", 149, 10, 1.6, 11)
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg", limit=1)
+    assert [r["food_id"] for r in out["results"]] == [egg]
+
+
+@pytest.mark.anyio
 async def test_search_survives_fdc_outage(server, conn, upstream):
     upstream.add(SEARCH, {}, status=503)
     add_food(conn, "Egg white", 52, 10.9, 0.7, 0.2)

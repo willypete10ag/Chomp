@@ -16,7 +16,7 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 
 ### Log from speech
 1. "4 scrambled eggs and 300 g egg whites"
-2. Claude calls `search_food` per item → picks best match (prefers cached/saved foods).
+2. Claude calls `search_food` per item → picks best match (prefers foods the user has used before).
 3. Claude calls `log_entries` with food_ids + grams → server returns per-item and meal totals.
 4. Claude shows the breakdown. I correct ("eggs were 220 g") → `update_entry`.
 
@@ -31,7 +31,7 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 ## MCP tools
 | Tool | Purpose | Key args |
 |---|---|---|
-| `search_food` | Fuzzy search (SQLite FTS5): aliases → foods the user has used (verified, label/barcode, logged, aliased or templated; verified first) → FDC (ranked by query words matched, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged | `query`, `limit` |
+| `search_food` | Fuzzy search (SQLite FTS5): aliases → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, aliased or templated; verified first) → FDC (ranked by query words matched, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros |
 | `log_entries` | Log one or more items as a meal | `items[{food_id, grams}]`, `meal_label?`, `eaten_at?` |

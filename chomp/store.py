@@ -90,6 +90,12 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
         return get_food(conn, cur.lastrowid), True
 
 
+def mark_saved(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row:
+    """Record that the user deliberately added this food (e.g. by scanning its barcode)."""
+    conn.execute("UPDATE foods SET saved = 1 WHERE id = ?", (food_id,))
+    return get_food(conn, food_id)
+
+
 def save_label_food(
     conn: sqlite3.Connection,
     *,
@@ -174,7 +180,7 @@ def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sql
 # Foods the user has chosen: verified, added from a label or barcode, logged, aliased, or in
 # a template. FDC search hits are cached in foods too, but only as a lookup cache.
 USED_FOOD = (
-    "(f.verified = 1 OR f.source != 'fdc'"
+    "(f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
@@ -191,11 +197,18 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
     rows = conn.execute(
         f"SELECT {cols} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
         f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
-        " ORDER BY f.verified DESC, bm25(foods_fts) LIMIT ?",
-        (match, limit * 5),
-    ).fetchall()
-    full = [r for r in rows if text.match_score(query, f"{r['name']} {r['brand'] or ''}") == 1]
-    return full[:limit]
+        " ORDER BY f.verified DESC, bm25(foods_fts)",
+        (match,),
+    )
+    # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
+    found: list[sqlite3.Row] = []
+    for row in rows:
+        if text.match_score(query, f"{row['name']} {row['brand'] or ''}") == 1:
+            found.append(row)
+            if len(found) == limit:
+                break
+    rows.close()
+    return found
 
 
 # --- Aliases and templates ------------------------------------------------------------------
