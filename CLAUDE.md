@@ -11,13 +11,15 @@ chomp/
   server.py        # MCPServer app + tool registrations, /health
   config.py        # settings from env
   db.py            # connection, migrations (applies SCHEMA.sql)
+  store.py         # SQL reads/writes behind the tools (no macro math)
   sources/
+    http.py        # shared retries/backoff and TTL response cache
     fdc.py         # USDA FoodData Central client
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
-tests/
+tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push
 docker-compose.yml
 .env.example       # FDC_API_KEY, AUTH_SECRET, DB_PATH, TZ

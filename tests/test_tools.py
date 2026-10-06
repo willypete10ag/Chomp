@@ -1,0 +1,320 @@
+"""M1 tools end to end through an in-process MCP client, with FDC replayed from fixtures."""
+
+from __future__ import annotations
+
+import pytest
+from conftest import fixture_json
+from mcp import Client
+
+from chomp.server import build_server
+
+SEARCH = "/fdc/v1/foods/search"
+
+
+@pytest.fixture
+def fdc_eggs(upstream):
+    upstream.add(
+        SEARCH,
+        fixture_json("fdc/search_egg_white_generic.json"),
+        match={"dataType": "Foundation,SR Legacy"},
+    )
+    upstream.add(
+        SEARCH,
+        fixture_json("fdc/search_egg_white_branded.json"),
+        match={"dataType": "Branded"},
+    )
+    return upstream
+
+
+@pytest.fixture
+def server(settings, conn, fdc):
+    return build_server(settings, fdc=fdc)
+
+
+async def call(client, name, **args):
+    result = await client.call_tool(name, args)
+    assert not result.is_error, result.content
+    return result.structured_content
+
+
+async def call_error(client, name, **args) -> str:
+    result = await client.call_tool(name, args)
+    assert result.is_error
+    return result.content[0].text
+
+
+def add_food(conn, name, kcal, protein, carbs, fat, *, verified=0, brand=None, source="manual"):
+    cur = conn.execute(
+        "INSERT INTO foods (name, brand, source, verified, kcal, protein_g, carbs_g, fat_g)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, brand, source, verified, kcal, protein, carbs, fat),
+    )
+    return cur.lastrowid
+
+
+@pytest.mark.anyio
+async def test_tool_list_and_descriptions(server):
+    async with Client(server) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    for name in ("search_food", "log_entries", "update_entry", "delete_entry", "get_day"):
+        assert name in tools
+        assert tools[name].output_schema is not None
+    assert "never" in tools["search_food"].description.lower() or "rather than guessing" in (
+        tools["search_food"].description
+    )
+    assert "estimate" in server.instructions.lower()
+
+
+@pytest.mark.anyio
+async def test_search_caches_fdc_hits_with_ids(server, conn, fdc_eggs):
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg white")
+    results = out["results"]
+    assert [r["fdc_data_type"] for r in results] == ["Foundation", "SR Legacy", "Branded"]
+    assert all(r["match"] == "fdc" and r["food_id"] for r in results)
+    assert results[1]["per_100g"]["protein_g"] == 10.9
+    rows = conn.execute("SELECT source, source_id FROM foods ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [
+        ("fdc", "747997"),
+        ("fdc", "172183"),
+        ("fdc", "2091234"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_twice_reuses_food_ids(server, conn, fdc_eggs):
+    async with Client(server) as client:
+        first = await call(client, "search_food", query="egg white")
+        second = await call(client, "search_food", query="egg white")
+    assert {r["food_id"] for r in first["results"]} == {r["food_id"] for r in second["results"]}
+    assert conn.execute("SELECT count(*) FROM foods").fetchone()[0] == 3
+    # Second time they come back as saved foods, ahead of any new FDC hits
+    assert {r["match"] for r in second["results"]} == {"saved"}
+
+
+@pytest.mark.anyio
+async def test_search_ranks_alias_then_verified_saved_then_fdc(server, conn, fdc_eggs):
+    plain = add_food(conn, "Egg white omelette", 50, 10, 1, 0)
+    verified = add_food(conn, "Egg white bites", 70, 8, 4, 2, verified=1)
+    conn.execute("INSERT INTO aliases VALUES ('my egg whites', ?, 300)", (plain,))
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg white", limit=4)
+    r = out["results"]
+    assert [x["match"] for x in r] == ["alias", "saved", "fdc", "fdc"]
+    assert r[0]["food_id"] == plain and r[0]["default_grams"] == 300
+    assert r[1]["food_id"] == verified  # the plain one already appeared as the alias
+
+
+@pytest.mark.anyio
+async def test_search_prefix_matching(server, conn):
+    eggs = add_food(conn, "Eggs, scrambled", 150, 10, 2, 11)
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg", limit=1)
+    assert out["results"][0]["food_id"] == eggs
+
+
+@pytest.mark.anyio
+async def test_search_survives_fdc_outage(server, conn, upstream):
+    upstream.add(SEARCH, {}, status=503)
+    add_food(conn, "Egg white", 52, 10.9, 0.7, 0.2)
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg white")
+    assert len(out["results"]) == 1
+    assert "unavailable" in out["notes"][0]
+
+
+@pytest.mark.anyio
+async def test_search_no_match_says_so(server, upstream):
+    upstream.add(SEARCH, {"foods": []})
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="zzzz")
+    assert out["results"] == []
+    assert "barcode or label photo" in out["notes"][-1]
+
+
+@pytest.mark.anyio
+async def test_search_without_fdc_key(settings, conn):
+    from chomp.sources.fdc import FDCClient
+
+    server = build_server(settings, fdc=FDCClient(""))
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="anything")
+    assert "not configured" in out["notes"][0]
+
+
+@pytest.mark.anyio
+async def test_search_handles_fts_syntax_in_query(server, upstream):
+    upstream.add(SEARCH, {"foods": []})
+    async with Client(server) as client:
+        out = await call(client, "search_food", query='egg "AND" (white*) OR -')
+    assert out["results"] == []
+
+
+EGGS = (143, 12.6, 0.72, 9.51)
+WHITES = (52, 10.9, 0.73, 0.17)
+
+
+@pytest.mark.anyio
+async def test_log_correct_and_review_the_done_when_scenario(server, conn):
+    """'4 scrambled eggs and 300 g egg whites': log, correct the eggs to 220 g, review."""
+    eggs = add_food(conn, "Egg, whole, scrambled", *EGGS)
+    whites = add_food(conn, "Egg white, raw", *WHITES)
+    async with Client(server) as client:
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 200}, {"food_id": whites, "grams": 300}],
+            meal_label="breakfast",
+            eaten_at="2026-10-05T08:30",
+        )
+        meal = logged["meal"]
+        assert meal["eaten_at"] == "2026-10-05T08:30:00-04:00"
+        assert [e["nutrients"]["kcal"] for e in meal["entries"]] == [286, 156]
+        assert meal["totals"]["protein_g"] == pytest.approx(25.2 + 32.7)
+        assert logged["day"]["date"] == "2026-10-05"
+
+        egg_entry = meal["entries"][0]["entry_id"]
+        fixed = await call(client, "update_entry", entry_id=egg_entry, grams=220)
+        assert fixed["entry"]["grams"] == 220
+        assert fixed["entry"]["nutrients"]["kcal"] == 315  # 314.6 rounded
+        assert fixed["meal"]["totals"]["kcal"] == 471
+
+        day = await call(client, "get_day", date="2026-10-05")
+    assert len(day["meals"]) == 1
+    assert day["totals"]["kcal"] == 471
+    assert day["totals"]["protein_g"] == pytest.approx(27.7 + 32.7, abs=0.1)
+    assert day["progress"] == {}
+
+
+@pytest.mark.anyio
+async def test_snapshot_survives_food_edit(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}],
+            eaten_at="2026-10-05T12:00:00Z",
+        )
+        conn.execute("UPDATE foods SET kcal = 999 WHERE id = ?", (eggs,))
+        day = await call(client, "get_day", date="2026-10-05")
+    assert day["totals"]["kcal"] == 143
+
+
+@pytest.mark.anyio
+async def test_update_swaps_food(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    whites = add_food(conn, "Egg white", *WHITES)
+    async with Client(server) as client:
+        logged = await call(client, "log_entries", items=[{"food_id": eggs, "grams": 100}])
+        entry_id = logged["meal"]["entries"][0]["entry_id"]
+        out = await call(client, "update_entry", entry_id=entry_id, food_id=whites)
+    assert out["entry"]["food_id"] == whites
+    assert out["entry"]["nutrients"]["kcal"] == 52
+
+
+@pytest.mark.anyio
+async def test_update_needs_a_change(server, conn):
+    async with Client(server) as client:
+        msg = await call_error(client, "update_entry", entry_id=1)
+    assert "grams, food_id, or both" in msg
+
+
+@pytest.mark.anyio
+async def test_delete_entry_then_meal(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    whites = add_food(conn, "Egg white", *WHITES)
+    async with Client(server) as client:
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}, {"food_id": whites, "grams": 100}],
+        )
+        first, second = (e["entry_id"] for e in logged["meal"]["entries"])
+        out = await call(client, "delete_entry", entry_id=first)
+        assert out["meal_deleted"] is False
+        assert out["meal"]["totals"]["kcal"] == 52
+        assert out["day"]["totals"]["kcal"] == 52
+        out = await call(client, "delete_entry", entry_id=second)
+        assert out["meal_deleted"] is True and out["meal"] is None
+        assert out["day"]["totals"]["kcal"] == 0
+    assert conn.execute("SELECT count(*) FROM meals").fetchone()[0] == 0
+
+
+@pytest.mark.anyio
+async def test_log_rejects_unknown_food_and_writes_nothing(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        msg = await call_error(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}, {"food_id": 9999, "grams": 50}],
+        )
+    assert "no food with id 9999" in msg
+    assert conn.execute("SELECT count(*) FROM meals").fetchone()[0] == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("grams", [0, -10])
+async def test_log_rejects_non_positive_grams(server, conn, grams):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "log_entries", {"items": [{"food_id": eggs, "grams": grams}]}
+        )
+    assert result.is_error
+
+
+@pytest.mark.anyio
+async def test_log_rejects_date_only_eaten_at(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        msg = await call_error(
+            client, "log_entries", items=[{"food_id": eggs, "grams": 1}], eaten_at="2026-10-05"
+        )
+    assert "needs a time" in msg
+
+
+@pytest.mark.anyio
+async def test_get_day_uses_local_midnight(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        # 23:30 local on the 5th is 03:30Z on the 6th (EDT)
+        await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}],
+            eaten_at="2026-10-05T23:30",
+        )
+        fifth = await call(client, "get_day", date="2026-10-05")
+        sixth = await call(client, "get_day", date="2026-10-06")
+    assert fifth["totals"]["kcal"] == 143
+    assert sixth["totals"]["kcal"] == 0 and sixth["meals"] == []
+
+
+@pytest.mark.anyio
+async def test_get_day_progress_against_targets(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    conn.execute("INSERT INTO targets (id, kcal, protein_g) VALUES (1, 2000, 180)")
+    async with Client(server) as client:
+        await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 500}],
+            eaten_at="2026-10-05T09:00",
+        )
+        day = await call(client, "get_day", date="2026-10-05")
+    assert day["progress"]["protein_g"] == {
+        "target": 180,
+        "eaten": 63.0,
+        "remaining": 117.0,
+        "percent": 35.0,
+    }
+    assert set(day["progress"]) == {"kcal", "protein_g"}
+
+
+@pytest.mark.anyio
+async def test_get_day_rejects_bad_date(server):
+    async with Client(server) as client:
+        msg = await call_error(client, "get_day", date="next tuesday")
+    assert "YYYY-MM-DD" in msg
