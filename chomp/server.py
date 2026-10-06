@@ -363,9 +363,10 @@ def build_server(
     ) -> SearchResult:
         """Find foods to log. Call once per item the user mentions, before log_entries.
 
-        Results are ranked: the user's aliases first (with default_grams), then foods already
-        saved in Chomp (verified first), then USDA FoodData Central (generic Foundation and
-        SR Legacy foods before Branded products). Every result has a food_id and per-100 g
+        Results are ranked: the user's aliases first (with default_grams), then foods the
+        user has used before (logged, saved from a label or barcode, verified first), then
+        USDA FoodData Central (closest name match first, generic Foundation and SR Legacy
+        foods before Branded products). Every result has a food_id and per-100 g
         nutrients from the database. Prefer alias and saved matches; prefer generic FDC
         foods unless the user named a brand. Show the user which food you picked. If nothing
         fits, say so and ask for a barcode or label photo rather than guessing.
