@@ -18,6 +18,7 @@ chomp/
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
+  text.py          # word matching (plural folding) for search ranking
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push
