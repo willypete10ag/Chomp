@@ -9,6 +9,10 @@ Python 3.12 · `mcp` SDK v2 (`MCPServer`, which v1 called FastMCP; streamable HT
 ```
 chomp/
   server.py        # MCPServer app + tool registrations, /health
+  auth.py          # single-user OAuth 2.1 server + bearer token, consent page
+  cli.py           # `chomp` command: serve, backup, restore, export
+  backup.py        # nightly SQLite backup with retention, restore
+  export.py        # CSV/JSON export
   config.py        # settings from env
   db.py            # connection, migrations (applies SCHEMA.sql)
   store.py         # SQL reads/writes behind the tools (no macro math)
@@ -22,8 +26,9 @@ chomp/
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push
-docker-compose.yml
-.env.example       # FDC_API_KEY, AUTH_SECRET, DB_PATH, TZ
+Dockerfile         # slim, non-root (uid 10001)
+docker-compose.yml # chomp + nightly backup + cloudflared
+.env.example       # FDC_API_KEY, PUBLIC_URL + auth secrets, TUNNEL_TOKEN, backups, DB_PATH, TZ
 .gitignore         # .env, *.db*, .venv/, __pycache__/
 README.md
 ```

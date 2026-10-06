@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, db, logic, store
+from chomp import __version__, auth, db, logic, store
 from chomp.config import Settings
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -295,7 +295,16 @@ ASK_FOR_LABEL = (
 def build_server(
     settings: Settings, *, fdc: FDCClient | None = None, off: OFFClient | None = None
 ) -> MCPServer:
-    server = MCPServer(name="chomp", version=__version__, instructions=INSTRUCTIONS)
+    provider = auth.ChompAuthProvider(settings) if auth.check_settings(settings) else None
+    server = MCPServer(
+        name="chomp",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        auth=auth.auth_settings(settings) if provider else None,
+        auth_server_provider=provider,
+    )
+    if provider:
+        auth.add_consent_route(server, provider)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
     fdc = fdc or FDCClient(settings.fdc_api_key)
@@ -328,6 +337,10 @@ def build_server(
 
     @server.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> JSONResponse:
+        # Once public, only the container's own health check (loopback) may ask; the tunnel
+        # then exposes nothing but /mcp and its sign-in routes.
+        if provider and not auth.is_loopback(request.client.host if request.client else ""):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         try:
             with connect() as conn:
                 version = db.schema_version(conn)
@@ -869,13 +882,23 @@ def main() -> None:
     # httpx logs full request URLs at INFO; keep upstream request details out of the log.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings.from_env()
+    auth.check_settings(settings)  # fail on bad auth config before touching the database
     with closing(db.connect(settings.db_path)) as conn:
         version = db.migrate(conn, settings.schema_path, settings.migrations_dir)
     log.info("database ready at schema version %d", version)
     if not settings.fdc_api_key:
         log.warning("FDC_API_KEY is not set; search_food will only find saved foods")
     server = build_server(settings)
-    server.run("streamable-http", host=settings.host, port=settings.port)
+    if settings.public_url:
+        log.info("auth on: OAuth sign-in%s", " plus bearer token" if settings.bearer_token else "")
+    else:
+        log.info("local-only mode: no auth, listening on %s only", settings.host)
+    server.run(
+        "streamable-http",
+        host=settings.host,
+        port=settings.port,
+        transport_security=auth.transport_security(settings),
+    )
 
 
 if __name__ == "__main__":
