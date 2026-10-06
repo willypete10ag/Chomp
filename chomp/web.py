@@ -45,6 +45,7 @@ SUBJECT = "owner"
 HISTORY_RANGES = (7, 30, 90)
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
+MIN_YEAR, MAX_YEAR = 1900, 2999
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 ICONS = {
     "icon-192.png": "image/png",
@@ -430,6 +431,8 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
         now = today()
         try:
             day = logic.parse_local_date(request.query_params.get("date"), tz)
+            if not MIN_YEAR <= day.year <= MAX_YEAR:  # keeps day ± 1 and its bounds in range
+                raise ValueError(day)
         except ValueError:
             return message("Unknown date", "Dates look like 2026-10-06.", 400, signed_in=True)
         start, end = logic.local_day_bounds(day, tz)

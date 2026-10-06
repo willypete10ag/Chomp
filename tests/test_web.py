@@ -222,6 +222,8 @@ def test_other_days_and_bad_dates(http, logged):
     assert "Jump to today" in r.text
     assert http.get("/app?date=yesterday").status_code == 200
     assert http.get("/app?date=13/2").status_code == 400
+    for edge in ("9999-12-31", "0001-01-01"):
+        assert http.get(f"/app?date={edge}").status_code == 400
 
 
 def test_edit_grams_resnapshots_from_the_food(http, conn, logged):
