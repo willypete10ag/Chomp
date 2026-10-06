@@ -71,6 +71,8 @@ def test_failed_migration_rolls_back(tmp_path: Path):
     [
         (["0001_x.sql"], "start at 0002"),
         (["0002_a.sql", "0004_c.sql"], "contiguous"),
+        (["002_short.sql"], "must be named"),
+        (["0002-dashes.sql"], "must be named"),
     ],
 )
 def test_rejects_bad_migration_sets(tmp_path: Path, files, match):

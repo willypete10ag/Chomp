@@ -42,6 +42,8 @@ def list_migrations(migrations_dir: Path) -> list[tuple[int, Path]]:
     for p in migrations_dir.iterdir():
         m = _MIGRATION_RE.match(p.name)
         if not m:
+            if p.suffix.lower() == ".sql":
+                raise MigrationError(f"{p.name}: migration files must be named NNNN_<name>.sql")
             continue
         version = int(m.group(1))
         if version <= BASELINE_VERSION:

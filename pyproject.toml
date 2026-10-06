@@ -26,6 +26,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["chomp"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"SCHEMA.sql" = "chomp/SCHEMA.sql"
+"migrations" = "chomp/migrations"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

@@ -43,5 +43,5 @@ README.md
 ## Commands
 - `uv sync` (first time), then `uv run pytest -q`
 - `uv run ruff check . && uv run ruff format --check .`
-- `npx @modelcontextprotocol/inspector` for local tool testing
+- `uv run --env-file .env chomp` to run the server; `npx @modelcontextprotocol/inspector` for local tool testing
 - `docker compose up -d --build`

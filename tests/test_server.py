@@ -49,3 +49,13 @@ def test_health_route_reports_db_failure(settings, tmp_path):
         r = http.get("/health")
     assert r.status_code == 503
     assert r.json() == {"status": "error"}
+
+
+def test_default_paths_resolve_in_checkout(monkeypatch):
+    from chomp.config import Settings
+
+    for var in ("SCHEMA_PATH", "MIGRATIONS_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    s = Settings.from_env()
+    assert s.schema_path.is_file()
+    assert s.migrations_dir.is_dir()

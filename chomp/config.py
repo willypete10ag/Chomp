@@ -6,7 +6,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+PACKAGE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = PACKAGE_DIR.parent
+
+
+def _bundled(name: str) -> Path:
+    """A wheel install carries SCHEMA.sql and migrations/ inside the package (see
+    pyproject force-include); a source checkout keeps them in the repo root."""
+    inside = PACKAGE_DIR / name
+    return inside if inside.exists() else REPO_ROOT / name
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,6 @@ class Settings:
             tz=os.environ.get("TZ", "America/New_York"),
             host=os.environ.get("HOST", "127.0.0.1"),
             port=int(os.environ.get("PORT", "8000")),
-            schema_path=Path(os.environ.get("SCHEMA_PATH", REPO_ROOT / "SCHEMA.sql")),
-            migrations_dir=Path(os.environ.get("MIGRATIONS_DIR", REPO_ROOT / "migrations")),
+            schema_path=Path(os.environ.get("SCHEMA_PATH", _bundled("SCHEMA.sql"))),
+            migrations_dir=Path(os.environ.get("MIGRATIONS_DIR", _bundled("migrations"))),
         )
