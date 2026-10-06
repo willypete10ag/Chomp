@@ -24,3 +24,27 @@ jobs:
         run: uv run ruff format --check .
       - name: Test
         run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t chomp:ci .
+      - name: Refuses to start public without auth
+        run: |
+          if docker run --rm chomp:ci; then echo "started without auth"; exit 1; fi
+      - name: Starts with auth and passes its health check
+        run: |
+          docker run -d --name chomp \
+            -e PUBLIC_URL=https://chomp.example.com \
+            -e AUTH_PASSWORD=ci-password-123 \
+            -e OAUTH_CLIENT_ID=claude-chomp \
+            -e OAUTH_CLIENT_SECRET=$(openssl rand -hex 24) \
+            chomp:ci
+          for i in $(seq 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' chomp)
+            [ "$status" = healthy ] && exit 0
+            sleep 2
+          done
+          docker logs chomp; exit 1

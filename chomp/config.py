@@ -29,6 +29,16 @@ class Settings:
     migrations_dir: Path
     fdc_api_key: str = field(default="", repr=False)
     off_user_agent: str = DEFAULT_OFF_USER_AGENT
+    # Endpoint auth (see chomp/auth.py). Blank public_url = local-only mode, no auth.
+    public_url: str = ""
+    auth_password: str = field(default="", repr=False)
+    oauth_client_id: str = ""
+    oauth_client_secret: str = field(default="", repr=False)
+    bearer_token: str = field(default="", repr=False)
+    # Nightly backups (see chomp/backup.py)
+    backup_dir: str = "./backups"
+    backup_keep: int = 14
+    backup_at: str = "03:30"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -41,4 +51,12 @@ class Settings:
             migrations_dir=Path(os.environ.get("MIGRATIONS_DIR", _bundled("migrations"))),
             fdc_api_key=os.environ.get("FDC_API_KEY", ""),
             off_user_agent=os.environ.get("OFF_USER_AGENT") or DEFAULT_OFF_USER_AGENT,
+            public_url=os.environ.get("PUBLIC_URL", "").strip().rstrip("/"),
+            auth_password=os.environ.get("AUTH_PASSWORD", ""),
+            oauth_client_id=os.environ.get("OAUTH_CLIENT_ID", "").strip(),
+            oauth_client_secret=os.environ.get("OAUTH_CLIENT_SECRET", ""),
+            bearer_token=os.environ.get("BEARER_TOKEN", ""),
+            backup_dir=os.environ.get("BACKUP_DIR", "./backups"),
+            backup_keep=int(os.environ.get("BACKUP_KEEP", "14")),
+            backup_at=os.environ.get("BACKUP_AT", "03:30"),
         )

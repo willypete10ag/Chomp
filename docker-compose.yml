@@ -1,0 +1,70 @@
+# Chomp on the homelab: the MCP server, its nightly backup, and a Cloudflare Tunnel.
+# Nothing listens on the host. cloudflared dials out to Cloudflare and forwards to
+# http://chomp:8000 over this Compose network. Setup: README.md, "Deploy".
+
+name: chomp
+
+x-chomp: &chomp
+  build: .
+  image: chomp:local
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    # Container paths; these win over anything in .env.
+    DB_PATH: /data/chomp.db
+    BACKUP_DIR: /backups
+    HOST: 0.0.0.0
+    PORT: "8000"
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  chomp:
+    <<: *chomp
+    volumes:
+      - chomp-data:/data
+    # For MCP Inspector on this machine only, uncomment (never 0.0.0.0):
+    # ports: ["127.0.0.1:8000:8000"]
+
+  # Docker creates a missing bind-mount folder owned by root; hand it to the chomp user
+  # (uid 10001) once, so nightly backups can write there.
+  backup-init:
+    <<: *chomp
+    restart: "no"
+    user: "0:0"
+    command: ["chown", "10001:10001", "/backups"]
+    cap_add: [CHOWN]
+    healthcheck:
+      disable: true
+    volumes:
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+
+  backup:
+    <<: *chomp
+    command: ["chomp", "backup", "--daily"]
+    healthcheck:
+      disable: true
+    volumes:
+      - chomp-data:/data
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    depends_on:
+      backup-init:
+        condition: service_completed_successfully
+      chomp:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      chomp:
+        condition: service_healthy
+
+volumes:
+  chomp-data:

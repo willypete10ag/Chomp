@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-chomp = "chomp.server:main"
+chomp = "chomp.cli:main"
 
 [dependency-groups]
 dev = [

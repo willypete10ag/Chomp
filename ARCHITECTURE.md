@@ -60,9 +60,15 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 
 ## Security
-- Cloudflare Tunnel exposes only the MCP endpoint. Auth via OAuth (supported by Claude custom connectors) or a long random bearer token if the plan's connector setup allows it. Zero Trust Access browser login will block Claude's servers, so don't put interactive SSO in front of the endpoint.
-- Secrets (`FDC_API_KEY`, auth secret) in `.env`, never committed.
-- Nightly SQLite backup (`sqlite3 .backup`) to the media/backup disk.
+- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, and the OAuth routes and metadata. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of the endpoint.
+- Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal single-user OAuth 2.1 server. One pre-registered client (ID and secret entered in Claude's connector dialog), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
+- With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
+- Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
+- The container runs as uid 10001 with a read-only root filesystem and no capabilities; the database lives in the `chomp-data` volume.
+
+## Backup and export
+- `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one.
+- `chomp export --format csv|json`: CSV is one row per entry; JSON holds foods, meals with entries, aliases, templates and targets. Both take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.
