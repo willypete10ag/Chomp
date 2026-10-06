@@ -101,6 +101,9 @@ class SearchHit(Food):
 
 class SearchResult(BaseModel):
     query: str
+    templates: list[str] = Field(
+        description="Saved meal templates this phrase names; log one with log_meal_template"
+    )
     results: list[SearchHit]
     notes: list[str]
 
@@ -391,8 +394,10 @@ def build_server(
         USDA FoodData Central (closest name match first, generic Foundation and SR Legacy
         foods before Branded products). Every result has a food_id and per-100 g
         nutrients from the database. Prefer alias and saved matches; prefer generic FDC
-        foods unless the user named a brand. Show the user which food you picked. If nothing
-        fits, say so and ask for a barcode or label photo rather than guessing.
+        foods unless the user named a brand. If `templates` names a saved meal template,
+        the user means that meal: log it with log_meal_template. Show the user which food
+        you picked. If nothing fits, say so and ask for a barcode or label photo
+        rather than guessing.
         """
         notes: list[str] = []
         hits: list[SearchHit] = []
@@ -404,6 +409,12 @@ def build_server(
                 hits.append(SearchHit(**_food(row).model_dump(), **extra))
 
         with connect() as conn:
+            templates = store.templates_matching(conn, query)
+            if templates:
+                notes.append(
+                    f"The user has a saved meal template named {templates[0]!r}: log it with "
+                    "log_meal_template rather than searching for its foods."
+                )
             for row in store.search_aliases(conn, query, limit):
                 add(
                     row,
@@ -430,11 +441,11 @@ def build_server(
                             log.warning("search_food: skipped FDC %s: %s", rec.source_id, e)
                             continue
                         add(row, match="fdc", fdc_data_type=rec.data_type)
-        if not hits:
+        if not hits and not templates:
             notes.append(
                 "No match. Try a simpler or more generic name, or ask for a barcode or label photo."
             )
-        return SearchResult(query=query, results=hits, notes=notes)
+        return SearchResult(query=query, templates=templates, results=hits, notes=notes)
 
     @server.tool(annotations=ADDS)
     def log_entries(
