@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_DIR.parent
+# Open Food Facts asks every client to identify itself with an app name and contact.
+DEFAULT_OFF_USER_AGENT = "Chomp/0.1 (self-hosted meal log; https://github.com/willypete10ag/chomp)"
 
 
 def _bundled(name: str) -> Path:
@@ -25,6 +27,8 @@ class Settings:
     port: int
     schema_path: Path
     migrations_dir: Path
+    fdc_api_key: str = field(default="", repr=False)
+    off_user_agent: str = DEFAULT_OFF_USER_AGENT
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -35,4 +39,6 @@ class Settings:
             port=int(os.environ.get("PORT", "8000")),
             schema_path=Path(os.environ.get("SCHEMA_PATH", _bundled("SCHEMA.sql"))),
             migrations_dir=Path(os.environ.get("MIGRATIONS_DIR", _bundled("migrations"))),
+            fdc_api_key=os.environ.get("FDC_API_KEY", ""),
+            off_user_agent=os.environ.get("OFF_USER_AGENT") or DEFAULT_OFF_USER_AGENT,
         )

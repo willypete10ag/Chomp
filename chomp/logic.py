@@ -97,6 +97,11 @@ def sum_nutrients(rows: Iterable[Mapping[str, float | None]]) -> Nutrients:
     return totals
 
 
+def round_nutrients(values: Mapping[str, float | None]) -> Nutrients:
+    """Round to storage precision (used when caching upstream foods)."""
+    return {k: None if v is None else round(v, STORE_PLACES) for k, v in _clean(values).items()}
+
+
 def round_for_display(values: Mapping[str, float | None]) -> Nutrients:
     out: Nutrients = {}
     for k in NUTRIENTS:
@@ -153,3 +158,92 @@ def local_day_bounds(day: date, tz: str) -> tuple[str, str]:
 def local_date(utc: str, tz: str) -> date:
     """The local calendar date a stored UTC timestamp falls on."""
     return parse_utc(utc).astimezone(ZoneInfo(tz)).date()
+
+
+def local_iso(utc: str, tz: str) -> str:
+    """A stored UTC timestamp as local ISO 8601 with offset, e.g. 2026-10-05T08:12:00-04:00."""
+    return parse_utc(utc).astimezone(ZoneInfo(tz)).isoformat()
+
+
+def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> str:
+    """Normalize a meal time to storage format.
+
+    None means now. An ISO 8601 string with an offset (or Z) is taken as is; one without an
+    offset is local time in `tz`. A bare date is rejected so a meal never silently lands at
+    midnight.
+    """
+    if value is None or not value.strip():
+        return format_utc(now or datetime.now(UTC))
+    text = value.strip()
+    if len(text) <= 10:
+        raise ValueError(f"eaten_at needs a time as well as a date, got {value!r}")
+    try:
+        dt = datetime.fromisoformat(text.replace("z", "Z"))
+    except ValueError as e:
+        raise ValueError(f"eaten_at must be ISO 8601 like 2026-10-05T08:30, got {value!r}") from e
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(tz))
+    return format_utc(dt)
+
+
+def parse_local_date(value: str | None, tz: str, now: datetime | None = None) -> date:
+    """A local calendar date from YYYY-MM-DD, 'today', 'yesterday', or None (today)."""
+    today = (now or datetime.now(UTC)).astimezone(ZoneInfo(tz)).date()
+    text = (value or "today").strip().lower()
+    if text == "today":
+        return today
+    if text == "yesterday":
+        return today - timedelta(days=1)
+    try:
+        return date.fromisoformat(text)
+    except ValueError as e:
+        raise ValueError(f"date must be YYYY-MM-DD, 'today' or 'yesterday', got {value!r}") from e
+
+
+def date_range(start: date, end: date) -> list[date]:
+    """Every local date from start to end, inclusive."""
+    if end < start:
+        raise ValueError(f"end {end} is before start {start}")
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def average(totals: Mapping[str, float | None], days: int) -> Nutrients:
+    """Per-day average of summed nutrients over `days` days."""
+    if days <= 0:
+        raise ValueError("days must be positive")
+    return {k: None if (v := totals.get(k)) is None else v / days for k in NUTRIENTS}
+
+
+# --- Upstream data --------------------------------------------------------------------------
+
+KJ_PER_KCAL = 4.184
+# Label rounding makes small values disagree a lot in relative terms, so differences below
+# these absolute amounts never count as a mismatch.
+MISMATCH_FLOOR = {"kcal": 10.0, "protein_g": 1.0, "carbs_g": 1.0, "fat_g": 1.0}
+
+
+def kj_to_kcal(kj: float) -> float:
+    return kj / KJ_PER_KCAL
+
+
+def g_to_mg(grams: float) -> float:
+    return grams * 1000.0
+
+
+def label_mismatch(
+    per_100g: Mapping[str, float | None],
+    label_per_100g: Mapping[str, float | None],
+    tolerance: float = 0.10,
+) -> list[str]:
+    """Core nutrients where database per-100 g values and label-derived per-100 g values
+    differ by more than `tolerance` (relative to the larger value) and by more than the
+    absolute floor. Nutrients missing from either side are skipped."""
+    out = []
+    for k in CORE:
+        a, b = per_100g.get(k), label_per_100g.get(k)
+        if a is None or b is None:
+            continue
+        diff = abs(a - b)
+        if diff > MISMATCH_FLOOR[k] and diff > tolerance * max(abs(a), abs(b)):
+            out.append(k)
+    return out
