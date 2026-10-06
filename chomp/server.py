@@ -13,6 +13,7 @@ from typing import Annotated, Literal, TypedDict
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -36,6 +37,14 @@ correct it with update_entry.\
 """
 
 SEARCH_LIMIT_MAX = 25
+
+# Hints shown to clients (e.g. MCP Inspector, Claude's tool permissions).
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+LOOKUP = ToolAnnotations(  # only caches upstream foods
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
+)
+ADDS = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+CHANGES = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
 TOTALS_MAX_DAYS = 366
 
 
@@ -330,7 +339,7 @@ def build_server(
             return JSONResponse({"status": "error"}, status_code=503)
         return JSONResponse({"status": "ok", "schema_version": version})
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def server_info() -> ServerInfo:
         """Report Chomp's version, database schema version, and display timezone.
 
@@ -345,7 +354,7 @@ def build_server(
             "tz": tz,
         }
 
-    @server.tool()
+    @server.tool(annotations=LOOKUP)
     async def search_food(
         query: Annotated[
             str, Field(min_length=1, description="Food name as the user said it, e.g. 'egg whites'")
@@ -399,7 +408,7 @@ def build_server(
             )
         return SearchResult(query=query, results=hits, notes=notes)
 
-    @server.tool()
+    @server.tool(annotations=ADDS)
     def log_entries(
         items: Annotated[list[LogItem], Field(min_length=1, description="One item per food eaten")],
         meal_label: Annotated[
@@ -430,7 +439,7 @@ def build_server(
             )
             return LogResult(meal=meal_out(conn, meal_id), day=day_summary(conn, when))
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def update_entry(
         entry_id: Annotated[int, Field(description="entry_id from log_entries or get_day")],
         grams: Annotated[float | None, Field(gt=0, description="Corrected grams")] = None,
@@ -452,7 +461,7 @@ def build_server(
             day = day_summary(conn, store.get_meal(conn, entry.meal_id)["eaten_at"])
             return UpdateResult(entry=_entry(entry), meal=meal, day=day)
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def delete_entry(
         entry_id: Annotated[int, Field(description="entry_id from log_entries or get_day")],
     ) -> DeleteResult:
@@ -470,7 +479,7 @@ def build_server(
                 day=day_summary(conn, eaten_at),
             )
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def get_day(
         date: Annotated[
             str | None,
@@ -495,7 +504,7 @@ def build_server(
                 progress=_progress(totals, store.get_targets(conn)),
             )
 
-    @server.tool()
+    @server.tool(annotations=LOOKUP)
     async def lookup_barcode(
         barcode: Annotated[
             str, Field(description="UPC/EAN digits read from the package or a barcode photo")
@@ -567,7 +576,7 @@ def build_server(
             next_step=next_step,
         )
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)  # may take a barcode from another food
     def save_food_from_label(
         name: Annotated[str, Field(min_length=1, description="Product name")],
         serving_g: Annotated[
@@ -618,7 +627,7 @@ def build_server(
             )
             return LabelResult(food=_food(row), barcode_moved_from_food_id=moved_from)
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def confirm_food(
         food_id: Annotated[int, Field(description="The food to confirm")],
         kcal: OptionalNutrientArg = None,
@@ -666,7 +675,7 @@ def build_server(
             row, changed = store.confirm_food(conn, food_id, given)
             return ConfirmResult(food=_food(row), changed=changed)
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def save_alias(
         alias: Annotated[
             str, Field(min_length=1, description="The user's phrase, e.g. 'my usual eggs'")
@@ -721,7 +730,7 @@ def build_server(
             totals=_nutrients(totals),
         )
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def save_meal_template(
         name: Annotated[str, Field(min_length=1, description="Short name, e.g. 'usual breakfast'")],
         items: Annotated[list[LogItem], Field(min_length=1, description="Foods and grams")],
@@ -739,7 +748,7 @@ def build_server(
             row, rows = store.get_template(conn, name)
             return template_out(conn, template_id, row["name"], replaced, rows)
 
-    @server.tool()
+    @server.tool(annotations=ADDS)
     def log_meal_template(
         name: Annotated[str, Field(min_length=1, description="Template name, any case")],
         eaten_at: Annotated[
@@ -767,7 +776,7 @@ def build_server(
             )
             return LogResult(meal=meal_out(conn, meal_id), day=day_summary(conn, when))
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def get_totals(
         start: Annotated[str, Field(description="First local date, YYYY-MM-DD")],
         end: Annotated[
@@ -814,7 +823,7 @@ def build_server(
                 ],
             )
 
-    @server.tool()
+    @server.tool(annotations=CHANGES)
     def set_targets(
         kcal: Annotated[float | None, Field(gt=0, description="Daily calories")] = None,
         protein_g: Annotated[float | None, Field(gt=0, description="Daily protein, g")] = None,

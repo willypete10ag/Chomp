@@ -318,3 +318,15 @@ async def test_get_day_rejects_bad_date(server):
     async with Client(server) as client:
         msg = await call_error(client, "get_day", date="next tuesday")
     assert "YYYY-MM-DD" in msg
+
+
+@pytest.mark.anyio
+async def test_tool_annotations(server):
+    async with Client(server) as client:
+        tools = {t.name: t.annotations for t in (await client.list_tools()).tools}
+    assert len(tools) == 14 and all(a is not None for a in tools.values())
+    assert tools["get_day"].read_only_hint is True
+    assert tools["get_totals"].read_only_hint is True
+    assert tools["search_food"].destructive_hint is False
+    assert tools["delete_entry"].destructive_hint is True
+    assert tools["save_food_from_label"].destructive_hint is True
