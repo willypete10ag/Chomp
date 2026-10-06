@@ -288,3 +288,4 @@ def test_tidy_upstream_zeroes_small_negatives_and_rejects_bad_values():
     assert logic.tidy_upstream(base)["fiber_g"] is None
     assert logic.tidy_upstream({**base, "carbs_g": -5}) is None
     assert logic.tidy_upstream({**base, "fat_g": float("nan")}) is None
+    assert logic.tidy_upstream({**base, "carbs_g": 1, "fat_g": -0.5}) is None

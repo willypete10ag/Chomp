@@ -66,12 +66,14 @@ UPSTREAM_NEGATIVE_FLOOR = -1.0
 
 
 def tidy_upstream(values: Mapping[str, float | None]) -> Nutrients | None:
-    """Upstream per-100 g values with small negatives set to 0, or None if one is unusable."""
+    """Upstream per-100 g values with slightly negative carbs set to 0, or None if a value
+    is unusable (not finite, or negative anywhere else)."""
     out: Nutrients = {}
     for k in NUTRIENTS:
         v = values.get(k)
         if v is not None:
-            if not math.isfinite(v) or v < UPSTREAM_NEGATIVE_FLOOR:
+            floor = UPSTREAM_NEGATIVE_FLOOR if k == "carbs_g" else 0.0
+            if not math.isfinite(v) or v < floor:
                 return None
             v = max(v, 0.0)
         out[k] = v
