@@ -22,4 +22,14 @@ uv run --env-file .env chomp  # DB_PATH, TZ, HOST, PORT come from .env or the en
 npx @modelcontextprotocol/inspector   # connect to http://127.0.0.1:8000/mcp
 ```
 
+### Try the tools in MCP Inspector
+
+With the server running and `FDC_API_KEY` set, open Inspector, choose transport
+"Streamable HTTP", URL `http://127.0.0.1:8000/mcp`, then Connect and open the Tools tab:
+
+1. `search_food` with `{"query": "scrambled eggs"}` and again with `{"query": "egg whites"}`; note a `food_id` from each.
+2. `log_entries` with `{"items": [{"food_id": <eggs>, "grams": 200}, {"food_id": <whites>, "grams": 300}], "meal_label": "breakfast"}`.
+3. `update_entry` with the eggs' `entry_id` and `{"grams": 220}`.
+4. `get_day` with no arguments: the meal, its corrected totals, and the day's totals.
+
 Deploy, auth, and connector setup are documented as part of M3.

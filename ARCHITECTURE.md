@@ -22,7 +22,7 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 
 ### Log from barcode
 1. I send a barcode photo (or read the number). Claude extracts the UPC.
-2. `lookup_barcode(upc)` → cache → FDC Branded (gtinUpc) → Open Food Facts.
+2. `lookup_barcode(barcode)` → cache → FDC Branded (gtinUpc) → Open Food Facts.
 3. Miss → Claude asks for a label photo, reads the panel, calls `save_food_from_label`. Cached forever after.
 
 ### Review
@@ -32,17 +32,17 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 | Tool | Purpose | Key args |
 |---|---|---|
 | `search_food` | Fuzzy search (SQLite FTS5): aliases → saved foods (verified first) → FDC (Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id` | `query`, `limit` |
-| `lookup_barcode` | UPC lookup through the source chain; caches hits | `upc` |
+| `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros |
 | `log_entries` | Log one or more items as a meal | `items[{food_id, grams}]`, `meal_label?`, `eaten_at?` |
 | `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?` |
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
-| `get_totals` | Aggregates and daily averages over a range, with progress against targets | `start`, `end` |
-| `confirm_food` | Mark a food verified (e.g. an OFF hit), optionally correcting its macros | `food_id`, macros? |
-| `set_targets` | Set daily kcal/protein/carbs/fat targets | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?` |
+| `get_totals` | Aggregates, per-day totals and daily averages over a range (inclusive local dates), with progress against targets | `start`, `end?` |
+| `confirm_food` | Mark a food verified (e.g. an OFF hit), optionally correcting its macros | `food_id`, macros?, `per_serving_g?` |
+| `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
 | `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
-| `save_meal_template` / `log_meal_template` | One-phrase repeat meals | `name`, `items` |
+| `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at?` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
 
@@ -55,7 +55,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Gotchas
 - **UPC normalization:** UPC-A (12 digits) vs EAN-13 (leading 0) vs FDC's GTIN padding. Normalize to 14-digit GTIN for storage and try variants on lookup.
-- **FDC Branded data** is per serving in `labelNutrients` and per 100 g in `foodNutrients`; prefer per-100 g, verify against serving size.
+- **FDC Branded data** is per serving in `labelNutrients` and per 100 g in `foodNutrients`; prefer per-100 g, but when a core value differs from the label by more than 10% (and past a small rounding floor), use the label values and flag it.
 - **Open Food Facts** quality varies; mark OFF-sourced foods unverified until I confirm one.
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 

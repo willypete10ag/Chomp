@@ -17,9 +17,8 @@ def server(settings, conn):
 @pytest.mark.anyio
 async def test_lists_and_calls_server_info(server):
     async with Client(server) as client:
-        tools = await client.list_tools()
-        assert [t.name for t in tools.tools] == ["server_info"]
-        assert "connector is reachable" in tools.tools[0].description
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+        assert "connector is reachable" in tools["server_info"].description
         result = await client.call_tool("server_info", {})
     assert not result.is_error
     assert result.structured_content == {

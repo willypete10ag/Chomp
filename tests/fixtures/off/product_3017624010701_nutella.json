@@ -1,0 +1,25 @@
+{
+ "code": "3017624010701",
+ "status": 1,
+ "status_verbose": "product found",
+ "product": {
+  "code": "3017624010701",
+  "product_name": "Nutella",
+  "product_name_en": "Nutella",
+  "brands": "Nutella,Ferrero",
+  "serving_size": "15 g",
+  "serving_quantity": "15",
+  "serving_quantity_unit": "g",
+  "nutriments": {
+   "energy-kcal_100g": 539,
+   "energy-kj_100g": 2252,
+   "proteins_100g": 6.3,
+   "carbohydrates_100g": 57.5,
+   "fat_100g": 30.9,
+   "sugars_100g": 56.3,
+   "fiber_100g": 0,
+   "sodium_100g": 0.0428,
+   "salt_100g": 0.107
+  }
+ }
+}

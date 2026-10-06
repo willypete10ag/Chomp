@@ -1,0 +1,158 @@
+{
+ "totalHits": 3,
+ "currentPage": 1,
+ "totalPages": 1,
+ "foodSearchCriteria": {
+  "query": "041220576463"
+ },
+ "foods": [
+  {
+   "fdcId": 2091234,
+   "description": "100% LIQUID EGG WHITES",
+   "dataType": "Branded",
+   "gtinUpc": "041220576463",
+   "brandOwner": "H E Butt Grocery Company",
+   "brandName": "HILL COUNTRY FARE",
+   "publishedDate": "2021-10-28",
+   "servingSize": 46.0,
+   "servingSizeUnit": "g",
+   "householdServingFullText": "3 Tbsp",
+   "foodNutrients": [
+    {
+     "nutrientId": 1003,
+     "nutrientName": "Protein",
+     "nutrientNumber": "203",
+     "unitName": "G",
+     "value": 10.9
+    },
+    {
+     "nutrientId": 1004,
+     "nutrientName": "Total lipid (fat)",
+     "nutrientNumber": "204",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1005,
+     "nutrientName": "Carbohydrate, by difference",
+     "nutrientNumber": "205",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1008,
+     "nutrientName": "Energy",
+     "nutrientNumber": "208",
+     "unitName": "KCAL",
+     "value": 54
+    },
+    {
+     "nutrientId": 1062,
+     "nutrientName": "Energy",
+     "nutrientNumber": "268",
+     "unitName": "KJ",
+     "value": 226.0
+    },
+    {
+     "nutrientId": 1079,
+     "nutrientName": "Fiber, total dietary",
+     "nutrientNumber": "291",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 2000,
+     "nutrientName": "Total Sugars",
+     "nutrientNumber": "269",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1093,
+     "nutrientName": "Sodium, Na",
+     "nutrientNumber": "307",
+     "unitName": "MG",
+     "value": 163
+    }
+   ]
+  },
+  {
+   "fdcId": 1500001,
+   "description": "100% LIQUID EGG WHITES",
+   "dataType": "Branded",
+   "gtinUpc": "041220576463",
+   "brandOwner": "H E Butt Grocery Company",
+   "brandName": "HILL COUNTRY FARE",
+   "publishedDate": "2019-04-01",
+   "servingSize": 46.0,
+   "servingSizeUnit": "g",
+   "householdServingFullText": "3 Tbsp",
+   "foodNutrients": [
+    {
+     "nutrientId": 1003,
+     "nutrientName": "Protein",
+     "nutrientNumber": "203",
+     "unitName": "G",
+     "value": 10.9
+    },
+    {
+     "nutrientId": 1004,
+     "nutrientName": "Total lipid (fat)",
+     "nutrientNumber": "204",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1005,
+     "nutrientName": "Carbohydrate, by difference",
+     "nutrientNumber": "205",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1008,
+     "nutrientName": "Energy",
+     "nutrientNumber": "208",
+     "unitName": "KCAL",
+     "value": 54
+    },
+    {
+     "nutrientId": 1062,
+     "nutrientName": "Energy",
+     "nutrientNumber": "268",
+     "unitName": "KJ",
+     "value": 226.0
+    },
+    {
+     "nutrientId": 1079,
+     "nutrientName": "Fiber, total dietary",
+     "nutrientNumber": "291",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 2000,
+     "nutrientName": "Total Sugars",
+     "nutrientNumber": "269",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1093,
+     "nutrientName": "Sodium, Na",
+     "nutrientNumber": "307",
+     "unitName": "MG",
+     "value": 163
+    }
+   ]
+  },
+  {
+   "fdcId": 1600002,
+   "description": "OTHER PRODUCT",
+   "dataType": "Branded",
+   "gtinUpc": "041220999990",
+   "publishedDate": "2021-01-01",
+   "foodNutrients": []
+  }
+ ]
+}

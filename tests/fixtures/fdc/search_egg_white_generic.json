@@ -1,0 +1,139 @@
+{
+ "totalHits": 3,
+ "currentPage": 1,
+ "totalPages": 1,
+ "foodSearchCriteria": {
+  "query": "egg white"
+ },
+ "foods": [
+  {
+   "fdcId": 172183,
+   "description": "Egg, white, raw, fresh",
+   "dataType": "SR Legacy",
+   "publishedDate": "2019-04-01",
+   "foodNutrients": [
+    {
+     "nutrientId": 1003,
+     "nutrientName": "Protein",
+     "nutrientNumber": "203",
+     "unitName": "G",
+     "value": 10.9
+    },
+    {
+     "nutrientId": 1004,
+     "nutrientName": "Total lipid (fat)",
+     "nutrientNumber": "204",
+     "unitName": "G",
+     "value": 0.17
+    },
+    {
+     "nutrientId": 1005,
+     "nutrientName": "Carbohydrate, by difference",
+     "nutrientNumber": "205",
+     "unitName": "G",
+     "value": 0.73
+    },
+    {
+     "nutrientId": 1008,
+     "nutrientName": "Energy",
+     "nutrientNumber": "208",
+     "unitName": "KCAL",
+     "value": 52
+    },
+    {
+     "nutrientId": 1062,
+     "nutrientName": "Energy",
+     "nutrientNumber": "268",
+     "unitName": "KJ",
+     "value": 218.0
+    },
+    {
+     "nutrientId": 1079,
+     "nutrientName": "Fiber, total dietary",
+     "nutrientNumber": "291",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 2000,
+     "nutrientName": "Total Sugars",
+     "nutrientNumber": "269",
+     "unitName": "G",
+     "value": 0.71
+    },
+    {
+     "nutrientId": 1093,
+     "nutrientName": "Sodium, Na",
+     "nutrientNumber": "307",
+     "unitName": "MG",
+     "value": 166
+    }
+   ]
+  },
+  {
+   "fdcId": 747997,
+   "description": "Eggs, Grade A, Large, egg white",
+   "dataType": "Foundation",
+   "publishedDate": "2019-12-16",
+   "foodNutrients": [
+    {
+     "nutrientId": 1003,
+     "nutrientName": "Protein",
+     "nutrientNumber": "203",
+     "unitName": "G",
+     "value": 10.7
+    },
+    {
+     "nutrientId": 1004,
+     "nutrientName": "Total lipid (fat)",
+     "nutrientNumber": "204",
+     "unitName": "G",
+     "value": 0
+    },
+    {
+     "nutrientId": 1050,
+     "nutrientName": "Carbohydrate, by summation",
+     "nutrientNumber": "205.2",
+     "unitName": "G",
+     "value": 2.36
+    },
+    {
+     "nutrientId": 2047,
+     "nutrientName": "Energy (Atwater General Factors)",
+     "nutrientNumber": "957",
+     "unitName": "KCAL",
+     "value": 55
+    },
+    {
+     "nutrientId": 1062,
+     "nutrientName": "Energy",
+     "nutrientNumber": "268",
+     "unitName": "KJ",
+     "value": 230.0
+    },
+    {
+     "nutrientId": 1093,
+     "nutrientName": "Sodium, Na",
+     "nutrientNumber": "307",
+     "unitName": "MG",
+     "value": 162
+    }
+   ]
+  },
+  {
+   "fdcId": 999001,
+   "description": "Egg white, dried (missing energy)",
+   "dataType": "SR Legacy",
+   "publishedDate": "2019-04-01",
+   "foodNutrients": [
+    {
+     "nutrientId": 1003,
+     "nutrientName": "Protein",
+     "nutrientNumber": "203",
+     "unitName": "G",
+     "value": 81.1
+    }
+   ]
+  }
+ ]
+}

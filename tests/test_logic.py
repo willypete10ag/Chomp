@@ -174,3 +174,95 @@ def test_format_utc_converts_and_rejects_naive():
 def test_parse_format_round_trip():
     s = "2026-10-06T01:43:45Z"
     assert logic.format_utc(logic.parse_utc(s)) == s
+
+
+# --- Meal times and dates -------------------------------------------------------------------
+
+NOW = datetime(2026, 10, 6, 2, 0, tzinfo=UTC)  # 22:00 on the 5th in New York
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "2026-10-06T02:00:00Z"),
+        ("", "2026-10-06T02:00:00Z"),
+        ("2026-10-05T08:30", "2026-10-05T12:30:00Z"),  # naive = local (EDT)
+        ("2026-01-05T08:30", "2026-01-05T13:30:00Z"),  # EST
+        ("2026-10-05T08:30:00Z", "2026-10-05T08:30:00Z"),
+        ("2026-10-05T08:30:00-07:00", "2026-10-05T15:30:00Z"),
+    ],
+)
+def test_parse_eaten_at(value, expected):
+    assert logic.parse_eaten_at(value, TZ, NOW) == expected
+
+
+@pytest.mark.parametrize("value", ["2026-10-05", "breakfast", "10/05/2026 8am"])
+def test_parse_eaten_at_rejects(value):
+    with pytest.raises(ValueError, match="eaten_at"):
+        logic.parse_eaten_at(value, TZ, NOW)
+
+
+def test_parse_eaten_at_rejects_time_skipped_by_dst():
+    with pytest.raises(ValueError, match="does not exist"):
+        logic.parse_eaten_at("2026-03-08T02:30", TZ, NOW)
+    # the hour after the change is fine, and so is the repeated hour in November
+    assert logic.parse_eaten_at("2026-03-08T03:30", TZ, NOW) == "2026-03-08T07:30:00Z"
+    assert logic.parse_eaten_at("2026-11-01T01:30", TZ, NOW) == "2026-11-01T05:30:00Z"
+
+
+def test_parse_local_date_keywords_use_local_today():
+    assert logic.parse_local_date(None, TZ, NOW) == date(2026, 10, 5)
+    assert logic.parse_local_date("Today", TZ, NOW) == date(2026, 10, 5)
+    assert logic.parse_local_date("yesterday", TZ, NOW) == date(2026, 10, 4)
+    assert logic.parse_local_date("2026-02-28", TZ, NOW) == date(2026, 2, 28)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        logic.parse_local_date("2026-02-30", TZ, NOW)
+
+
+def test_local_iso():
+    assert logic.local_iso("2026-10-05T12:30:00Z", TZ) == "2026-10-05T08:30:00-04:00"
+
+
+def test_date_range_and_average():
+    days = logic.date_range(date(2026, 10, 1), date(2026, 10, 7))
+    assert len(days) == 7 and days[-1] == date(2026, 10, 7)
+    with pytest.raises(ValueError):
+        logic.date_range(date(2026, 10, 2), date(2026, 10, 1))
+    avg = logic.average({"kcal": 14000, "protein_g": 1260, "carbs_g": 0, "fat_g": 7}, 7)
+    assert avg["kcal"] == 2000 and avg["protein_g"] == 180 and avg["fiber_g"] is None
+
+
+# --- Upstream data --------------------------------------------------------------------------
+
+
+def test_kj_and_sodium_units():
+    assert logic.kj_to_kcal(418.4) == pytest.approx(100)
+    assert logic.g_to_mg(0.35) == pytest.approx(350)
+
+
+def test_label_mismatch_over_ten_percent():
+    db = {"kcal": 239, "protein_g": 56.5, "carbs_g": 2.2, "fat_g": 0}
+    label = {"kcal": 200, "protein_g": 56.5, "carbs_g": 2.2, "fat_g": 0}
+    assert logic.label_mismatch(db, label) == ["kcal"]
+
+
+def test_label_mismatch_ignores_small_absolute_differences():
+    # 0.5 g vs 0 g fat is "100%" off, but within label rounding
+    db = {"kcal": 52, "protein_g": 10.9, "carbs_g": 0.7, "fat_g": 0.5}
+    label = {"kcal": 54, "protein_g": 10.9, "carbs_g": 0, "fat_g": 0}
+    assert logic.label_mismatch(db, label) == []
+
+
+def test_round_nutrients():
+    out = logic.round_nutrients({"kcal": 1.23456, "protein_g": 1, "carbs_g": 1, "fat_g": 1})
+    assert out["kcal"] == 1.235 and out["sodium_mg"] is None
+
+
+def test_partial_per_serving_to_per_100g():
+    assert logic.partial_per_serving_to_per_100g({"protein_g": 26}, 46) == {
+        "protein_g": pytest.approx(56.5217, abs=1e-4)
+    }
+    with pytest.raises(ValueError, match="at least 0"):
+        logic.partial_per_serving_to_per_100g({"fat_g": -1}, 46)
+    with pytest.raises(ValueError, match="unknown"):
+        logic.partial_per_serving_to_per_100g({"salt": 1}, 46)

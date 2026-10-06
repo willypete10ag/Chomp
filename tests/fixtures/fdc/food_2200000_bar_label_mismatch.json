@@ -1,0 +1,90 @@
+{
+ "fdcId": 2200000,
+ "description": "PROTEIN BAR, CHOCOLATE",
+ "dataType": "Branded",
+ "gtinUpc": "722252100900",
+ "brandOwner": "Example Foods",
+ "publishedDate": "2022-02-02",
+ "servingSize": 28.0,
+ "servingSizeUnit": "g",
+ "householdServingFullText": "1 bar",
+ "labelNutrients": {
+  "fat": {
+   "value": 4.0
+  },
+  "carbohydrates": {
+   "value": 12.0
+  },
+  "protein": {
+   "value": 7.0
+  },
+  "calories": {
+   "value": 110.0
+  },
+  "sodium": {
+   "value": 90.0
+  }
+ },
+ "foodNutrients": [
+  {
+   "type": "FoodNutrient",
+   "id": 30001003,
+   "nutrient": {
+    "id": 1003,
+    "number": "203",
+    "name": "Protein",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 25.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001004,
+   "nutrient": {
+    "id": 1004,
+    "number": "204",
+    "name": "Total lipid (fat)",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 14.3
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001005,
+   "nutrient": {
+    "id": 1005,
+    "number": "205",
+    "name": "Carbohydrate, by difference",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 42.9
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001008,
+   "nutrient": {
+    "id": 1008,
+    "number": "208",
+    "name": "Energy",
+    "rank": 1,
+    "unitName": "kcal"
+   },
+   "amount": 300.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001093,
+   "nutrient": {
+    "id": 1093,
+    "number": "307",
+    "name": "Sodium, Na",
+    "rank": 1,
+    "unitName": "mg"
+   },
+   "amount": 321.0
+  }
+ ]
+}
