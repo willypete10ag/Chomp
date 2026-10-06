@@ -49,6 +49,7 @@ LABEL_KEYS = {
     "sodium": "sodium_mg",
 }
 GRAM_UNITS = {"g", "grm", "gram", "grams"}
+FDC_GTIN_ORDER = {12: 0, 13: 1, 14: 2, 8: 3}
 
 
 def _amounts(food_nutrients: Iterable[Mapping[str, Any]]) -> dict[int, tuple[float, str]]:
@@ -224,7 +225,9 @@ class FDCClient:
     async def lookup_gtin(self, gtin14: str) -> FoodRecord | None:
         """Branded food for a barcode, with the label cross-check applied."""
         hits: list[dict] = []
-        for code in gtins.variants(gtin14)[:2]:
+        # FDC mostly stores US products as 12-digit UPC-A, so try that form first.
+        codes = sorted(gtins.variants(gtin14), key=lambda c: FDC_GTIN_ORDER[len(c)])
+        for code in codes:
             data = await self._get(
                 "/foods/search", {"query": code, "dataType": BRANDED, "pageSize": 10}
             )

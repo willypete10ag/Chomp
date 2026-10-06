@@ -32,7 +32,7 @@ def server(settings, conn, fdc, off):
 def chain(upstream):
     """FDC knows the egg whites; OFF knows Nutella; nobody knows UNKNOWN."""
     upstream.add(
-        SEARCH, fixture_json("fdc/search_upc_egg_whites.json"), match={"query": "0041220576463"}
+        SEARCH, fixture_json("fdc/search_upc_egg_whites.json"), match={"query": EGG_WHITES_UPC}
     )
     upstream.add(SEARCH, {"foods": []})
     upstream.add("/fdc/v1/food/2091234", fixture_json("fdc/food_2091234_egg_whites.json"))
@@ -255,6 +255,17 @@ def test_off_parse_kj_only_and_missing_core():
     )
     assert n["kcal"] == pytest.approx(100) and n["protein_g"] == 1 and n["sodium_mg"] is None
     assert offmod.parse_nutrients({"energy-kcal_100g": 1, "proteins_100g": 1}) is None
+
+
+@pytest.mark.anyio
+async def test_fdc_tries_upc_a_first_then_other_forms(upstream, fdc):
+    upstream.add(SEARCH, {"foods": []})
+    assert await fdc.lookup_gtin(EGG_WHITES_GTIN) is None
+    assert [r.url.params["query"] for r in upstream.requests] == [
+        "041220576463",
+        "0041220576463",
+        "00041220576463",
+    ]
 
 
 @pytest.mark.anyio
