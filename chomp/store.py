@@ -375,18 +375,24 @@ def update_meal(
     label: str | None,
     note: str | None,
 ) -> sqlite3.Row:
-    """Change a meal's time, label and/or note. An empty label or note clears it."""
-    current = get_meal(conn, meal_id)
-    new = {
-        "eaten_at": eaten_at if eaten_at is not None else current["eaten_at"],
-        "label": (label.strip() or None) if label is not None else current["label"],
-        "note": (note.strip() or None) if note is not None else current["note"],
-    }
+    """Change a meal's time, label and/or note. An empty label or note clears it.
+
+    Only the given fields are written, so overlapping updates to different fields don't undo
+    each other.
+    """
+    changes: dict[str, str | None] = {}
+    if eaten_at is not None:
+        changes["eaten_at"] = eaten_at
+    if label is not None:
+        changes["label"] = label.strip() or None
+    if note is not None:
+        changes["note"] = note.strip() or None
     with transaction(conn):
-        conn.execute(
-            "UPDATE meals SET eaten_at = ?, label = ?, note = ? WHERE id = ?",
-            (new["eaten_at"], new["label"], new["note"], meal_id),
-        )
+        if changes:
+            conn.execute(
+                f"UPDATE meals SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?",
+                (*changes.values(), meal_id),
+            )
     return get_meal(conn, meal_id)
 
 
