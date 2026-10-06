@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, auth, db, logic, store
+from chomp import __version__, auth, db, logic, store, web
 from chomp.config import Settings
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -305,6 +305,7 @@ def build_server(
     )
     if provider:
         auth.add_consent_route(server, provider)
+    web.add_routes(server, settings, provider)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
     fdc = fdc or FDCClient(settings.fdc_api_key)
@@ -812,10 +813,7 @@ def build_server(
                 raise ValueError(f"range is {len(days)} days; the maximum is {TOTALS_MAX_DAYS}")
             lo, _ = logic.local_day_bounds(first, tz)
             _, hi = logic.local_day_bounds(last, tz)
-            by_day: dict = {}
-            for eaten_at, n in store.entries_between(conn, lo, hi):
-                by_day.setdefault(logic.local_date(eaten_at, tz), []).append(n)
-            day_totals = {d: logic.sum_nutrients(rows) for d, rows in by_day.items()}
+            day_totals = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
             totals = logic.sum_nutrients(day_totals.values())
             per_logged = logic.average(totals, len(day_totals)) if day_totals else None
             targets = store.get_targets(conn)

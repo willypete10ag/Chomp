@@ -232,6 +232,14 @@ def date_range(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
+def totals_by_day(rows: Iterable[tuple[str, Mapping[str, float | None]]], tz: str) -> dict:
+    """Sum (UTC eaten_at, nutrients) rows per local date. Days with no rows are absent."""
+    by_day: dict[date, list] = {}
+    for eaten_at, n in rows:
+        by_day.setdefault(local_date(eaten_at, tz), []).append(n)
+    return {d: sum_nutrients(ns) for d, ns in by_day.items()}
+
+
 def average(totals: Mapping[str, float | None], days: int) -> Nutrients:
     """Per-day average of summed nutrients over `days` days."""
     if days <= 0:

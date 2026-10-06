@@ -125,6 +125,36 @@ Alternative: if your dialog has a **Request headers** section, you can choose No
 add header `authorization` = `Bearer <BEARER_TOKEN>` instead. Claude allows only one
 connector per URL.
 
+### 7. Open the dashboard
+
+Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
+meals against your targets (tap Edit on an item to fix its grams or delete it), 7/30/90-day
+history charts, and your saved foods, aliases and meal templates. A sign-in lasts 30 days;
+the same five-wrong-passwords lockout applies.
+
+On a phone, add it to the home screen so it opens like an app:
+
+- iPhone (Safari): Share button > **Add to Home Screen**.
+- Android (Chrome): ⋮ menu > **Add to Home screen** (or **Install app**).
+
+#### Optional: Cloudflare Access in front of the dashboard
+
+This adds a second lock (an emailed code) before the Chomp password. It must cover only
+`/app`: if it covered `/mcp` or the sign-in routes, Claude's servers couldn't get through
+and the connector would stop working.
+
+1. Cloudflare dashboard > **Zero Trust** > **Access** > **Applications** > **Add an
+   application** > **Self-hosted**.
+2. Name `Chomp dashboard`. Session duration: **1 month**.
+3. Public hostname: subdomain `chomp`, domain `<your-domain>`, path `app`. Leave every other
+   path alone.
+4. Add a policy: name `Me`, action **Allow**, include **Emails** and list your email
+   addresses (one per person who should get in).
+5. Login method: **One-time PIN** is enough. Save.
+6. Check both sides: open `https://chomp.<your-domain>/app` in a private window (you should
+   get Cloudflare's email-code page first), then ask Claude to call `server_info` (it must
+   still work).
+
 ### Updating
 
 ```bash

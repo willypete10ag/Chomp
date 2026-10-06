@@ -30,7 +30,7 @@ def add_food(conn, name="Egg, whole, raw", brand=None, source="fdc", source_id="
 def test_baseline_and_migrations_create_schema(conn):
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert names >= TABLES | {"foods_fts"}
-    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 3
+    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 4
     cols = {r[1] for r in conn.execute("PRAGMA table_info(foods)")}
     assert "saved" in cols
 
@@ -41,8 +41,8 @@ def test_connection_pragmas(conn):
 
 
 def test_migrate_is_idempotent(conn):
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 3
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 3
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 4
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 4
 
 
 def test_applies_numbered_migrations_in_order(tmp_path: Path):
