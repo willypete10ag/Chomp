@@ -3,7 +3,7 @@
 Self-hosted MCP server that Claude uses as a meal-logging backend. See ARCHITECTURE.md (design, tools, flows) and SCHEMA.sql (source of truth for the DB).
 
 ## Stack
-Python 3.12 · `mcp` SDK (FastMCP, streamable HTTP) · SQLite · httpx · pytest · Docker Compose
+Python 3.12 · `mcp` SDK (FastMCP, streamable HTTP) · SQLite · httpx · pytest · Docker Compose · uv · ruff
 
 ## Layout
 ```
@@ -14,7 +14,8 @@ chomp/
     fdc.py         # USDA FoodData Central client
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
-  logic.py         # per-100g math, snapshots, totals
+  logic.py         # per-100g math, snapshots, totals, local-day boundaries
+migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/
 .github/workflows/ # CI: pytest on push
 docker-compose.yml
@@ -39,6 +40,7 @@ README.md
 - Never commit `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `.venv/`. Check `git status` before committing.
 
 ## Commands
-- `pytest -q`
+- `uv sync` (first time), then `uv run pytest -q`
+- `uv run ruff check . && uv run ruff format --check .`
 - `npx @modelcontextprotocol/inspector` for local tool testing
 - `docker compose up -d --build`
