@@ -58,6 +58,16 @@ def test_core_nutrients_required():
         logic.scale({"kcal": 1, "protein_g": 1, "carbs_g": 1}, 100)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_rejects_non_finite(bad):
+    with pytest.raises(ValueError, match="finite"):
+        logic.scale({**EGG, "kcal": bad}, 100)
+    with pytest.raises(ValueError, match="finite"):
+        logic.scale(EGG, bad)
+    with pytest.raises(ValueError, match="finite"):
+        logic.per_serving_to_per_100g(EGG, bad)
+
+
 def test_rejects_negative_and_unknown():
     with pytest.raises(ValueError, match="negative"):
         logic.scale({**EGG, "fat_g": -1}, 100)

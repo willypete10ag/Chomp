@@ -6,6 +6,7 @@ to the logged grams at log time, so later edits to the food never rewrite histor
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -33,8 +34,8 @@ UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _check_amount(name: str, value: float) -> None:
-    if not value > 0:
-        raise ValueError(f"{name} must be greater than 0, got {value!r}")
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name} must be a finite number greater than 0, got {value!r}")
 
 
 def _clean(values: Mapping[str, float | None]) -> Nutrients:
@@ -51,6 +52,8 @@ def _clean(values: Mapping[str, float | None]) -> Nutrients:
             out[k] = None
             continue
         v = float(v)
+        if not math.isfinite(v):
+            raise ValueError(f"{k} must be a finite number, got {v}")
         if v < 0:
             raise ValueError(f"{k} cannot be negative, got {v}")
         out[k] = v

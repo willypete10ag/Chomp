@@ -59,3 +59,13 @@ def test_default_paths_resolve_in_checkout(monkeypatch):
     s = Settings.from_env()
     assert s.schema_path.is_file()
     assert s.migrations_dir.is_dir()
+
+
+def test_health_rejects_uninitialized_db(settings, tmp_path):
+    from dataclasses import replace
+
+    empty = replace(settings, db_path=str(tmp_path / "empty.db"))
+    with TestClient(build_server(empty).streamable_http_app()) as http:
+        r = http.get("/health")
+    assert r.status_code == 503
+    assert r.json() == {"status": "error"}

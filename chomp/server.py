@@ -31,6 +31,7 @@ class ServerInfo(TypedDict):
 
 def build_server(settings: Settings) -> MCPServer:
     server = MCPServer(name="chomp", version=__version__, instructions=INSTRUCTIONS)
+    expected_version = db.latest_version(settings.migrations_dir)
 
     def connect():
         return closing(db.connect(settings.db_path))
@@ -42,6 +43,9 @@ def build_server(settings: Settings) -> MCPServer:
                 version = db.schema_version(conn)
         except Exception:
             log.exception("health check failed")
+            return JSONResponse({"status": "error"}, status_code=503)
+        if version != expected_version:
+            log.error("health check: schema version %d, expected %d", version, expected_version)
             return JSONResponse({"status": "error"}, status_code=503)
         return JSONResponse({"status": "ok", "schema_version": version})
 

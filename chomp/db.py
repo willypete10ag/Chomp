@@ -69,6 +69,12 @@ def _apply(conn: sqlite3.Connection, sql: str, version: int, label: str) -> None
         raise MigrationError(f"{label} failed: {e}") from e
 
 
+def latest_version(migrations_dir: Path) -> int:
+    """The schema version this code expects once all migrations have run."""
+    migrations = list_migrations(migrations_dir)
+    return migrations[-1][0] if migrations else BASELINE_VERSION
+
+
 def migrate(conn: sqlite3.Connection, schema_path: Path, migrations_dir: Path) -> int:
     """Bring the database up to the latest version. Returns the resulting version."""
     migrations = list_migrations(migrations_dir)
