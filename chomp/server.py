@@ -36,6 +36,7 @@ correct it with update_entry.\
 """
 
 SEARCH_LIMIT_MAX = 25
+TOTALS_MAX_DAYS = 366
 
 
 # --- Output models --------------------------------------------------------------------------
@@ -181,6 +182,56 @@ class LabelResult(BaseModel):
 class ConfirmResult(BaseModel):
     food: Food
     changed: list[str] = Field(description="Nutrients whose per-100 g value changed")
+
+
+class AliasResult(BaseModel):
+    alias: str
+    food: Food
+    default_grams: float | None
+    replaced: bool = Field(description="True if the alias already existed and now points here")
+
+
+class TemplateItem(BaseModel):
+    food_id: int
+    name: str
+    grams: float
+    nutrients: Nutrients
+
+
+class TemplateResult(BaseModel):
+    template_id: int
+    name: str
+    replaced: bool
+    items: list[TemplateItem]
+    totals: Nutrients
+
+
+class Targets(BaseModel):
+    kcal: float | None
+    protein_g: float | None
+    carbs_g: float | None
+    fat_g: float | None
+
+
+class DayTotals(BaseModel):
+    date: str
+    totals: Nutrients
+
+
+class TotalsResult(BaseModel):
+    start: str
+    end: str
+    days: int = Field(description="Calendar days in the range")
+    days_logged: int = Field(description="Days with at least one entry")
+    totals: Nutrients
+    average_per_logged_day: Nutrients | None = Field(
+        description="Daily average over days with entries; null if nothing was logged"
+    )
+    average_per_day: Nutrients = Field(description="Daily average over every calendar day")
+    progress: dict[str, TargetProgress] = Field(
+        description="Average per logged day against daily targets"
+    )
+    per_day: list[DayTotals]
 
 
 class ServerInfo(TypedDict):
@@ -614,6 +665,191 @@ def build_server(
                 given = logic.partial_per_serving_to_per_100g(given, per_serving_g)
             row, changed = store.confirm_food(conn, food_id, given)
             return ConfirmResult(food=_food(row), changed=changed)
+
+    @server.tool()
+    def save_alias(
+        alias: Annotated[
+            str, Field(min_length=1, description="The user's phrase, e.g. 'my usual eggs'")
+        ],
+        food_id: Annotated[int, Field(description="The food the phrase means")],
+        default_grams: Annotated[
+            float | None, Field(gt=0, description="Usual amount in grams, if there is one")
+        ] = None,
+    ) -> AliasResult:
+        """Remember a personal name for a food, optionally with the usual amount.
+
+        Use when the user says something like "call this my egg whites" or "my usual is
+        300 g". Afterwards search_food returns this food first for that phrase, with
+        default_grams to use when they don't give an amount. Saving an existing alias
+        repoints it. Matching ignores case.
+        """
+        alias = alias.strip()
+        with tool_errors(), connect() as conn:
+            existed = (
+                conn.execute("SELECT 1 FROM aliases WHERE alias = ?", (alias,)).fetchone()
+                is not None
+            )
+            store.save_alias(conn, alias, food_id, default_grams)
+            return AliasResult(
+                alias=alias,
+                food=_food(store.get_food(conn, food_id)),
+                default_grams=default_grams,
+                replaced=existed,
+            )
+
+    def template_out(conn, template_id: int, name: str, replaced: bool, items) -> TemplateResult:
+        foods = store.get_foods(conn, (i["food_id"] for i in items))
+        rows = [
+            TemplateItem(
+                food_id=i["food_id"],
+                name=foods[i["food_id"]]["name"],
+                grams=i["grams"],
+                nutrients=_nutrients(
+                    logic.snapshot(store.nutrients_of(foods[i["food_id"]]), i["grams"])
+                ),
+            )
+            for i in items
+        ]
+        totals = logic.sum_nutrients(
+            logic.snapshot(store.nutrients_of(foods[i["food_id"]]), i["grams"]) for i in items
+        )
+        return TemplateResult(
+            template_id=template_id,
+            name=name,
+            replaced=replaced,
+            items=rows,
+            totals=_nutrients(totals),
+        )
+
+    @server.tool()
+    def save_meal_template(
+        name: Annotated[str, Field(min_length=1, description="Short name, e.g. 'usual breakfast'")],
+        items: Annotated[list[LogItem], Field(min_length=1, description="Foods and grams")],
+    ) -> TemplateResult:
+        """Save a repeat meal under a name so it can be logged in one step later.
+
+        Use when the user says "save this as my usual breakfast" (take the items from the
+        meal just logged) or describes a meal they eat often. Saving an existing name
+        replaces it. Returns the template's items with nutrients at current food values.
+        """
+        name = name.strip()
+        with tool_errors(), connect() as conn:
+            pairs = [(i.food_id, i.grams) for i in items]
+            template_id, replaced = store.save_template(conn, name, pairs)
+            row, rows = store.get_template(conn, name)
+            return template_out(conn, template_id, row["name"], replaced, rows)
+
+    @server.tool()
+    def log_meal_template(
+        name: Annotated[str, Field(min_length=1, description="Template name, any case")],
+        eaten_at: Annotated[
+            str | None,
+            Field(description="ISO 8601; no offset means local time. Omit for now."),
+        ] = None,
+        meal_label: Annotated[
+            str | None, Field(description="Defaults to the template name")
+        ] = None,
+    ) -> LogResult:
+        """Log a saved meal template as a new meal in one call ("log my usual breakfast").
+
+        Logs every item at its saved grams; correct single items afterwards with
+        update_entry. If the name is unknown, the error lists the saved templates. Returns
+        the same as log_entries.
+        """
+        with tool_errors(), connect() as conn:
+            template, items = store.get_template(conn, name.strip())
+            when = logic.parse_eaten_at(eaten_at, tz)
+            meal_id = store.log_meal(
+                conn,
+                [(i["food_id"], i["grams"]) for i in items],
+                when,
+                meal_label or template["name"],
+            )
+            return LogResult(meal=meal_out(conn, meal_id), day=day_summary(conn, when))
+
+    @server.tool()
+    def get_totals(
+        start: Annotated[str, Field(description="First local date, YYYY-MM-DD")],
+        end: Annotated[
+            str | None, Field(description="Last local date, inclusive. Omit for today.")
+        ] = None,
+    ) -> TotalsResult:
+        """Totals and daily averages over a date range, with progress against daily targets.
+
+        Use for weekly or monthly reviews ("how was my protein this week?"). For the last
+        7 days, start is 6 days before today. Averages are given both per logged day and
+        per calendar day; progress compares the per-logged-day average with targets. For
+        a single day's meals use get_day.
+        """
+        with tool_errors(), connect() as conn:
+            first = logic.parse_local_date(start, tz)
+            last = logic.parse_local_date(end, tz)
+            days = logic.date_range(first, last)
+            if len(days) > TOTALS_MAX_DAYS:
+                raise ValueError(f"range is {len(days)} days; the maximum is {TOTALS_MAX_DAYS}")
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
+            by_day: dict = {}
+            for eaten_at, n in store.entries_between(conn, lo, hi):
+                by_day.setdefault(logic.local_date(eaten_at, tz), []).append(n)
+            day_totals = {d: logic.sum_nutrients(rows) for d, rows in by_day.items()}
+            totals = logic.sum_nutrients(day_totals.values())
+            per_logged = logic.average(totals, len(day_totals)) if day_totals else None
+            targets = store.get_targets(conn)
+            return TotalsResult(
+                start=first.isoformat(),
+                end=last.isoformat(),
+                days=len(days),
+                days_logged=len(day_totals),
+                totals=_nutrients(totals),
+                average_per_logged_day=_nutrients(per_logged) if per_logged else None,
+                average_per_day=_nutrients(logic.average(totals, len(days))),
+                progress=_progress(per_logged, targets) if per_logged else {},
+                per_day=[
+                    DayTotals(
+                        date=d.isoformat(),
+                        totals=_nutrients(day_totals.get(d) or logic.sum_nutrients([])),
+                    )
+                    for d in days
+                ],
+            )
+
+    @server.tool()
+    def set_targets(
+        kcal: Annotated[float | None, Field(gt=0, description="Daily calories")] = None,
+        protein_g: Annotated[float | None, Field(gt=0, description="Daily protein, g")] = None,
+        carbs_g: Annotated[float | None, Field(gt=0, description="Daily carbs, g")] = None,
+        fat_g: Annotated[float | None, Field(gt=0, description="Daily fat, g")] = None,
+        clear: Annotated[
+            list[Literal["kcal", "protein_g", "carbs_g", "fat_g"]] | None,
+            Field(description="Targets to remove"),
+        ] = None,
+    ) -> Targets:
+        """Set or change the user's daily targets. Only the targets given change; use clear
+        to remove one.
+
+        Use when the user states a goal ("my protein target is 180 g"). get_day,
+        get_totals and log results then report progress against these. Returns all
+        current targets.
+        """
+        changes: dict[str, float | None] = {
+            k: v
+            for k, v in {
+                "kcal": kcal,
+                "protein_g": protein_g,
+                "carbs_g": carbs_g,
+                "fat_g": fat_g,
+            }.items()
+            if v is not None
+        }
+        for k in clear or ():
+            if k in changes:
+                raise ToolError(f"{k} is both set and cleared")
+            changes[k] = None
+        if not changes:
+            raise ToolError("give at least one target to set or clear")
+        with connect() as conn:
+            return Targets(**store.set_targets(conn, changes))
 
     return server
 

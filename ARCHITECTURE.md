@@ -38,11 +38,11 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 | `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?` |
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
-| `get_totals` | Aggregates and daily averages over a range, with progress against targets | `start`, `end` |
+| `get_totals` | Aggregates, per-day totals and daily averages over a range (inclusive local dates), with progress against targets | `start`, `end?` |
 | `confirm_food` | Mark a food verified (e.g. an OFF hit), optionally correcting its macros | `food_id`, macros?, `per_serving_g?` |
-| `set_targets` | Set daily kcal/protein/carbs/fat targets | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?` |
+| `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
 | `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
-| `save_meal_template` / `log_meal_template` | One-phrase repeat meals | `name`, `items` |
+| `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at?` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
 

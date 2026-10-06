@@ -180,6 +180,68 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
     ).fetchall()
 
 
+# --- Aliases and templates ------------------------------------------------------------------
+
+
+def save_alias(
+    conn: sqlite3.Connection, alias: str, food_id: int, default_grams: float | None
+) -> None:
+    get_food(conn, food_id)
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO aliases (alias, food_id, default_grams) VALUES (?, ?, ?)"
+            " ON CONFLICT(alias) DO UPDATE SET food_id = excluded.food_id,"
+            " default_grams = excluded.default_grams",
+            (alias, food_id, default_grams),
+        )
+
+
+def save_template(
+    conn: sqlite3.Connection, name: str, items: list[tuple[int, float]]
+) -> tuple[int, bool]:
+    """Create or replace a meal template. Returns (template_id, replaced)."""
+    get_foods(conn, (f for f, _ in items))
+    with transaction(conn):
+        row = conn.execute("SELECT id FROM meal_templates WHERE name = ?", (name,)).fetchone()
+        if row is not None:
+            template_id = row["id"]
+            conn.execute("UPDATE meal_templates SET name = ? WHERE id = ?", (name, template_id))
+            conn.execute("DELETE FROM meal_template_items WHERE template_id = ?", (template_id,))
+        else:
+            template_id = conn.execute(
+                "INSERT INTO meal_templates (name) VALUES (?)", (name,)
+            ).lastrowid
+        conn.executemany(
+            "INSERT INTO meal_template_items (template_id, food_id, grams) VALUES (?, ?, ?)",
+            [(template_id, f, g) for f, g in items],
+        )
+    return template_id, row is not None
+
+
+def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
+    """A template by name (any case). If no name matches exactly, a single template whose
+    name contains the phrase or is contained in it ('my usual breakfast') is used."""
+    row = conn.execute("SELECT id, name FROM meal_templates WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        wanted = name.strip().lower()
+        close = [
+            r
+            for r in conn.execute("SELECT id, name FROM meal_templates")
+            if r["name"].lower() in wanted or wanted in r["name"].lower()
+        ]
+        if len(close) == 1:
+            row = close[0]
+    if row is None:
+        names = [r["name"] for r in conn.execute("SELECT name FROM meal_templates ORDER BY name")]
+        known = ", ".join(repr(n) for n in names) if names else "none saved yet"
+        raise NotFound(f"no meal template named {name!r} (templates: {known})")
+    items = conn.execute(
+        "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
+        (row["id"],),
+    ).fetchall()
+    return row, items
+
+
 # --- Meals and entries ----------------------------------------------------------------------
 
 
@@ -319,3 +381,16 @@ def get_targets(conn: sqlite3.Connection) -> dict[str, float | None]:
         "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE id = 1"
     ).fetchone()
     return {k: (row[k] if row else None) for k in TARGET_KEYS}
+
+
+def set_targets(conn: sqlite3.Connection, changes: Mapping[str, float | None]) -> dict:
+    """Update the given targets (None clears one); others keep their value."""
+    merged = {**get_targets(conn), **changes}
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO targets (id, kcal, protein_g, carbs_g, fat_g) VALUES (1, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET kcal = excluded.kcal, protein_g = excluded.protein_g,"
+            " carbs_g = excluded.carbs_g, fat_g = excluded.fat_g",
+            tuple(merged[k] for k in TARGET_KEYS),
+        )
+    return get_targets(conn)
