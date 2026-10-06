@@ -135,15 +135,25 @@ def _words(text: str) -> list[str]:
     return _WORD.findall(text.lower())
 
 
+def _stem(word: str) -> str:
+    """Fold common English plurals so "eggs" matches "egg" and "berries" matches "berry",
+    without letting an arbitrary prefix match ("egg" must not match "eggplant")."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith(("ches", "shes", "sses", "xes", "oes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
 def match_score(query: str, record: FoodRecord) -> float:
-    """Share of query words found in the food's name or brand (prefix match either way,
-    so "egg" matches "eggs" and "eggs" matches "egg")."""
-    wanted = _words(query)
+    """Share of query words found in the food's name or brand, singular and plural alike."""
+    wanted = [_stem(w) for w in _words(query)]
     if not wanted:
         return 0.0
-    have = _words(f"{record.name} {record.brand or ''}")
-    hits = sum(any(h.startswith(w) or w.startswith(h) for h in have) for w in wanted)
-    return hits / len(wanted)
+    have = {_stem(w) for w in _words(f"{record.name} {record.brand or ''}")}
+    return sum(w in have for w in wanted) / len(wanted)
 
 
 def apply_label_check(record: FoodRecord, detail: Mapping[str, Any]) -> FoodRecord:
@@ -237,8 +247,18 @@ class FDCClient:
         name and brand contain. Ties go to Foundation, then SR Legacy, then Branded, then
         FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
         """
-        generic = await self.search(query, GENERIC_TYPES, page_size=max(limit * 2, 10))
-        branded = await self.search(query, (BRANDED,), page_size=limit)
+        results: list[list[FoodRecord]] = []
+        errors: list[SourceError] = []
+        for types, size in ((GENERIC_TYPES, max(limit * 2, 10)), ((BRANDED,), limit)):
+            try:
+                results.append(await self.search(query, types, page_size=size))
+            except SourceError as e:  # one failed request shouldn't drop the other's hits
+                log.warning("FDC %s search failed: %s", "/".join(types), e)
+                errors.append(e)
+                results.append([])
+        if len(errors) == 2:
+            raise errors[0]
+        generic, branded = results
         seen: set[str] = set()
         candidates = [
             r for r in generic + branded if not (r.source_id in seen or seen.add(r.source_id))

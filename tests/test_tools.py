@@ -329,3 +329,4 @@ async def test_tool_annotations(server):
     assert tools["get_totals"].read_only_hint is True
     assert tools["search_food"].destructive_hint is False
     assert tools["delete_entry"].destructive_hint is True
+    assert tools["save_food_from_label"].destructive_hint is True

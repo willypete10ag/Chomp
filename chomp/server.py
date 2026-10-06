@@ -576,7 +576,7 @@ def build_server(
             next_step=next_step,
         )
 
-    @server.tool(annotations=ADDS)
+    @server.tool(annotations=CHANGES)  # may take a barcode from another food
     def save_food_from_label(
         name: Annotated[str, Field(min_length=1, description="Product name")],
         serving_g: Annotated[

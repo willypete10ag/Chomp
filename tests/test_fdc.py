@@ -157,6 +157,34 @@ def test_match_score_handles_plurals_both_ways():
     assert fdcmod.match_score("scrambled eggs", rec) == 1
     assert fdcmod.match_score("egg white", rec) == 0.5
     assert fdcmod.match_score("", rec) == 0
+    berries = fdcmod.to_record(_hit(2, "Blueberries, raw", "SR Legacy"))
+    assert fdcmod.match_score("blueberry", berries) == 1
+    tomato = fdcmod.to_record(_hit(3, "Tomato, red, ripe, raw", "SR Legacy"))
+    assert fdcmod.match_score("tomatoes", tomato) == 1
+
+
+def test_prefix_of_another_word_is_not_a_match():
+    egg = fdcmod.to_record(_hit(1, "Egg, whole, raw", "Foundation"))
+    eggplant = fdcmod.to_record(_hit(2, "Eggplant, raw", "SR Legacy"))
+    assert fdcmod.match_score("eggplant", egg) == 0
+    assert fdcmod.match_score("eggplant", eggplant) == 1
+
+
+@pytest.mark.anyio
+async def test_branded_failure_keeps_generic_hits(upstream, fdc):
+    upstream.add(
+        SEARCH, {"foods": [_hit(4, "Egg, whole, cooked, scrambled", "SR Legacy")]}, match=GENERIC
+    )
+    upstream.add(SEARCH, {}, status=503, match=BRANDED)
+    recs = await fdc.search_ranked("scrambled eggs", limit=4)
+    assert [r.source_id for r in recs] == ["4"]
+
+
+@pytest.mark.anyio
+async def test_both_searches_failing_raises(upstream, fdc):
+    upstream.add(SEARCH, {}, status=503)
+    with pytest.raises(SourceError):
+        await fdc.search_ranked("eggs", limit=4)
 
 
 @pytest.mark.anyio
