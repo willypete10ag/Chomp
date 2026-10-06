@@ -89,11 +89,11 @@ can type, 12+ characters), `OAUTH_CLIENT_SECRET` and `BEARER_TOKEN` (generated),
 `TUNNEL_TOKEN`. Chomp refuses to start if `PUBLIC_URL` is set without the auth settings.
 
 Pick the backup folder. Ideally it's a different disk from the VM's own (a second Proxmox
-disk or a NAS mount); `./backups` inside the checkout is the default. The container runs as
-uid 10001, so:
+disk or a NAS mount); `./backups` inside the checkout is the default. A one-shot
+`backup-init` container hands the folder to the container user (uid 10001) on every start:
 
 ```bash
-sudo mkdir -p /mnt/backup/chomp && sudo chown 10001:10001 /mnt/backup/chomp
+sudo mkdir -p /mnt/backup/chomp
 # then in .env: BACKUP_HOST_DIR=/mnt/backup/chomp
 ```
 

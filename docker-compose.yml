@@ -28,6 +28,19 @@ services:
     # For MCP Inspector on this machine only, uncomment (never 0.0.0.0):
     # ports: ["127.0.0.1:8000:8000"]
 
+  # Docker creates a missing bind-mount folder owned by root; hand it to the chomp user
+  # (uid 10001) once, so nightly backups can write there.
+  backup-init:
+    <<: *chomp
+    restart: "no"
+    user: "0:0"
+    command: ["chown", "10001:10001", "/backups"]
+    cap_add: [CHOWN]
+    healthcheck:
+      disable: true
+    volumes:
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+
   backup:
     <<: *chomp
     command: ["chomp", "backup", "--daily"]
@@ -37,6 +50,8 @@ services:
       - chomp-data:/data
       - ${BACKUP_HOST_DIR:-./backups}:/backups
     depends_on:
+      backup-init:
+        condition: service_completed_successfully
       chomp:
         condition: service_healthy
 
