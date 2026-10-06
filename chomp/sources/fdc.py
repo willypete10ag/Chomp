@@ -8,6 +8,7 @@ key limit. The key goes in the X-Api-Key header so it never appears in a logged 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -127,6 +128,24 @@ def to_record(food: Mapping[str, Any]) -> FoodRecord | None:
     )
 
 
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(text.lower())
+
+
+def match_score(query: str, record: FoodRecord) -> float:
+    """Share of query words found in the food's name or brand (prefix match either way,
+    so "egg" matches "eggs" and "eggs" matches "egg")."""
+    wanted = _words(query)
+    if not wanted:
+        return 0.0
+    have = _words(f"{record.name} {record.brand or ''}")
+    hits = sum(any(h.startswith(w) or w.startswith(h) for h in have) for w in wanted)
+    return hits / len(wanted)
+
+
 def apply_label_check(record: FoodRecord, detail: Mapping[str, Any]) -> FoodRecord:
     """Cross-check per-100 g values against the per-serving label (Branded details only).
 
@@ -211,13 +230,28 @@ class FDCClient:
         return [r for r in records if r is not None]
 
     async def search_ranked(self, query: str, limit: int) -> list[FoodRecord]:
-        """Generic foods (Foundation, then SR Legacy) first, Branded after, up to `limit`."""
-        generic = await self.search(query, GENERIC_TYPES, page_size=limit)
-        generic.sort(key=lambda r: TYPE_RANK.get(r.data_type or "", 9))  # stable within type
-        out = generic[:limit]
-        if len(out) < limit:
-            out += (await self.search(query, (BRANDED,), page_size=limit))[: limit - len(out)]
-        return out
+        """Best matches across generic and Branded foods, up to `limit`.
+
+        FDC's own relevance order is loose (a search for "scrambled eggs" ranks egg whites
+        and egg bagels highly), so results are re-ranked by how many query words the food's
+        name and brand contain. Ties go to Foundation, then SR Legacy, then Branded, then
+        FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
+        """
+        generic = await self.search(query, GENERIC_TYPES, page_size=max(limit * 2, 10))
+        branded = await self.search(query, (BRANDED,), page_size=limit)
+        seen: set[str] = set()
+        candidates = [
+            r for r in generic + branded if not (r.source_id in seen or seen.add(r.source_id))
+        ]
+        order = {r.source_id: i for i, r in enumerate(candidates)}
+        candidates.sort(
+            key=lambda r: (
+                -match_score(query, r),
+                TYPE_RANK.get(r.data_type or "", 9),
+                order[r.source_id],
+            )
+        )
+        return candidates[:limit]
 
     async def food(self, fdc_id: str) -> dict | None:
         return await self._get(f"/food/{fdc_id}", not_found_ok=True)

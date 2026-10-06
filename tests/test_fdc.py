@@ -98,12 +98,65 @@ async def test_search_ranked_generic_before_branded(upstream, fdc):
     ]
 
 
+def _hit(fdc_id, name, data_type, brand=None):
+    food = {
+        "fdcId": fdc_id,
+        "description": name,
+        "dataType": data_type,
+        "foodNutrients": [
+            {"nutrientId": 1008, "unitName": "KCAL", "value": 100},
+            {"nutrientId": 1003, "unitName": "G", "value": 1},
+            {"nutrientId": 1005, "unitName": "G", "value": 1},
+            {"nutrientId": 1004, "unitName": "G", "value": 1},
+        ],
+    }
+    if brand:
+        food["brandName"] = brand
+    return food
+
+
 @pytest.mark.anyio
-async def test_search_skips_branded_when_generic_fills_limit(upstream, fdc):
-    upstream.add(SEARCH, fixture_json("fdc/search_egg_white_generic.json"), match=GENERIC)
-    recs = await fdc.search_ranked("egg white", limit=2)
-    assert len(recs) == 2
-    assert all(r.url.params["dataType"] != "Branded" for r in upstream.requests)
+async def test_ranking_prefers_names_matching_every_word(upstream, fdc):
+    # Order FDC returned for "scrambled eggs" in a live run on 2026-10-06
+    upstream.add(
+        SEARCH,
+        {
+            "foods": [
+                _hit(1, "Eggs, Grade A, Large, egg white", "Foundation"),
+                _hit(2, "Eggs, Grade A, Large, egg whole", "Foundation"),
+                _hit(4, "Egg, whole, cooked, scrambled", "SR Legacy"),
+                _hit(5, "Eggs, scrambled, frozen mixture", "SR Legacy"),
+                _hit(7, "Bagels, egg", "SR Legacy"),
+            ]
+        },
+        match=GENERIC,
+    )
+    upstream.add(SEARCH, {"foods": []}, match=BRANDED)
+    recs = await fdc.search_ranked("scrambled eggs", limit=4)
+    assert [r.source_id for r in recs] == ["4", "5", "1", "2"]
+
+
+@pytest.mark.anyio
+async def test_named_brand_beats_generic(upstream, fdc):
+    upstream.add(
+        SEARCH,
+        {"foods": [_hit(10, "Yogurt, Greek, plain, nonfat", "Foundation")]},
+        match=GENERIC,
+    )
+    upstream.add(
+        SEARCH,
+        {"foods": [_hit(20, "NONFAT GREEK YOGURT", "Branded", brand="CHOBANI")]},
+        match=BRANDED,
+    )
+    recs = await fdc.search_ranked("chobani greek yogurt", limit=2)
+    assert [r.source_id for r in recs] == ["20", "10"]
+
+
+def test_match_score_handles_plurals_both_ways():
+    rec = fdcmod.to_record(_hit(1, "Egg, whole, cooked, scrambled", "SR Legacy"))
+    assert fdcmod.match_score("scrambled eggs", rec) == 1
+    assert fdcmod.match_score("egg white", rec) == 0.5
+    assert fdcmod.match_score("", rec) == 0
 
 
 @pytest.mark.anyio
