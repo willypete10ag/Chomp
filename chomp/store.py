@@ -5,12 +5,13 @@ Macro math is delegated to logic.py; this module only moves rows around.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from chomp import logic
+from chomp import logic, text
 from chomp.db import transaction
 from chomp.sources import FoodRecord
 
@@ -89,6 +90,12 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
         return get_food(conn, cur.lastrowid), True
 
 
+def mark_saved(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row:
+    """Record that the user deliberately added this food (e.g. by scanning its barcode)."""
+    conn.execute("UPDATE foods SET saved = 1 WHERE id = ?", (food_id,))
+    return get_food(conn, food_id)
+
+
 def save_label_food(
     conn: sqlite3.Connection,
     *,
@@ -148,9 +155,12 @@ def tokens(query: str) -> list[str]:
 
 
 def fts_query(query: str) -> str | None:
-    """FTS5 MATCH expression: every word must match, each as a prefix ('egg' finds 'eggs')."""
+    """FTS5 MATCH expression: every word must match as a prefix of its singular and plural
+    forms ('eggs' finds 'egg', 'berries' finds 'berry'). Callers filter out prefix-only hits
+    such as 'eggplant' with text.match_score."""
     words = tokens(query)
-    return " ".join(f'"{w}"*' for w in words) if words else None
+    prefixes = (os.path.commonprefix([w, text.stem(w)]) for w in words)
+    return " ".join(f'"{p}"*' for p in prefixes) if words else None
 
 
 def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
@@ -167,17 +177,38 @@ def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sql
     ).fetchall()
 
 
+# Foods the user has chosen: verified, added from a label or barcode, logged, aliased, or in
+# a template. FDC search hits are cached in foods too, but only as a lookup cache.
+USED_FOOD = (
+    "(f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
+    " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
+    " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
+    " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
+)
+
+
 def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
-    """Saved foods matching every word of the query: verified first, then by relevance."""
+    """Foods the user has used that match every word of the query (singular or plural):
+    verified first, then by relevance."""
     match = fts_query(query)
     if match is None:
         return []
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
-    return conn.execute(
+    rows = conn.execute(
         f"SELECT {cols} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
-        " WHERE foods_fts MATCH ? ORDER BY f.verified DESC, bm25(foods_fts) LIMIT ?",
-        (match, limit),
-    ).fetchall()
+        f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
+        " ORDER BY f.verified DESC, bm25(foods_fts)",
+        (match,),
+    )
+    # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
+    found: list[sqlite3.Row] = []
+    for row in rows:
+        if text.match_score(query, f"{row['name']} {row['brand'] or ''}") == 1:
+            found.append(row)
+            if len(found) == limit:
+                break
+    rows.close()
+    return found
 
 
 # --- Aliases and templates ------------------------------------------------------------------

@@ -7,6 +7,7 @@ import pytest
 from conftest import fixture_json
 from mcp import Client
 
+from chomp import store
 from chomp.server import build_server
 from chomp.sources import off as offmod
 from chomp.sources.off import OFFClient
@@ -77,8 +78,10 @@ async def test_known_upc_found_in_fdc_and_cached(server, conn, chain):
     assert again["found_in"] == "saved"
     assert again["food"]["food_id"] == food["food_id"]
     assert len(chain.requests) == n  # served from the DB
-    row = conn.execute("SELECT gtin, source, verified FROM foods").fetchone()
-    assert tuple(row) == (EGG_WHITES_GTIN, "fdc", 0)
+    row = conn.execute("SELECT gtin, source, verified, saved FROM foods").fetchone()
+    assert tuple(row) == (EGG_WHITES_GTIN, "fdc", 0, 1)
+    # A scanned product counts as saved in name search, even unlogged
+    assert [r["id"] for r in store.search_foods(conn, "liquid egg whites", 5)] == [food["food_id"]]
 
 
 @pytest.mark.anyio

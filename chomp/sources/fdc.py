@@ -8,13 +8,12 @@ key limit. The key goes in the X-Api-Key header so it never appears in a logged 
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 import httpx
 
-from chomp import logic
+from chomp import logic, text
 from chomp.sources import FoodRecord, SourceError
 from chomp.sources import gtin as gtins
 from chomp.sources.http import TTLCache, get_json
@@ -128,32 +127,9 @@ def to_record(food: Mapping[str, Any]) -> FoodRecord | None:
     )
 
 
-_WORD = re.compile(r"[a-z0-9]+")
-
-
-def _words(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
-
-
-def _stem(word: str) -> str:
-    """Fold common English plurals so "eggs" matches "egg" and "berries" matches "berry",
-    without letting an arbitrary prefix match ("egg" must not match "eggplant")."""
-    if len(word) > 4 and word.endswith("ies"):
-        return word[:-3] + "y"
-    if len(word) > 3 and word.endswith(("ches", "shes", "sses", "xes", "oes")):
-        return word[:-2]
-    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
-        return word[:-1]
-    return word
-
-
 def match_score(query: str, record: FoodRecord) -> float:
     """Share of query words found in the food's name or brand, singular and plural alike."""
-    wanted = [_stem(w) for w in _words(query)]
-    if not wanted:
-        return 0.0
-    have = {_stem(w) for w in _words(f"{record.name} {record.brand or ''}")}
-    return sum(w in have for w in wanted) / len(wanted)
+    return text.match_score(query, f"{record.name} {record.brand or ''}")
 
 
 def apply_label_check(record: FoodRecord, detail: Mapping[str, Any]) -> FoodRecord:

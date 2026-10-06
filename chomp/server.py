@@ -363,9 +363,10 @@ def build_server(
     ) -> SearchResult:
         """Find foods to log. Call once per item the user mentions, before log_entries.
 
-        Results are ranked: the user's aliases first (with default_grams), then foods already
-        saved in Chomp (verified first), then USDA FoodData Central (generic Foundation and
-        SR Legacy foods before Branded products). Every result has a food_id and per-100 g
+        Results are ranked: the user's aliases first (with default_grams), then foods the
+        user has used before (logged, saved from a label or barcode, verified first), then
+        USDA FoodData Central (closest name match first, generic Foundation and SR Legacy
+        foods before Branded products). Every result has a food_id and per-100 g
         nutrients from the database. Prefer alias and saved matches; prefer generic FDC
         foods unless the user named a brand. Show the user which food you picked. If nothing
         fits, say so and ask for a barcode or label photo rather than guessing.
@@ -542,7 +543,7 @@ def build_server(
         with connect() as conn:
             row = store.food_by_gtin(conn, code)
             if row is not None:
-                return result(row, "saved")
+                return result(store.mark_saved(conn, row["id"]), "saved")
             failures = 0
             for name, client, enabled in (
                 ("fdc", fdc, fdc.enabled),
@@ -559,7 +560,7 @@ def build_server(
                     continue
                 if rec is not None:
                     row, _ = store.cache_record(conn, rec)
-                    return result(row, name, rec.flags)
+                    return result(store.mark_saved(conn, row["id"]), name, rec.flags)
         if failures and failures == (2 if fdc.enabled else 1):
             next_step = (
                 "Barcode sources could not be reached. Try again shortly, or ask for a photo "

@@ -88,8 +88,21 @@ async def test_search_twice_reuses_food_ids(server, conn, fdc_eggs):
         second = await call(client, "search_food", query="egg white")
     assert {r["food_id"] for r in first["results"]} == {r["food_id"] for r in second["results"]}
     assert conn.execute("SELECT count(*) FROM foods").fetchone()[0] == 3
-    # Second time they come back as saved foods, ahead of any new FDC hits
-    assert {r["match"] for r in second["results"]} == {"saved"}
+    # Cached search hits are not "saved": they keep FDC's ranking on the next search
+    assert [r["match"] for r in second["results"]] == ["fdc"] * 3
+    assert [r["food_id"] for r in second["results"]] == [r["food_id"] for r in first["results"]]
+
+
+@pytest.mark.anyio
+async def test_logged_fdc_food_ranks_as_saved(server, conn, fdc_eggs):
+    async with Client(server) as client:
+        first = await call(client, "search_food", query="egg white")
+        branded = first["results"][2]["food_id"]
+        await call(client, "log_entries", items=[{"food_id": branded, "grams": 100}])
+        second = await call(client, "search_food", query="egg white")
+    r = second["results"]
+    assert (r[0]["food_id"], r[0]["match"]) == (branded, "saved")
+    assert [x["match"] for x in r[1:]] == ["fdc", "fdc"]
 
 
 @pytest.mark.anyio
@@ -111,6 +124,32 @@ async def test_search_prefix_matching(server, conn):
     async with Client(server) as client:
         out = await call(client, "search_food", query="egg", limit=1)
     assert out["results"][0]["food_id"] == eggs
+
+
+@pytest.mark.anyio
+async def test_search_saved_matches_plurals_but_not_other_words(server, conn, upstream):
+    upstream.add(SEARCH, {"foods": []})
+    egg = add_food(conn, "Egg, whole, cooked, scrambled", 149, 10, 1.6, 11)
+    add_food(conn, "Eggplant, raw", 25, 1, 6, 0.2)
+    berry = add_food(conn, "Blueberry muffin", 380, 5, 50, 18)
+    async with Client(server) as client:
+        eggs = await call(client, "search_food", query="scrambled eggs")
+        egg_only = await call(client, "search_food", query="egg")
+        berries = await call(client, "search_food", query="blueberries")
+    assert [r["food_id"] for r in eggs["results"]] == [egg]
+    assert [r["food_id"] for r in egg_only["results"]] == [egg]
+    assert [r["food_id"] for r in berries["results"]] == [berry]
+
+
+@pytest.mark.anyio
+async def test_search_saved_limit_skips_prefix_only_hits(server, conn, upstream):
+    upstream.add(SEARCH, {"foods": []})
+    for i in range(8):
+        add_food(conn, f"Eggplant {i}", 25, 1, 6, 0.2)
+    egg = add_food(conn, "Egg, whole, cooked, scrambled, with milk and butter", 149, 10, 1.6, 11)
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="egg", limit=1)
+    assert [r["food_id"] for r in out["results"]] == [egg]
 
 
 @pytest.mark.anyio
