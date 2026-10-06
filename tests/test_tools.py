@@ -281,6 +281,67 @@ async def test_delete_entry_then_meal(server, conn):
 
 
 @pytest.mark.anyio
+async def test_update_meal_moves_it_to_another_day(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}],
+            meal_label="breakfast",
+            note="at home",
+            eaten_at="2026-10-06T08:00",
+        )
+        meal_id = logged["meal"]["meal_id"]
+        out = await call(
+            client, "update_meal", meal_id=meal_id, eaten_at="2026-10-05T12:30", meal_label="lunch"
+        )
+        assert out["meal"]["eaten_at"] == "2026-10-05T12:30:00-04:00"
+        assert out["meal"]["label"] == "lunch" and out["meal"]["note"] == "at home"
+        assert out["meal"]["totals"]["kcal"] == 143
+        assert out["day"]["date"] == "2026-10-05" and out["day"]["totals"]["kcal"] == 143
+        assert out["previous_day"]["date"] == "2026-10-06"
+        assert out["previous_day"]["totals"]["kcal"] == 0
+        sixth = await call(client, "get_day", date="2026-10-06")
+    assert sixth["meals"] == []
+
+
+@pytest.mark.anyio
+async def test_update_meal_same_day_and_clearing(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}],
+            meal_label="snack",
+            note="oops",
+            eaten_at="2026-10-05T15:00",
+        )
+        meal_id = logged["meal"]["meal_id"]
+        out = await call(client, "update_meal", meal_id=meal_id, eaten_at="2026-10-05T16:15")
+        assert out["previous_day"] is None and out["meal"]["label"] == "snack"
+        out = await call(client, "update_meal", meal_id=meal_id, note="")
+    assert out["meal"]["note"] is None
+    assert out["meal"]["eaten_at"] == "2026-10-05T16:15:00-04:00"
+
+
+@pytest.mark.anyio
+async def test_update_meal_errors(server, conn):
+    async with Client(server) as client:
+        assert "eaten_at, meal_label, note" in await call_error(client, "update_meal", meal_id=1)
+        assert "no meal with id 1" in await call_error(
+            client, "update_meal", meal_id=1, meal_label="lunch"
+        )
+        eggs = add_food(conn, "Egg", *EGGS)
+        logged = await call(client, "log_entries", items=[{"food_id": eggs, "grams": 1}])
+        msg = await call_error(
+            client, "update_meal", meal_id=logged["meal"]["meal_id"], eaten_at="2026-10-05"
+        )
+    assert "needs a time" in msg
+
+
+@pytest.mark.anyio
 async def test_log_rejects_unknown_food_and_writes_nothing(server, conn):
     eggs = add_food(conn, "Egg", *EGGS)
     async with Client(server) as client:
@@ -363,7 +424,7 @@ async def test_get_day_rejects_bad_date(server):
 async def test_tool_annotations(server):
     async with Client(server) as client:
         tools = {t.name: t.annotations for t in (await client.list_tools()).tools}
-    assert len(tools) == 14 and all(a is not None for a in tools.values())
+    assert len(tools) == 15 and all(a is not None for a in tools.values())
     assert tools["get_day"].read_only_hint is True
     assert tools["get_totals"].read_only_hint is True
     assert tools["search_food"].destructive_hint is False

@@ -165,6 +165,14 @@ class UpdateResult(BaseModel):
     day: DaySummary
 
 
+class MealUpdateResult(BaseModel):
+    meal: Meal
+    day: DaySummary = Field(description="Totals for the day the meal is now on")
+    previous_day: DaySummary | None = Field(
+        description="Totals for the day it moved from; null if it stayed on the same day"
+    )
+
+
 class DeleteResult(BaseModel):
     deleted_entry: Entry
     meal_deleted: bool
@@ -474,6 +482,41 @@ def build_server(
             meal = meal_out(conn, entry.meal_id)
             day = day_summary(conn, store.get_meal(conn, entry.meal_id)["eaten_at"])
             return UpdateResult(entry=_entry(entry), meal=meal, day=day)
+
+    @server.tool(annotations=CHANGES)
+    def update_meal(
+        meal_id: Annotated[int, Field(description="meal_id from log_entries or get_day")],
+        eaten_at: Annotated[
+            str | None,
+            Field(
+                description="New time, ISO 8601 (e.g. 2026-10-05T12:30). No offset means the "
+                "user's local time."
+            ),
+        ] = None,
+        meal_label: Annotated[
+            str | None, Field(description="New label, e.g. lunch; empty string clears it")
+        ] = None,
+        note: Annotated[str | None, Field(description="New note; empty string clears it")] = None,
+    ) -> MealUpdateResult:
+        """Move a logged meal to a different time, or change its label or note.
+
+        Use when the user says a meal was logged at the wrong time or under the wrong name
+        ("that was lunch, around 12:30", "move breakfast to yesterday"). Its items and
+        nutrients stay as they are. Returns the meal, the totals for the day it is now on,
+        and the old day's totals if it moved to a different day.
+        """
+        if eaten_at is None and meal_label is None and note is None:
+            raise ToolError("give eaten_at, meal_label, note, or a combination")
+        with tool_errors(), connect() as conn:
+            before = store.get_meal(conn, meal_id)["eaten_at"]
+            when = logic.parse_eaten_at(eaten_at, tz) if eaten_at is not None else None
+            after = store.update_meal(conn, meal_id, when, meal_label, note)["eaten_at"]
+            moved = logic.local_date(before, tz) != logic.local_date(after, tz)
+            return MealUpdateResult(
+                meal=meal_out(conn, meal_id),
+                day=day_summary(conn, after),
+                previous_day=day_summary(conn, before) if moved else None,
+            )
 
     @server.tool(annotations=CHANGES)
     def delete_entry(
