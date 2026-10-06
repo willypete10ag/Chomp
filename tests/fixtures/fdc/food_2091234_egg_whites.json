@@ -1,0 +1,121 @@
+{
+ "fdcId": 2091234,
+ "description": "100% LIQUID EGG WHITES",
+ "dataType": "Branded",
+ "gtinUpc": "041220576463",
+ "brandOwner": "H E Butt Grocery Company",
+ "brandName": "HILL COUNTRY FARE",
+ "publicationDate": "10/28/2021",
+ "servingSize": 46.0,
+ "servingSizeUnit": "g",
+ "householdServingFullText": "3 Tbsp",
+ "labelNutrients": {
+  "fat": {
+   "value": 0.0
+  },
+  "sodium": {
+   "value": 75.0
+  },
+  "carbohydrates": {
+   "value": 0.0
+  },
+  "fiber": {
+   "value": 0.0
+  },
+  "sugars": {
+   "value": 0.0
+  },
+  "protein": {
+   "value": 5.0
+  },
+  "calories": {
+   "value": 25.0
+  }
+ },
+ "foodNutrients": [
+  {
+   "type": "FoodNutrient",
+   "id": 30001003,
+   "nutrient": {
+    "id": 1003,
+    "number": "203",
+    "name": "Protein",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 10.9
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001004,
+   "nutrient": {
+    "id": 1004,
+    "number": "204",
+    "name": "Total lipid (fat)",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 0.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001005,
+   "nutrient": {
+    "id": 1005,
+    "number": "205",
+    "name": "Carbohydrate, by difference",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 0.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001008,
+   "nutrient": {
+    "id": 1008,
+    "number": "208",
+    "name": "Energy",
+    "rank": 1,
+    "unitName": "kcal"
+   },
+   "amount": 54.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001079,
+   "nutrient": {
+    "id": 1079,
+    "number": "291",
+    "name": "Fiber, total dietary",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 0.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30002000,
+   "nutrient": {
+    "id": 2000,
+    "number": "269",
+    "name": "Total Sugars",
+    "rank": 1,
+    "unitName": "g"
+   },
+   "amount": 0.0
+  },
+  {
+   "type": "FoodNutrient",
+   "id": 30001093,
+   "nutrient": {
+    "id": 1093,
+    "number": "307",
+    "name": "Sodium, Na",
+    "rank": 1,
+    "unitName": "mg"
+   },
+   "amount": 163.0
+  }
+ ]
+}

@@ -70,6 +70,22 @@ def per_serving_to_per_100g(per_serving: Mapping[str, float | None], serving_g: 
     }
 
 
+def partial_per_serving_to_per_100g(
+    per_serving: Mapping[str, float], serving_g: float
+) -> dict[str, float]:
+    """Like per_serving_to_per_100g, for a subset of nutrients (e.g. label corrections)."""
+    _check_amount("serving_g", serving_g)
+    out = {}
+    for k, v in per_serving.items():
+        if k not in NUTRIENTS:
+            raise ValueError(f"unknown nutrient {k}")
+        v = float(v)
+        if not math.isfinite(v) or v < 0:
+            raise ValueError(f"{k} must be a finite number of at least 0, got {v}")
+        out[k] = v * 100.0 / serving_g
+    return out
+
+
 def scale(per_100g: Mapping[str, float | None], grams: float) -> Nutrients:
     """Nutrients in `grams` of a food given its per-100 g values (unrounded)."""
     _check_amount("grams", grams)

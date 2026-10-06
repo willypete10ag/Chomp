@@ -31,14 +31,14 @@ def server(settings, conn, fdc):
     return build_server(settings, fdc=fdc)
 
 
-async def call(client, name, **args):
-    result = await client.call_tool(name, args)
+async def call(client, tool, **args):
+    result = await client.call_tool(tool, args)
     assert not result.is_error, result.content
     return result.structured_content
 
 
-async def call_error(client, name, **args) -> str:
-    result = await client.call_tool(name, args)
+async def call_error(client, tool, **args) -> str:
+    result = await client.call_tool(tool, args)
     assert result.is_error
     return result.content[0].text
 

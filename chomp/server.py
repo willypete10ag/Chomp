@@ -20,7 +20,9 @@ from starlette.responses import JSONResponse
 from chomp import __version__, db, logic, store
 from chomp.config import Settings
 from chomp.sources import SourceError
+from chomp.sources import gtin as gtins
 from chomp.sources.fdc import FDCClient
+from chomp.sources.off import OFFClient
 
 log = logging.getLogger("chomp")
 
@@ -160,6 +162,27 @@ class DeleteResult(BaseModel):
     day: DaySummary
 
 
+class BarcodeResult(BaseModel):
+    barcode: str = Field(description="Normalized 14-digit GTIN")
+    found: bool
+    found_in: Literal["saved", "fdc", "off"] | None
+    food: Food | None
+    warnings: list[str]
+    next_step: str | None
+
+
+class LabelResult(BaseModel):
+    food: Food
+    barcode_moved_from_food_id: int | None = Field(
+        description="A food that previously held this barcode; it keeps its id for past entries"
+    )
+
+
+class ConfirmResult(BaseModel):
+    food: Food
+    changed: list[str] = Field(description="Nutrients whose per-100 g value changed")
+
+
 class ServerInfo(TypedDict):
     name: str
     version: str
@@ -200,11 +223,23 @@ def _progress(totals: logic.Nutrients, targets: dict) -> dict[str, TargetProgres
 # --- Server ---------------------------------------------------------------------------------
 
 
-def build_server(settings: Settings, *, fdc: FDCClient | None = None) -> MCPServer:
+NutrientArg = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+OptionalNutrientArg = Annotated[float | None, Field(ge=0, allow_inf_nan=False)]
+
+ASK_FOR_LABEL = (
+    "Not found in Chomp, FoodData Central or Open Food Facts. Ask the user for a photo of "
+    "the nutrition facts panel, then call save_food_from_label with this barcode as upc."
+)
+
+
+def build_server(
+    settings: Settings, *, fdc: FDCClient | None = None, off: OFFClient | None = None
+) -> MCPServer:
     server = MCPServer(name="chomp", version=__version__, instructions=INSTRUCTIONS)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
     fdc = fdc or FDCClient(settings.fdc_api_key)
+    off = off or OFFClient(settings.off_user_agent)
 
     def connect():
         return closing(db.connect(settings.db_path))
@@ -408,6 +443,177 @@ def build_server(settings: Settings, *, fdc: FDCClient | None = None) -> MCPServ
                 totals=_nutrients(totals),
                 progress=_progress(totals, store.get_targets(conn)),
             )
+
+    @server.tool()
+    async def lookup_barcode(
+        barcode: Annotated[
+            str, Field(description="UPC/EAN digits read from the package or a barcode photo")
+        ],
+    ) -> BarcodeResult:
+        """Look up a packaged food by its barcode (UPC-A, EAN-13, EAN-8 or GTIN-14).
+
+        Checks foods already saved in Chomp, then USDA FoodData Central Branded foods, then
+        Open Food Facts, and saves any hit so the next scan is instant. Returns the food with
+        per-100 g nutrients and serving size. Read `warnings` to the user: Open Food Facts
+        data is unverified until they confirm it against the label (confirm_food). If
+        nothing is found, follow `next_step`: ask for a label photo and call
+        save_food_from_label. Never fill in nutrition values yourself.
+        """
+        try:
+            code = gtins.normalize(barcode)
+        except gtins.InvalidBarcode as e:
+            raise ToolError(f"{e}. Ask the user to re-read the barcode digits.") from e
+        warnings: list[str] = []
+
+        def result(row, found_in, flags=()) -> BarcodeResult:
+            food = _food(row)
+            notes = list(flags)
+            if not food.verified and food.source == "off" and not notes:
+                notes.append("unverified: Open Food Facts data; confirm against the label")
+            return BarcodeResult(
+                barcode=code,
+                found=True,
+                found_in=found_in,
+                food=food,
+                warnings=warnings + notes,
+                next_step=None,
+            )
+
+        with connect() as conn:
+            row = store.food_by_gtin(conn, code)
+            if row is not None:
+                return result(row, "saved")
+            failures = 0
+            for name, client, enabled in (
+                ("fdc", fdc, fdc.enabled),
+                ("off", off, True),
+            ):
+                if not enabled:
+                    continue
+                try:
+                    rec = await client.lookup_gtin(code)
+                except SourceError as e:
+                    log.warning("lookup_barcode: %s", e)
+                    warnings.append(str(e))
+                    failures += 1
+                    continue
+                if rec is not None:
+                    row, _ = store.cache_record(conn, rec)
+                    return result(row, name, rec.flags)
+        if failures and failures == (2 if fdc.enabled else 1):
+            next_step = (
+                "Barcode sources could not be reached. Try again shortly, or ask for a photo "
+                "of the nutrition facts panel and call save_food_from_label."
+            )
+        else:
+            next_step = ASK_FOR_LABEL
+        return BarcodeResult(
+            barcode=code,
+            found=False,
+            found_in=None,
+            food=None,
+            warnings=warnings,
+            next_step=next_step,
+        )
+
+    @server.tool()
+    def save_food_from_label(
+        name: Annotated[str, Field(min_length=1, description="Product name")],
+        serving_g: Annotated[
+            float, Field(gt=0, description="Serving size in grams, from the label")
+        ],
+        kcal: Annotated[NutrientArg, Field(description="Calories per serving")],
+        protein_g: Annotated[NutrientArg, Field(description="Protein per serving, g")],
+        carbs_g: Annotated[NutrientArg, Field(description="Total carbohydrate per serving, g")],
+        fat_g: Annotated[NutrientArg, Field(description="Total fat per serving, g")],
+        fiber_g: Annotated[OptionalNutrientArg, Field(description="Dietary fiber, g")] = None,
+        sugar_g: Annotated[OptionalNutrientArg, Field(description="Total sugars, g")] = None,
+        sodium_mg: Annotated[OptionalNutrientArg, Field(description="Sodium, mg")] = None,
+        brand: Annotated[str | None, Field(description="Brand name")] = None,
+        upc: Annotated[
+            str | None, Field(description="Barcode digits, if known, so scans find it")
+        ] = None,
+        serving_desc: Annotated[
+            str | None, Field(description="Serving as printed, e.g. '3 tbsp (46 g)'")
+        ] = None,
+    ) -> LabelResult:
+        """Save a food from its nutrition facts label, as read from a photo the user sent.
+
+        Use after lookup_barcode finds nothing, or when the user wants their package's exact
+        label values. Enter the per-serving numbers exactly as printed; Chomp converts them
+        to per 100 g. The food is saved as verified (it is the user's own label) and, with
+        upc, future scans of that barcode return it. Returns the saved food with a food_id
+        ready for log_entries. Only use numbers read from the label, never estimates.
+        """
+        with tool_errors(), connect() as conn:
+            gtin = gtins.normalize(upc) if upc else None
+            per_serving = {
+                "kcal": kcal,
+                "protein_g": protein_g,
+                "carbs_g": carbs_g,
+                "fat_g": fat_g,
+                "fiber_g": fiber_g,
+                "sugar_g": sugar_g,
+                "sodium_mg": sodium_mg,
+            }
+            row, moved_from = store.save_label_food(
+                conn,
+                name=name.strip(),
+                brand=(brand or "").strip() or None,
+                gtin=gtin,
+                per_100g=logic.per_serving_to_per_100g(per_serving, serving_g),
+                serving_g=serving_g,
+                serving_desc=serving_desc,
+            )
+            return LabelResult(food=_food(row), barcode_moved_from_food_id=moved_from)
+
+    @server.tool()
+    def confirm_food(
+        food_id: Annotated[int, Field(description="The food to confirm")],
+        kcal: OptionalNutrientArg = None,
+        protein_g: OptionalNutrientArg = None,
+        carbs_g: OptionalNutrientArg = None,
+        fat_g: OptionalNutrientArg = None,
+        fiber_g: OptionalNutrientArg = None,
+        sugar_g: OptionalNutrientArg = None,
+        sodium_mg: OptionalNutrientArg = None,
+        per_serving_g: Annotated[
+            float | None,
+            Field(
+                gt=0,
+                description="If the corrected values are per serving (as on a label), the "
+                "serving size in grams. Omit when the values are per 100 g.",
+            ),
+        ] = None,
+    ) -> ConfirmResult:
+        """Mark a food as verified after the user checks it against the package label,
+        optionally correcting nutrient values.
+
+        Use when the user confirms an unverified food (usually from Open Food Facts) or
+        reports that a value is wrong. Only pass nutrients that need correcting; the rest
+        are kept. Corrections apply to future logs only; past entries keep their values
+        (use update_entry to re-snapshot one). Returns the food and which nutrients changed.
+        """
+        given = {
+            k: v
+            for k, v in {
+                "kcal": kcal,
+                "protein_g": protein_g,
+                "carbs_g": carbs_g,
+                "fat_g": fat_g,
+                "fiber_g": fiber_g,
+                "sugar_g": sugar_g,
+                "sodium_mg": sodium_mg,
+            }.items()
+            if v is not None
+        }
+        with tool_errors(), connect() as conn:
+            if per_serving_g is not None:
+                if not given:
+                    raise ValueError("per_serving_g only applies when correcting values")
+                given = logic.partial_per_serving_to_per_100g(given, per_serving_g)
+            row, changed = store.confirm_food(conn, food_id, given)
+            return ConfirmResult(food=_food(row), changed=changed)
 
     return server
 

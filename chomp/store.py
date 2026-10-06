@@ -89,6 +89,57 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
         return get_food(conn, cur.lastrowid), True
 
 
+def save_label_food(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    brand: str | None,
+    gtin: str | None,
+    per_100g: logic.Nutrients,
+    serving_g: float,
+    serving_desc: str | None,
+) -> tuple[sqlite3.Row, int | None]:
+    """Insert a food read from a package label (verified: it is the user's own label).
+
+    If another food already holds the barcode, the barcode moves to the new food so future
+    scans find the label values; the old food keeps its id for past entries. Returns the
+    new row and the id of the food the barcode was taken from, if any.
+    """
+    n = logic.round_nutrients(per_100g)
+    with transaction(conn):
+        previous = None
+        if gtin and (old := food_by_gtin(conn, gtin)) is not None:
+            previous = old["id"]
+            conn.execute("UPDATE foods SET gtin = NULL WHERE id = ?", (previous,))
+        cur = conn.execute(
+            "INSERT INTO foods (name, brand, gtin, source, verified, kcal, protein_g, carbs_g,"
+            " fat_g, fiber_g, sugar_g, sodium_mg, serving_g, serving_desc)"
+            " VALUES (?, ?, ?, 'label', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, brand, gtin, *(n[k] for k in logic.NUTRIENTS), serving_g, serving_desc),
+        )
+        return get_food(conn, cur.lastrowid), previous
+
+
+def confirm_food(
+    conn: sqlite3.Connection, food_id: int, corrections: logic.Nutrients
+) -> tuple[sqlite3.Row, list[str]]:
+    """Mark a food verified, applying per-100 g corrections for the keys given.
+
+    Returns the updated row and the names of nutrients that changed. Past entries keep
+    their snapshots.
+    """
+    current = nutrients_of(get_food(conn, food_id))
+    merged = logic.round_nutrients({**current, **corrections})
+    changed = [k for k in logic.NUTRIENTS if merged[k] != current[k]]
+    sets = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
+    with transaction(conn):
+        conn.execute(
+            f"UPDATE foods SET verified = 1, updated_at = datetime('now'), {sets} WHERE id = ?",
+            (*(merged[k] for k in logic.NUTRIENTS), food_id),
+        )
+    return get_food(conn, food_id), changed
+
+
 _TOKEN = re.compile(r"\w+", re.UNICODE)
 
 

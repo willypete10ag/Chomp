@@ -256,3 +256,13 @@ def test_label_mismatch_ignores_small_absolute_differences():
 def test_round_nutrients():
     out = logic.round_nutrients({"kcal": 1.23456, "protein_g": 1, "carbs_g": 1, "fat_g": 1})
     assert out["kcal"] == 1.235 and out["sodium_mg"] is None
+
+
+def test_partial_per_serving_to_per_100g():
+    assert logic.partial_per_serving_to_per_100g({"protein_g": 26}, 46) == {
+        "protein_g": pytest.approx(56.5217, abs=1e-4)
+    }
+    with pytest.raises(ValueError, match="at least 0"):
+        logic.partial_per_serving_to_per_100g({"fat_g": -1}, 46)
+    with pytest.raises(ValueError, match="unknown"):
+        logic.partial_per_serving_to_per_100g({"salt": 1}, 46)
