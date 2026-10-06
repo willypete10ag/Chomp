@@ -15,4 +15,11 @@ uv run pytest -q              # tests
 uv run ruff check . && uv run ruff format --check .
 ```
 
+Run the server locally on http://127.0.0.1:8000/mcp (health check at `/health`):
+
+```bash
+uv run chomp                  # reads DB_PATH, TZ, HOST, PORT from the environment
+npx @modelcontextprotocol/inspector   # connect to http://127.0.0.1:8000/mcp
+```
+
 Deploy, auth, and connector setup are documented as part of M3.
