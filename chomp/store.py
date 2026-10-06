@@ -400,6 +400,34 @@ def update_entry(
     return get_entry(conn, entry_id)
 
 
+def update_meal(
+    conn: sqlite3.Connection,
+    meal_id: int,
+    eaten_at: str | None,
+    label: str | None,
+    note: str | None,
+) -> sqlite3.Row:
+    """Change a meal's time, label and/or note. An empty label or note clears it.
+
+    Only the given fields are written, so overlapping updates to different fields don't undo
+    each other.
+    """
+    changes: dict[str, str | None] = {}
+    if eaten_at is not None:
+        changes["eaten_at"] = eaten_at
+    if label is not None:
+        changes["label"] = label.strip() or None
+    if note is not None:
+        changes["note"] = note.strip() or None
+    with transaction(conn):
+        if changes:
+            conn.execute(
+                f"UPDATE meals SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?",
+                (*changes.values(), meal_id),
+            )
+    return get_meal(conn, meal_id)
+
+
 def delete_entry(conn: sqlite3.Connection, entry_id: int) -> tuple[EntryRow, bool]:
     """Delete an entry, and its meal if that was the last entry. Returns (entry, meal_deleted)."""
     entry = get_entry(conn, entry_id)
