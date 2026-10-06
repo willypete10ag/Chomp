@@ -182,7 +182,16 @@ def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> s
     except ValueError as e:
         raise ValueError(f"eaten_at must be ISO 8601 like 2026-10-05T08:30, got {value!r}") from e
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo(tz))
+        zone = ZoneInfo(tz)
+        local = dt.replace(tzinfo=zone)
+        # replace() accepts wall times skipped by a spring-forward change and shifts them;
+        # a round trip through UTC exposes that.
+        if local.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != dt:
+            raise ValueError(
+                f"eaten_at {value!r} does not exist in {tz} (clocks skip that hour); "
+                "ask the user for the time again"
+            )
+        dt = local
     return format_utc(dt)
 
 

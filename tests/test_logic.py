@@ -202,6 +202,14 @@ def test_parse_eaten_at_rejects(value):
         logic.parse_eaten_at(value, TZ, NOW)
 
 
+def test_parse_eaten_at_rejects_time_skipped_by_dst():
+    with pytest.raises(ValueError, match="does not exist"):
+        logic.parse_eaten_at("2026-03-08T02:30", TZ, NOW)
+    # the hour after the change is fine, and so is the repeated hour in November
+    assert logic.parse_eaten_at("2026-03-08T03:30", TZ, NOW) == "2026-03-08T07:30:00Z"
+    assert logic.parse_eaten_at("2026-11-01T01:30", TZ, NOW) == "2026-11-01T05:30:00Z"
+
+
 def test_parse_local_date_keywords_use_local_today():
     assert logic.parse_local_date(None, TZ, NOW) == date(2026, 10, 5)
     assert logic.parse_local_date("Today", TZ, NOW) == date(2026, 10, 5)
