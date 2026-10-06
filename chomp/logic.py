@@ -60,6 +60,26 @@ def _clean(values: Mapping[str, float | None]) -> Nutrients:
     return out
 
 
+# FDC computes carbohydrate "by difference" (100 g minus water, protein, fat, ash), which
+# can land slightly below zero; anything further below zero is bad data.
+UPSTREAM_NEGATIVE_FLOOR = -1.0
+
+
+def tidy_upstream(values: Mapping[str, float | None]) -> Nutrients | None:
+    """Upstream per-100 g values with slightly negative carbs set to 0, or None if a value
+    is unusable (not finite, or negative anywhere else)."""
+    out: Nutrients = {}
+    for k in NUTRIENTS:
+        v = values.get(k)
+        if v is not None:
+            floor = UPSTREAM_NEGATIVE_FLOOR if k == "carbs_g" else 0.0
+            if not math.isfinite(v) or v < floor:
+                return None
+            v = max(v, 0.0)
+        out[k] = v
+    return out
+
+
 def per_serving_to_per_100g(per_serving: Mapping[str, float | None], serving_g: float) -> Nutrients:
     """Convert label values for one serving of `serving_g` grams to per-100 g values."""
     _check_amount("serving_g", serving_g)
@@ -184,13 +204,18 @@ def local_iso(utc: str, tz: str) -> str:
 def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> str:
     """Normalize a meal time to storage format.
 
-    None means now. An ISO 8601 string with an offset (or Z) is taken as is; one without an
-    offset is local time in `tz`. A bare date is rejected so a meal never silently lands at
-    midnight.
+    "now" means now. An ISO 8601 string with an offset (or Z) is taken as is; one without an
+    offset is local time in `tz`. A missing time is rejected so a meal is never stamped with
+    whenever it happened to be logged, and a bare date so it never lands at midnight.
     """
     if value is None or not value.strip():
-        return format_utc(now or datetime.now(UTC))
+        raise ValueError(
+            "eaten_at is required: ask the user what time they ate this, or pass 'now' if "
+            "they are eating it now"
+        )
     text = value.strip()
+    if text.lower() == "now":
+        return format_utc(now or datetime.now(UTC))
     if len(text) <= 10:
         raise ValueError(f"eaten_at needs a time as well as a date, got {value!r}")
     try:

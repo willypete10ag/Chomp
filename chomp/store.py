@@ -346,20 +346,31 @@ def log_meal(
     note: str | None = None,
 ) -> int:
     """Create a meal with one entry per (food_id, grams), snapshotting nutrients."""
-    if not items:
-        raise ValueError("a meal needs at least one item")
-    foods = get_foods(conn, (f for f, _ in items))
-    snaps = [(f, g, logic.snapshot(nutrients_of(foods[f]), g)) for f, g in items]
     with transaction(conn):
         meal_id = conn.execute(
             "INSERT INTO meals (eaten_at, label, note) VALUES (?, ?, ?)", (eaten_at, label, note)
         ).lastrowid
-        conn.executemany(
-            "INSERT INTO entries (meal_id, food_id, grams, kcal, protein_g, carbs_g, fat_g,"
-            " fiber_g, sugar_g, sodium_mg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [(meal_id, f, g, *(s[k] for k in logic.NUTRIENTS)) for f, g, s in snaps],
-        )
+        _insert_entries(conn, meal_id, items)
     return meal_id
+
+
+def add_to_meal(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, float]]) -> None:
+    """Add entries to an existing meal, snapshotting nutrients."""
+    get_meal(conn, meal_id)
+    with transaction(conn):
+        _insert_entries(conn, meal_id, items)
+
+
+def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, float]]) -> None:
+    if not items:
+        raise ValueError("a meal needs at least one item")
+    foods = get_foods(conn, (f for f, _ in items))
+    snaps = [(f, g, logic.snapshot(nutrients_of(foods[f]), g)) for f, g in items]
+    conn.executemany(
+        "INSERT INTO entries (meal_id, food_id, grams, kcal, protein_g, carbs_g, fat_g,"
+        " fiber_g, sugar_g, sodium_mg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(meal_id, f, g, *(s[k] for k in logic.NUTRIENTS)) for f, g, s in snaps],
+    )
 
 
 def get_meal(conn: sqlite3.Connection, meal_id: int) -> sqlite3.Row:

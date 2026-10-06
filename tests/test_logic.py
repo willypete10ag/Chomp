@@ -184,8 +184,8 @@ NOW = datetime(2026, 10, 6, 2, 0, tzinfo=UTC)  # 22:00 on the 5th in New York
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (None, "2026-10-06T02:00:00Z"),
-        ("", "2026-10-06T02:00:00Z"),
+        ("now", "2026-10-06T02:00:00Z"),
+        (" NOW ", "2026-10-06T02:00:00Z"),
         ("2026-10-05T08:30", "2026-10-05T12:30:00Z"),  # naive = local (EDT)
         ("2026-01-05T08:30", "2026-01-05T13:30:00Z"),  # EST
         ("2026-10-05T08:30:00Z", "2026-10-05T08:30:00Z"),
@@ -196,7 +196,7 @@ def test_parse_eaten_at(value, expected):
     assert logic.parse_eaten_at(value, TZ, NOW) == expected
 
 
-@pytest.mark.parametrize("value", ["2026-10-05", "breakfast", "10/05/2026 8am"])
+@pytest.mark.parametrize("value", [None, "", "2026-10-05", "breakfast", "10/05/2026 8am"])
 def test_parse_eaten_at_rejects(value):
     with pytest.raises(ValueError, match="eaten_at"):
         logic.parse_eaten_at(value, TZ, NOW)
@@ -280,3 +280,12 @@ def test_totals_by_day_uses_local_dates():
     assert out[date(2026, 10, 5)]["protein_g"] == 15.0
     assert out[date(2026, 10, 6)]["kcal"] == 20.0
     assert logic.totals_by_day([], "America/New_York") == {}
+
+
+def test_tidy_upstream_zeroes_small_negatives_and_rejects_bad_values():
+    base = {"kcal": 120, "protein_g": 25, "carbs_g": -0.104, "fat_g": 1.5}
+    assert logic.tidy_upstream(base)["carbs_g"] == 0
+    assert logic.tidy_upstream(base)["fiber_g"] is None
+    assert logic.tidy_upstream({**base, "carbs_g": -5}) is None
+    assert logic.tidy_upstream({**base, "fat_g": float("nan")}) is None
+    assert logic.tidy_upstream({**base, "carbs_g": 1, "fat_g": -0.5}) is None

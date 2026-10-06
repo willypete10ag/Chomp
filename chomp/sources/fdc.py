@@ -68,7 +68,8 @@ def _amounts(food_nutrients: Iterable[Mapping[str, Any]]) -> dict[int, tuple[flo
 
 
 def parse_nutrients(food_nutrients: Iterable[Mapping[str, Any]]) -> logic.Nutrients | None:
-    """Per-100 g nutrients from an FDC foodNutrients list, or None if a core value is missing."""
+    """Per-100 g nutrients from an FDC foodNutrients list, or None if a core value is missing
+    or a value is unusable (slightly negative values are set to 0)."""
     amounts = _amounts(food_nutrients)
     out: logic.Nutrients = {}
     for key, ids in NUTRIENT_IDS.items():
@@ -85,7 +86,7 @@ def parse_nutrients(food_nutrients: Iterable[Mapping[str, Any]]) -> logic.Nutrie
         out[key] = value
     if any(out[k] is None for k in logic.CORE):
         return None
-    return out
+    return logic.tidy_upstream(out)
 
 
 def _name(food: Mapping[str, Any]) -> str:
@@ -220,12 +221,14 @@ class FDCClient:
 
         FDC's own relevance order is loose (a search for "scrambled eggs" ranks egg whites
         and egg bagels highly), so results are re-ranked by how many query words the food's
-        name and brand contain. Ties go to Foundation, then SR Legacy, then Branded, then
+        name and brand contain, then by how much of the name's lead (before the first comma)
+        is what the user asked for, so "milk" finds fluid milk before "Crackers, milk".
+        Remaining ties go to Foundation, then SR Legacy, then Branded, then
         FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
         """
         results: list[list[FoodRecord]] = []
         errors: list[SourceError] = []
-        for types, size in ((GENERIC_TYPES, max(limit * 2, 10)), ((BRANDED,), limit)):
+        for types, size in ((GENERIC_TYPES, max(limit * 4, 50)), ((BRANDED,), limit)):
             try:
                 results.append(await self.search(query, types, page_size=size))
             except SourceError as e:  # one failed request shouldn't drop the other's hits
@@ -243,6 +246,7 @@ class FDCClient:
         candidates.sort(
             key=lambda r: (
                 -match_score(query, r),
+                -text.head_score(query, r.name),
                 TYPE_RANK.get(r.data_type or "", 9),
                 order[r.source_id],
             )

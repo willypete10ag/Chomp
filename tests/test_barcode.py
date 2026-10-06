@@ -225,7 +225,9 @@ async def test_confirm_food_marks_verified_and_corrects(server, conn, chain):
     async with Client(server) as client:
         found = await call(client, "lookup_barcode", barcode=NUTELLA)
         food_id = found["food"]["food_id"]
-        logged = await call(client, "log_entries", items=[{"food_id": food_id, "grams": 15}])
+        logged = await call(
+            client, "log_entries", items=[{"food_id": food_id, "grams": 15}], eaten_at="now"
+        )
         out = await call(client, "confirm_food", food_id=food_id)
         assert out["food"]["verified"] is True and out["changed"] == []
 

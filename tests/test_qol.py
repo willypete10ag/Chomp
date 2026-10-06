@@ -81,7 +81,7 @@ async def test_template_replace_and_unknown_name(server, foods):
             client, "save_meal_template", name="LUNCH", items=[{"food_id": whites, "grams": 100}]
         )
         assert again["replaced"] is True and [i["food_id"] for i in again["items"]] == [whites]
-        msg = await call_error(client, "log_meal_template", name="dinner")
+        msg = await call_error(client, "log_meal_template", name="dinner", eaten_at="now")
     assert "no meal template named 'dinner'" in msg and "LUNCH" in msg
 
 
