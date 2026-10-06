@@ -3,12 +3,13 @@
 Self-hosted MCP server that Claude uses as a meal-logging backend. See ARCHITECTURE.md (design, tools, flows) and SCHEMA.sql (source of truth for the DB).
 
 ## Stack
-Python 3.12 · `mcp` SDK (FastMCP, streamable HTTP) · SQLite · httpx · pytest · Docker Compose · uv · ruff
+Python 3.12 · `mcp` SDK v2 (`MCPServer`, which v1 called FastMCP; streamable HTTP) · SQLite · httpx · pytest · Docker Compose · uv · ruff
 
 ## Layout
 ```
 chomp/
-  server.py        # FastMCP app + tool registrations
+  server.py        # MCPServer app + tool registrations, /health
+  config.py        # settings from env
   db.py            # connection, migrations (applies SCHEMA.sql)
   sources/
     fdc.py         # USDA FoodData Central client
@@ -42,5 +43,5 @@ README.md
 ## Commands
 - `uv sync` (first time), then `uv run pytest -q`
 - `uv run ruff check . && uv run ruff format --check .`
-- `npx @modelcontextprotocol/inspector` for local tool testing
+- `uv run --env-file .env chomp` to run the server; `npx @modelcontextprotocol/inspector` for local tool testing
 - `docker compose up -d --build`
