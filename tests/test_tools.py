@@ -163,6 +163,21 @@ async def test_search_survives_fdc_outage(server, conn, upstream):
 
 
 @pytest.mark.anyio
+async def test_search_survives_slightly_negative_fdc_carbs(server, conn, upstream):
+    nutrients = [
+        {"nutrientId": 1008, "unitName": "KCAL", "value": 116},
+        {"nutrientId": 1003, "unitName": "G", "value": 25.5},
+        {"nutrientId": 1005, "unitName": "G", "value": -0.104},
+        {"nutrientId": 1004, "unitName": "G", "value": 0.8},
+    ]
+    food = {"fdcId": 9, "description": "Tuna, light, canned", "dataType": "SR Legacy"}
+    upstream.add(SEARCH, {"foods": [{**food, "foodNutrients": nutrients}]})
+    async with Client(server) as client:
+        out = await call(client, "search_food", query="tuna casserole")
+    assert out["results"][0]["per_100g"]["carbs_g"] == 0
+
+
+@pytest.mark.anyio
 async def test_search_no_match_says_so(server, upstream):
     upstream.add(SEARCH, {"foods": []})
     async with Client(server) as client:
@@ -339,6 +354,40 @@ async def test_update_meal_errors(server, conn):
             client, "update_meal", meal_id=logged["meal"]["meal_id"], eaten_at="2026-10-05"
         )
     assert "needs a time" in msg
+
+
+@pytest.mark.anyio
+async def test_log_entries_adds_to_an_existing_meal(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    whites = add_food(conn, "Egg white", *WHITES)
+    async with Client(server) as client:
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100}],
+            meal_label="breakfast",
+            eaten_at="2026-10-05T08:00",
+        )
+        meal_id = logged["meal"]["meal_id"]
+        out = await call(
+            client, "log_entries", items=[{"food_id": whites, "grams": 100}], meal_id=meal_id
+        )
+        assert out["meal"]["meal_id"] == meal_id
+        assert [e["food_id"] for e in out["meal"]["entries"]] == [eggs, whites]
+        assert out["meal"]["totals"]["kcal"] == 195
+        assert out["day"]["date"] == "2026-10-05" and out["day"]["totals"]["kcal"] == 195
+        msg = await call_error(
+            client,
+            "log_entries",
+            items=[{"food_id": whites, "grams": 1}],
+            meal_id=meal_id,
+            meal_label="lunch",
+        )
+        assert "update_meal" in msg
+        assert "no meal with id 999" in await call_error(
+            client, "log_entries", items=[{"food_id": whites, "grams": 1}], meal_id=999
+        )
+    assert conn.execute("SELECT count(*) FROM meals").fetchone()[0] == 1
 
 
 @pytest.mark.anyio

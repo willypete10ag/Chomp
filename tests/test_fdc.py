@@ -251,3 +251,43 @@ async def test_disabled_without_key():
     assert not client.enabled
     with pytest.raises(SourceError, match="not configured"):
         await client.search("x", ["Branded"])
+
+
+def test_carbs_by_difference_slightly_below_zero_become_zero():
+    # Seen live on 2026-10-06: a "tuna casserole" search hit with carbs of -0.104 g
+    hit = _hit(9, "Fish, tuna, light, canned in water", "SR Legacy")
+    hit["foodNutrients"][2]["value"] = -0.104
+    rec = fdcmod.to_record(hit)
+    assert rec is not None and rec.nutrients["carbs_g"] == 0
+    hit["foodNutrients"][2]["value"] = -12
+    assert fdcmod.to_record(hit) is None
+
+
+@pytest.mark.anyio
+async def test_plain_query_ranks_the_food_itself_first(upstream, fdc):
+    # FDC's order for "milk" in a live run on 2026-10-06
+    upstream.add(
+        SEARCH,
+        {
+            "foods": [
+                _hit(1, "Cheese, ricotta, whole milk", "Foundation"),
+                _hit(2, "Crackers, milk", "SR Legacy"),
+                _hit(3, "Milk dessert, frozen, milk-fat free, chocolate", "SR Legacy"),
+                _hit(4, "Candies, milk chocolate", "SR Legacy"),
+                _hit(5, "Milk, reduced fat, fluid, 2% milkfat", "SR Legacy"),
+            ]
+        },
+        match=GENERIC,
+    )
+    upstream.add(SEARCH, {"foods": []}, match=BRANDED)
+    recs = await fdc.search_ranked("milk", limit=3)
+    assert [r.source_id for r in recs] == ["5", "3", "1"]
+
+
+def test_head_score():
+    from chomp import text
+
+    assert text.head_score("milk", "Milk, reduced fat, fluid") == 1
+    assert text.head_score("milk", "Milk dessert, frozen") == 0.5
+    assert text.head_score("milk", "Crackers, milk") == 0
+    assert text.head_score("scrambled eggs", "Egg, whole, cooked, scrambled") == 1

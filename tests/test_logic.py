@@ -280,3 +280,11 @@ def test_totals_by_day_uses_local_dates():
     assert out[date(2026, 10, 5)]["protein_g"] == 15.0
     assert out[date(2026, 10, 6)]["kcal"] == 20.0
     assert logic.totals_by_day([], "America/New_York") == {}
+
+
+def test_tidy_upstream_zeroes_small_negatives_and_rejects_bad_values():
+    base = {"kcal": 120, "protein_g": 25, "carbs_g": -0.104, "fat_g": 1.5}
+    assert logic.tidy_upstream(base)["carbs_g"] == 0
+    assert logic.tidy_upstream(base)["fiber_g"] is None
+    assert logic.tidy_upstream({**base, "carbs_g": -5}) is None
+    assert logic.tidy_upstream({**base, "fat_g": float("nan")}) is None

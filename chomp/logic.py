@@ -60,6 +60,24 @@ def _clean(values: Mapping[str, float | None]) -> Nutrients:
     return out
 
 
+# FDC computes carbohydrate "by difference" (100 g minus water, protein, fat, ash), which
+# can land slightly below zero; anything further below zero is bad data.
+UPSTREAM_NEGATIVE_FLOOR = -1.0
+
+
+def tidy_upstream(values: Mapping[str, float | None]) -> Nutrients | None:
+    """Upstream per-100 g values with small negatives set to 0, or None if one is unusable."""
+    out: Nutrients = {}
+    for k in NUTRIENTS:
+        v = values.get(k)
+        if v is not None:
+            if not math.isfinite(v) or v < UPSTREAM_NEGATIVE_FLOOR:
+                return None
+            v = max(v, 0.0)
+        out[k] = v
+    return out
+
+
 def per_serving_to_per_100g(per_serving: Mapping[str, float | None], serving_g: float) -> Nutrients:
     """Convert label values for one serving of `serving_g` grams to per-100 g values."""
     _check_amount("serving_g", serving_g)

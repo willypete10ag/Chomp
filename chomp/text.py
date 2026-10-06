@@ -33,3 +33,16 @@ def match_score(query: str, text: str) -> float:
         return 0.0
     have = {stem(w) for w in words(text)}
     return sum(w in have for w in wanted) / len(wanted)
+
+
+def head_score(query: str, name: str) -> float:
+    """Share of the name's lead words (before the first comma) that the query asked for.
+
+    FDC generic names lead with what the food is ("Milk, reduced fat, fluid"), so this ranks
+    plain milk above "Crackers, milk" or "Milk dessert, frozen" when the user says "milk".
+    """
+    lead = [stem(w) for w in words(name.split(",", 1)[0])]
+    if not lead:
+        return 0.0
+    wanted = {stem(w) for w in words(query)}
+    return sum(w in wanted for w in lead) / len(lead)
