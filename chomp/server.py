@@ -32,8 +32,9 @@ Chomp is the user's meal log. Use its tools to look up foods, log what they ate,
 Every calorie and macro number you show must come from a Chomp tool result. Never estimate or
 invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo.
 Typical flow: search_food for each item, pick the best match (prefer alias and saved matches),
-log_entries with food_ids and grams, then show the user the per-item breakdown so they can
-correct it with update_entry.\
+log_entries with food_ids, grams and the time they ate (ask if they haven't said; don't
+label meals breakfast/lunch/dinner unless they do), then show the user the per-item breakdown
+so they can correct it with update_entry.\
 """
 
 SEARCH_LIMIT_MAX = 25
@@ -439,13 +440,17 @@ def build_server(
     def log_entries(
         items: Annotated[list[LogItem], Field(min_length=1, description="One item per food eaten")],
         meal_label: Annotated[
-            str | None, Field(description="e.g. breakfast, lunch, post-workout")
+            str | None,
+            Field(
+                description="Only a name the user gave (e.g. post-workout); never guess "
+                "breakfast/lunch/dinner from the time or order of meals"
+            ),
         ] = None,
         eaten_at: Annotated[
             str | None,
             Field(
-                description="When it was eaten, ISO 8601 (e.g. 2026-10-05T08:30). No offset "
-                "means the user's local time. Omit for now."
+                description="Required for a new meal: when it was eaten, ISO 8601 (e.g. "
+                "2026-10-05T15:00; no offset means the user's local time), or 'now'"
             ),
         ] = None,
         note: Annotated[str | None, Field(description="Free-text note for the meal")] = None,
@@ -461,11 +466,12 @@ def build_server(
 
         Use food_ids from search_food or lookup_barcode; convert counts and household
         measures to grams first (use the food's serving_g or an alias's default_grams when
-        they apply, and ask the user when unsure). When the user is logging a meal eaten
-        earlier ("breakfast was at 8"), pass eaten_at; omitting it stamps the current time.
-        To add something to a meal already logged ("add the cereal to breakfast"), pass that
-        meal's meal_id. Nutrients are computed from the database and snapshotted, so later
-        food edits never change this log. Returns the meal with per-item nutrients and
+        they apply, and ask the user when unsure). Every new meal needs eaten_at: if the
+        user hasn't said when they ate, ask before logging; pass 'now' only when they say
+        they are eating it now. Leave meal_label empty unless the user names the meal.
+        To add something to a meal already logged ("add the cereal to breakfast"), pass
+        that meal's meal_id. Nutrients are computed from the database and snapshotted, so
+        later food edits never change this log. Returns the meal with per-item nutrients and
         totals, plus the day's running totals and progress against targets. Show the user
         the per-item breakdown so they can correct it.
         """
@@ -833,9 +839,12 @@ def build_server(
     def log_meal_template(
         name: Annotated[str, Field(min_length=1, description="Template name, any case")],
         eaten_at: Annotated[
-            str | None,
-            Field(description="ISO 8601; no offset means local time. Omit for now."),
-        ] = None,
+            str,
+            Field(
+                description="When it was eaten, ISO 8601 (no offset means local time), or "
+                "'now'. Ask the user if they haven't said."
+            ),
+        ],
         meal_label: Annotated[
             str | None, Field(description="Defaults to the template name")
         ] = None,

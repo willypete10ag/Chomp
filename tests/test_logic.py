@@ -184,8 +184,8 @@ NOW = datetime(2026, 10, 6, 2, 0, tzinfo=UTC)  # 22:00 on the 5th in New York
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (None, "2026-10-06T02:00:00Z"),
-        ("", "2026-10-06T02:00:00Z"),
+        ("now", "2026-10-06T02:00:00Z"),
+        (" NOW ", "2026-10-06T02:00:00Z"),
         ("2026-10-05T08:30", "2026-10-05T12:30:00Z"),  # naive = local (EDT)
         ("2026-01-05T08:30", "2026-01-05T13:30:00Z"),  # EST
         ("2026-10-05T08:30:00Z", "2026-10-05T08:30:00Z"),
@@ -196,7 +196,7 @@ def test_parse_eaten_at(value, expected):
     assert logic.parse_eaten_at(value, TZ, NOW) == expected
 
 
-@pytest.mark.parametrize("value", ["2026-10-05", "breakfast", "10/05/2026 8am"])
+@pytest.mark.parametrize("value", [None, "", "2026-10-05", "breakfast", "10/05/2026 8am"])
 def test_parse_eaten_at_rejects(value):
     with pytest.raises(ValueError, match="eaten_at"):
         logic.parse_eaten_at(value, TZ, NOW)

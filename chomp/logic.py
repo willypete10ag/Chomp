@@ -202,13 +202,18 @@ def local_iso(utc: str, tz: str) -> str:
 def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> str:
     """Normalize a meal time to storage format.
 
-    None means now. An ISO 8601 string with an offset (or Z) is taken as is; one without an
-    offset is local time in `tz`. A bare date is rejected so a meal never silently lands at
-    midnight.
+    "now" means now. An ISO 8601 string with an offset (or Z) is taken as is; one without an
+    offset is local time in `tz`. A missing time is rejected so a meal is never stamped with
+    whenever it happened to be logged, and a bare date so it never lands at midnight.
     """
     if value is None or not value.strip():
-        return format_utc(now or datetime.now(UTC))
+        raise ValueError(
+            "eaten_at is required: ask the user what time they ate this, or pass 'now' if "
+            "they are eating it now"
+        )
     text = value.strip()
+    if text.lower() == "now":
+        return format_utc(now or datetime.now(UTC))
     if len(text) <= 10:
         raise ValueError(f"eaten_at needs a time as well as a date, got {value!r}")
     try:

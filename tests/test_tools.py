@@ -98,7 +98,9 @@ async def test_logged_fdc_food_ranks_as_saved(server, conn, fdc_eggs):
     async with Client(server) as client:
         first = await call(client, "search_food", query="egg white")
         branded = first["results"][2]["food_id"]
-        await call(client, "log_entries", items=[{"food_id": branded, "grams": 100}])
+        await call(
+            client, "log_entries", items=[{"food_id": branded, "grams": 100}], eaten_at="now"
+        )
         second = await call(client, "search_food", query="egg white")
     r = second["results"]
     assert (r[0]["food_id"], r[0]["match"]) == (branded, "saved")
@@ -260,7 +262,9 @@ async def test_update_swaps_food(server, conn):
     eggs = add_food(conn, "Egg", *EGGS)
     whites = add_food(conn, "Egg white", *WHITES)
     async with Client(server) as client:
-        logged = await call(client, "log_entries", items=[{"food_id": eggs, "grams": 100}])
+        logged = await call(
+            client, "log_entries", items=[{"food_id": eggs, "grams": 100}], eaten_at="now"
+        )
         entry_id = logged["meal"]["entries"][0]["entry_id"]
         out = await call(client, "update_entry", entry_id=entry_id, food_id=whites)
     assert out["entry"]["food_id"] == whites
@@ -283,6 +287,7 @@ async def test_delete_entry_then_meal(server, conn):
             client,
             "log_entries",
             items=[{"food_id": eggs, "grams": 100}, {"food_id": whites, "grams": 100}],
+            eaten_at="now",
         )
         first, second = (e["entry_id"] for e in logged["meal"]["entries"])
         out = await call(client, "delete_entry", entry_id=first)
@@ -349,7 +354,9 @@ async def test_update_meal_errors(server, conn):
             client, "update_meal", meal_id=1, meal_label="lunch"
         )
         eggs = add_food(conn, "Egg", *EGGS)
-        logged = await call(client, "log_entries", items=[{"food_id": eggs, "grams": 1}])
+        logged = await call(
+            client, "log_entries", items=[{"food_id": eggs, "grams": 1}], eaten_at="now"
+        )
         msg = await call_error(
             client, "update_meal", meal_id=logged["meal"]["meal_id"], eaten_at="2026-10-05"
         )
@@ -398,6 +405,7 @@ async def test_log_rejects_unknown_food_and_writes_nothing(server, conn):
             client,
             "log_entries",
             items=[{"food_id": eggs, "grams": 100}, {"food_id": 9999, "grams": 50}],
+            eaten_at="now",
         )
     assert "no food with id 9999" in msg
     assert conn.execute("SELECT count(*) FROM meals").fetchone()[0] == 0
@@ -412,6 +420,15 @@ async def test_log_rejects_non_positive_grams(server, conn, grams):
             "log_entries", {"items": [{"food_id": eggs, "grams": grams}]}
         )
     assert result.is_error
+
+
+@pytest.mark.anyio
+async def test_log_requires_a_time(server, conn):
+    eggs = add_food(conn, "Egg", *EGGS)
+    async with Client(server) as client:
+        msg = await call_error(client, "log_entries", items=[{"food_id": eggs, "grams": 1}])
+    assert "eaten_at is required" in msg and "ask the user" in msg
+    assert conn.execute("SELECT count(*) FROM meals").fetchone()[0] == 0
 
 
 @pytest.mark.anyio
