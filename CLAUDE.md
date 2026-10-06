@@ -23,6 +23,8 @@ chomp/
     gtin.py        # UPC/EAN normalization
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
+  web.py           # /app web dashboard (server-rendered, sign-in, entry edits)
+  static/          # dashboard CSS and home-screen icons
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push

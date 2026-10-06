@@ -211,6 +211,16 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
     return found
 
 
+def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    """Foods the user has used (see USED_FOOD), verified first, then by name."""
+    cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    return conn.execute(
+        f"SELECT {cols} FROM foods f WHERE {USED_FOOD}"
+        " ORDER BY f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
 # --- Aliases and templates ------------------------------------------------------------------
 
 
@@ -271,6 +281,28 @@ def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list
         (row["id"],),
     ).fetchall()
     return row, items
+
+
+def list_aliases(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT a.alias, a.default_grams, a.food_id, f.name, f.brand"
+        " FROM aliases a JOIN foods f ON f.id = a.food_id ORDER BY a.alias"
+    ).fetchall()
+
+
+def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sqlite3.Row]]]:
+    """Every meal template with its items (food name, grams and per-100 g nutrients)."""
+    templates = conn.execute("SELECT id, name FROM meal_templates ORDER BY name").fetchall()
+    cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    out = []
+    for t in templates:
+        items = conn.execute(
+            f"SELECT i.grams, {cols} FROM meal_template_items i JOIN foods f ON f.id = i.food_id"
+            " WHERE i.template_id = ? ORDER BY i.id",
+            (t["id"],),
+        ).fetchall()
+        out.append((t, items))
+    return out
 
 
 # --- Meals and entries ----------------------------------------------------------------------

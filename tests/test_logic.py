@@ -266,3 +266,17 @@ def test_partial_per_serving_to_per_100g():
         logic.partial_per_serving_to_per_100g({"fat_g": -1}, 46)
     with pytest.raises(ValueError, match="unknown"):
         logic.partial_per_serving_to_per_100g({"salt": 1}, 46)
+
+
+def test_totals_by_day_uses_local_dates():
+    rows = [
+        ("2026-10-05T12:00:00Z", {"kcal": 100.0, "protein_g": 10.0, "carbs_g": 0, "fat_g": 0}),
+        # 01:00 UTC on the 6th is 21:00 on the 5th in New York
+        ("2026-10-06T01:00:00Z", {"kcal": 50.0, "protein_g": 5.0, "carbs_g": 0, "fat_g": 0}),
+        ("2026-10-06T14:00:00Z", {"kcal": 20.0, "protein_g": 1.0, "carbs_g": 0, "fat_g": 0}),
+    ]
+    out = logic.totals_by_day(rows, "America/New_York")
+    assert out[date(2026, 10, 5)]["kcal"] == 150.0
+    assert out[date(2026, 10, 5)]["protein_g"] == 15.0
+    assert out[date(2026, 10, 6)]["kcal"] == 20.0
+    assert logic.totals_by_day([], "America/New_York") == {}

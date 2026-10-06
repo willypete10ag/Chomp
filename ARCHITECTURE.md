@@ -9,6 +9,7 @@ Claude ──(custom connector, MCP over HTTPS)──▶ Cloudflare Tunnel ─�
                                                                     ├── SQLite (chomp.db)
                                                                     ├── USDA FoodData Central API
                                                                     └── Open Food Facts API
+Me (phone / browser) ──(HTTPS, /app)──▶ Cloudflare Tunnel ──▶ same server: web dashboard
 ```
 Claude handles conversation, speech, and vision (reading barcodes and nutrition labels from photos). Chomp handles lookup, math, storage, and totals. No LLM runs on the homelab.
 
@@ -27,6 +28,15 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 
 ### Review
 `get_day(date)` and `get_totals(start, end)` for daily/weekly summaries and protein-target checks.
+
+### Dashboard
+`/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
+(any day's meals, totals and target progress; edit grams or delete an entry), History
+(7/30/90-day averages and inline-SVG charts) and Foods (used foods, aliases, templates). No
+JavaScript; edits are form posts that go through `store.py` like the tools, so macros still
+come only from the database. A web app manifest lets phones add it to the home screen. It
+is single-user like the rest of Chomp; `web_sessions.subject` is where a user id goes once
+there are several.
 
 ## MCP tools
 | Tool | Purpose | Key args |
@@ -61,7 +71,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 
 ## Security
-- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, and the OAuth routes and metadata. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of the endpoint.
+- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
+- Dashboard sign-in: a password page (`AUTH_PASSWORD`, sharing the consent page's lockout) starts a 30-day session. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP with no scripts. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal single-user OAuth 2.1 server. One pre-registered client (ID and secret entered in Claude's connector dialog), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
