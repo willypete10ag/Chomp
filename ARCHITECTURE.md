@@ -31,23 +31,27 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 ## MCP tools
 | Tool | Purpose | Key args |
 |---|---|---|
-| `search_food` | Fuzzy search: aliases → local foods → FDC (Foundation/SR Legacy/Branded) | `query`, `limit` |
+| `search_food` | Fuzzy search (SQLite FTS5): aliases → saved foods (verified first) → FDC (Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id` | `query`, `limit` |
 | `lookup_barcode` | UPC lookup through the source chain; caches hits | `upc` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros |
 | `log_entries` | Log one or more items as a meal | `items[{food_id, grams}]`, `meal_label?`, `eaten_at?` |
 | `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?` |
-| `delete_entry` | Remove a mistaken entry | `entry_id` |
-| `get_day` | All meals/entries + totals for a date | `date` |
-| `get_totals` | Aggregates over a range | `start`, `end` |
+| `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
+| `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
+| `get_totals` | Aggregates and daily averages over a range, with progress against targets | `start`, `end` |
+| `confirm_food` | Mark a food verified (e.g. an OFF hit), optionally correcting its macros | `food_id`, macros? |
+| `set_targets` | Set daily kcal/protein/carbs/fat targets | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?` |
 | `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals | `name`, `items` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
 
 ## Data rules
-- Foods store macros **per 100 g**. Entries store grams plus a **snapshot** of computed macros, so editing a food never rewrites history.
+- Foods store macros **per 100 g**. Entries store grams plus a **snapshot** of all computed nutrients (kcal, protein, carbs, fat, fiber, sugar, sodium), so editing a food never rewrites history.
+- One `foods` row per upstream record (unique `(source, source_id)`).
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
-- Timestamps in UTC; display in America/New_York.
+- Timestamps in UTC; display in America/New_York. Day boundaries are computed in `logic.py` with `zoneinfo` (DST-correct); the `daily_totals` view is an approximate convenience only.
+- Migrations: `SCHEMA.sql` is baseline v1. Later changes are numbered files in `migrations/` (`0002_<name>.sql`, ...), applied in order and tracked with `PRAGMA user_version`.
 
 ## Gotchas
 - **UPC normalization:** UPC-A (12 digits) vs EAN-13 (leading 0) vs FDC's GTIN padding. Normalize to 14-digit GTIN for storage and try variants on lookup.
@@ -69,6 +73,7 @@ Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a
 - **Project board (optional):** a GitHub Project with Todo / In progress / Done, filtered to this repo.
 - **Branches:** `m1/search-food`, `m3/cloudflare-tunnel`. Solo repo, so PRs are optional, but PRs give you a clean change record per issue.
 - **Commits:** `feat:`, `fix:`, `docs:`, `chore:` prefixes, with the issue number in the message.
+- **Tooling:** `uv` for env and lockfile, `ruff` for lint and format; CI runs `ruff check`, `ruff format --check`, and `pytest -q`.
 - **Design docs:** this file, `SCHEMA.sql`, and `CLAUDE.md` live in the repo root. A change to a locked decision gets a `decision` issue first.
 - **Never committed:** `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `.venv/`, `__pycache__/`. Commit `.env.example` only.
 
