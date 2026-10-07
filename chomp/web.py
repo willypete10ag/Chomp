@@ -53,6 +53,8 @@ ICONS = {
     "apple-touch-icon.png": "image/png",
 }
 THEME = "#1f7a4d"
+# In the stylesheet URL, so a phone's cached copy is replaced as soon as the CSS changes
+CSS_VERSION = hashlib.sha256((STATIC_DIR / "app.css").read_bytes()).hexdigest()[:10]
 
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -84,6 +86,7 @@ UNITS = {
     "sodium_mg": "mg",
 }
 LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
+NBSP = "\u00a0"  # keeps a number on the same line as its unit
 MACROS = (("protein_g", "p", "P"), ("carbs_g", "c", "C"), ("fat_g", "f", "F"))
 SOURCES = {"fdc": "USDA", "off": "Open Food Facts", "label": "Label", "manual": "Manual"}
 
@@ -141,12 +144,17 @@ def num(value: float | None, places: int = 0) -> str:
 
 
 def amount(key: str, value: float | None) -> str:
-    return f"{num(value, logic.DISPLAY_PLACES[key])} {UNITS[key]}"
+    return f"{num(value, logic.DISPLAY_PLACES[key])}{NBSP}{UNITS[key]}"
 
 
 def clock(local_iso: str) -> str:
     dt = datetime.fromisoformat(local_iso)
     return f"{dt.hour % 12 or 12}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
+
+
+def capitalized(text: str) -> str:
+    """First letter up, the rest as typed ('usual breakfast' -> 'Usual breakfast')."""
+    return text[:1].upper() + text[1:]
 
 
 def long_date(day: date, today: date) -> str:
@@ -168,7 +176,7 @@ def macros_line(n: logic.Nutrients) -> str:
     """'P 20 C 3.2 F 22' on screen; 'Protein 20 g' and so on for screen readers."""
     return " ".join(
         f'<span class="{cls}"><span aria-hidden="true">{letter}</span>'
-        f'<span class="sr">{NUTRIENT_LABELS[key]}</span> {num(n[key], 1)}'
+        f'<span class="sr">{NUTRIENT_LABELS[key]}</span>{NBSP}{num(n[key], 1)}'
         f'<span class="sr"> g</span></span>'
         for key, cls, letter in MACROS
     )
@@ -252,7 +260,7 @@ HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="manifest" href="{p}/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="{p}/static/apple-touch-icon.png">
 <link rel="icon" href="{p}/static/icon-192.png">
-<link rel="stylesheet" href="{p}/static/app.css">
+<link rel="stylesheet" href="{p}/static/app.css?v={css_version}">
 <title>{title}</title></head><body{body_class}>"""
 
 NAV = (("today", "", "Today"), ("history", "/history", "History"), ("foods", "/foods", "Foods"))
@@ -278,6 +286,7 @@ def render(
         HEAD.format(
             theme=THEME,
             p=PREFIX,
+            css_version=CSS_VERSION,
             title=e(f"{title} · Chomp"),
             body_class=' class="has-tabs"' if nav else "",
         )
@@ -319,7 +328,7 @@ def safe_next(value: str) -> str:
 
 
 def grams_note(grams: float | None) -> str:
-    return f" · {num(grams, 1)} g" if grams else ""
+    return f" · {num(grams, 1)}{NBSP}g" if grams else ""
 
 
 def parse_grams(value: str) -> float:
@@ -361,7 +370,7 @@ def entry_item(x: store.EntryRow, single: bool, error: tuple[int, str, str] | No
     """
     n = logic.round_for_display(x.nutrients)
     brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
-    kcal = "" if single else f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span>'
+    kcal = "" if single else f'<span class="kcal">{num(n["kcal"])}{NBSP}<small>kcal</small></span>'
     value, problem, is_open = num(x.grams, 1).replace(",", ""), "", ""
     if error and error[0] == x.id:
         value, is_open = error[1], " open"
@@ -371,7 +380,7 @@ def entry_item(x: store.EntryRow, single: bool, error: tuple[int, str, str] | No
         f'<li id="entry-{x.id}"><details{is_open}><summary>'
         f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
         f"{brand}</span>{kcal}</div>"
-        f'<div class="row small muted"><span>{num(x.grams, 1)} g</span>'
+        f'<div class="row small muted"><span>{num(x.grams, 1)}{NBSP}g</span>'
         f"<span>{macros_line(n)}</span></div></summary>"
         f'<div class="edit">{problem}'
         + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
@@ -395,12 +404,15 @@ def food_item(row) -> str:
         meta.append(e(row["brand"]))
     if row["uses"]:
         meta.append(f"logged {row['uses']}&times;")
-    if row["verified"]:
-        meta.append('<span class="badge ok">Confirmed</span>')
+    meta.append(
+        '<span class="badge ok">Confirmed</span>'
+        if row["verified"]
+        else '<span class="badge unsure">Unconfirmed</span>'
+    )
     more = [f"<p><b>Name:</b> {e(row['name'])}</p>"]
     if row["serving_g"]:
         s = logic.round_for_display(logic.scale(per_100g, row["serving_g"]))
-        desc = row["serving_desc"] or f"{num(row['serving_g'], 1)} g"
+        desc = row["serving_desc"] or f"{num(row['serving_g'], 1)}{NBSP}g"
         more.append(
             f"<p><b>Per serving</b> ({e(desc)}): {num(s['kcal'])} kcal · {macros_line(s)}</p>"
         )
@@ -411,7 +423,8 @@ def food_item(row) -> str:
     )
     more.append(f"<p><b>Source:</b> {SOURCES[row['source']]} · {checked}</p>")
     return (
-        f'<li><details><summary><div class="row"><span class="name clamp">{e(row["name"])}</span>'
+        f"<li{'' if row['verified'] else ' class="unconfirmed"'}><details><summary>"
+        f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
         f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
         f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
         f"<span>{macros_line(n)}</span></div></summary>"
@@ -655,7 +668,10 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
                 )
         summary.append(f'<div class="macros">{"".join(macros)}</div>')
         if extras := extras_line(shown):
-            summary.append(f'<p class="muted small extras">{extras}</p>')
+            summary.append(
+                '<details class="extras"><summary class="small">Fiber, sugar and sodium</summary>'
+                f'<p class="muted small">{extras}</p></details>'
+            )
         if not progress:
             summary.append(
                 '<p class="muted small">No daily targets yet. Tell Claude something like'
@@ -670,7 +686,7 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             items = "".join(entry_item(x, single, error) for x in entries)
             when = clock(logic.local_iso(meal["eaten_at"], tz))
             label = meal["label"] or ""
-            label_html = f' <span class="label">{e(label[:1].upper() + label[1:])}</span>'
+            label_html = f' <span class="label">{e(capitalized(label))}</span>'
             note = f'<p class="muted small">{e(meal["note"])}</p>' if meal["note"] else ""
             total = (
                 ""
@@ -681,7 +697,7 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             cards.append(
                 f'<section class="card meal" id="meal-{meal["id"]}"><div class="row mealhead">'
                 f"<h2>{when}{label_html if label else ''}</h2>"
-                f'<span class="kcal">{num(meal_totals["kcal"])} kcal</span></div>{note}'
+                f'<span class="kcal">{num(meal_totals["kcal"])}{NBSP}kcal</span></div>{note}'
                 f'<ul class="entries">{items}</ul>{total}</section>'
             )
         if not cards:
@@ -852,16 +868,20 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
                 t_totals = logic.round_for_display(logic.sum_nutrients(snaps))
                 lis = "".join(
                     f'<li class="row small"><span class="name">{e(i["name"])}</span>'
-                    f'<span class="muted">{num(i["grams"], 1)} g</span></li>'
+                    f'<span class="muted">{num(i["grams"], 1)}{NBSP}g</span></li>'
                     for i in t_items
                 )
                 cards.append(
-                    f'<div class="template"><div class="row"><strong>{e(t["name"])}</strong>'
-                    f'<span class="kcal">{num(t_totals["kcal"])} kcal</span></div>'
+                    f'<div class="template"><div class="row">'
+                    f"<strong>{e(capitalized(t['name']))}</strong>"
+                    f'<span class="kcal">{num(t_totals["kcal"])}{NBSP}kcal</span></div>'
                     f'<ul class="plain">{lis}</ul><div class="small muted">'
                     f"{macros_line(t_totals)}</div></div>"
                 )
-            parts.append(f'<section class="card"><h2>Saved meals</h2>{"".join(cards)}</section>')
+            parts.append(
+                '<section class="card"><h2 class="section">Saved meals</h2>'
+                f"{''.join(cards)}</section>"
+            )
         if nicknames:
             lis = "".join(
                 f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted name">'
@@ -869,14 +889,15 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
                 for a in nicknames
             )
             parts.append(
-                f'<section class="card"><h2>Nicknames</h2><ul class="plain">{lis}</ul></section>'
+                '<section class="card"><h2 class="section">Nicknames</h2>'
+                f'<ul class="plain">{lis}</ul></section>'
             )
         if rows:
             heading = "Foods" if q else "Your foods"
             note = "most logged first, " if not q else ""
             parts.append(
-                f'<section class="card"><div class="row"><h2>{heading}</h2>'
-                f'<span class="muted small">{note}per 100 g</span></div>'
+                f'<section class="card"><h2 class="section">{heading}'
+                f"<small>{note}per 100 g</small></h2>"
                 f'<ul class="entries">{"".join(food_item(r) for r in rows)}</ul></section>'
             )
         elif not q:
