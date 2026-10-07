@@ -1378,7 +1378,9 @@ def add_routes(
             grams = parse_grams(str(form.get("grams", "")).replace(",", "").strip())
         except ValueError:
             return go(with_params(retry, problem="grams"))
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 food = store.get_food(conn, int_param(str(form.get("food_id", ""))) or 0)
                 into = meal_id if meal_id is not None else int_param(str(form.get("to", "")))
@@ -1417,7 +1419,9 @@ def add_routes(
         except ValueError:
             day = today()
         retry = add_url(day, meal_id, "")
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 template, rows = store.get_template_by_id(
                     conn, int_param(str(form.get("template_id", ""))) or 0
@@ -1456,7 +1460,9 @@ def add_routes(
         raw = str(form.get("grams", "")).replace(",", "").strip()
         entry_id = request.path_params["entry_id"]
         anchor = f"entry-{entry_id}"
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, entry_id)
                 day = meal_day(store.get_meal(conn, entry.meal_id))
@@ -1477,7 +1483,9 @@ def add_routes(
     async def remove_entry(request: Request) -> Response:
         if (no := refused(request, "Delete entries")) is not None:
             return no
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, request.path_params["entry_id"])
                 day = meal_day(store.get_meal(conn, entry.meal_id))
@@ -1495,7 +1503,9 @@ def add_routes(
         if (no := refused(request, "Move entries")) is not None:
             return no
         form = await request.form()
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, request.path_params["entry_id"])
                 old = store.get_meal(conn, entry.meal_id)
@@ -1532,7 +1542,9 @@ def add_routes(
             return no
         form = await request.form()
         meal_id = request.path_params["meal_id"]
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
             except store.NotFound:
@@ -1556,7 +1568,9 @@ def add_routes(
         form = await request.form()
         meal_id = request.path_params["meal_id"]
         into = int_param(str(form.get("into", "")))
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
                 target = store.get_meal(conn, into if into is not None else 0)
@@ -1576,7 +1590,9 @@ def add_routes(
         if (no := refused(request, "Delete meals")) is not None:
             return no
         meal_id = request.path_params["meal_id"]
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
             except store.NotFound:
@@ -1620,7 +1636,9 @@ def add_routes(
                 problem = f"{label} must be a number more than 0 and at most {most:,} {unit}."
                 return goals_page(values, back, problem, 400)
             changes[key] = value
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             before = store.capture(conn, targets=True)
             store.set_targets(conn, changes)
             undo_id = store.record_undo(conn, "Updated your daily goals", before)
@@ -1666,7 +1684,9 @@ def add_routes(
         back = safe_next(str(form.get("back", f"{PREFIX}/foods")))
         name = " ".join(str(form.get("name", "")).split())[:FOOD_NAME_MAX]
         food_id = request.path_params["food_id"]
-        with connect() as conn:
+        # One transaction: an edit from elsewhere can't land between the change and its
+        # undo record
+        with connect() as conn, db.transaction(conn):
             try:
                 old = store.get_food(conn, food_id)
             except store.NotFound:

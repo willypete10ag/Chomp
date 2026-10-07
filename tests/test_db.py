@@ -142,3 +142,11 @@ def test_entries_snapshot_all_nutrients(conn):
 def test_foreign_keys_enforced(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO aliases (alias, food_id) VALUES ('ghost', 999)")
+
+
+def test_nested_transactions_join_the_outer_one(conn):
+    with pytest.raises(RuntimeError), db.transaction(conn):
+        with db.transaction(conn):
+            conn.execute("INSERT INTO targets (id, kcal) VALUES (1, 2000)")
+        raise RuntimeError
+    assert conn.execute("SELECT count(*) FROM targets").fetchone()[0] == 0
