@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, auth, db, logic, store, web
+from chomp import __version__, auth, db, logic, store, text, web
 from chomp.config import Settings
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -410,10 +410,17 @@ def build_server(
 
         with connect() as conn:
             templates = store.templates_matching(conn, query)
-            if templates:
+            name = text.most_specific(query, templates)
+            if name is not None:
                 notes.append(
-                    f"The user has a saved meal template named {templates[0]!r}: log it with "
+                    f"The user has a saved meal template named {name!r}: log it with "
                     "log_meal_template rather than searching for its foods."
+                )
+            elif templates:
+                names = ", ".join(repr(t) for t in templates)
+                notes.append(
+                    f"Several saved meal templates match ({names}); ask the user which one "
+                    "they mean, then log it with log_meal_template."
                 )
             for row in store.search_aliases(conn, query, limit):
                 add(

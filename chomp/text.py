@@ -46,3 +46,21 @@ def head_score(query: str, name: str) -> float:
         return 0.0
     wanted = {stem(w) for w in words(query)}
     return sum(w in wanted for w in lead) / len(lead)
+
+
+def most_specific(query: str, names: list[str]) -> str | None:
+    """The one name the query clearly means: the only candidate, the one with exactly the
+    query's words, or the longest one wholly inside the query ("my usual breakfast" means
+    "usual breakfast", not "breakfast"). None when it stays ambiguous."""
+    if len(names) == 1:
+        return names[0]
+    wanted = {stem(w) for w in words(query)}
+    exact = [n for n in names if {stem(w) for w in words(n)} == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    inside = [n for n in names if match_score(n, query) == 1]
+    if not inside:
+        return None
+    longest = max(len(words(n)) for n in inside)
+    top = [n for n in inside if len(words(n)) == longest]
+    return top[0] if len(top) == 1 else None

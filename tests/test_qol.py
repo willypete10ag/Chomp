@@ -170,3 +170,34 @@ async def test_search_points_to_a_matching_template(server, foods, upstream):
         other = await call(client, "search_food", query="egg")
     assert other["templates"] == []
     assert not any("template" in n for n in other["notes"])
+
+
+@pytest.mark.anyio
+async def test_search_picks_the_most_specific_template_or_asks(server, foods, upstream):
+    eggs, whites = foods
+    upstream.add("/fdc/v1/foods/search", {"foods": []})
+    async with Client(server) as client:
+        for name, food in (("breakfast", eggs), ("usual breakfast", whites)):
+            await call(
+                client, "save_meal_template", name=name, items=[{"food_id": food, "grams": 50}]
+            )
+        mine = await call(client, "search_food", query="my usual breakfast")
+        assert sorted(mine["templates"]) == ["breakfast", "usual breakfast"]
+        assert "'usual breakfast': log it" in mine["notes"][0]
+        await call(
+            client,
+            "save_meal_template",
+            name="big breakfast",
+            items=[{"food_id": eggs, "grams": 9}],
+        )
+        vague = await call(client, "search_food", query="big usual breakfast")
+    assert "ask the user which one" in vague["notes"][0]
+
+
+def test_most_specific():
+    from chomp import text
+
+    names = ["breakfast", "usual breakfast"]
+    assert text.most_specific("my usual breakfast", names) == "usual breakfast"
+    assert text.most_specific("breakfast", names) == "breakfast"
+    assert text.most_specific("usual", ["usual breakfast", "usual lunch"]) is None
