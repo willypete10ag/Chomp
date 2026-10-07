@@ -94,7 +94,11 @@ def consent(http, challenge, password=PASSWORD):
     assert f"{loc.scheme}://{loc.netloc}{loc.path}" == f"{PUBLIC}/consent"
     session = parse_qs(loc.query)["session"][0]
     page = http.get(f"/consent?session={session}")
-    assert page.status_code == 200 and "Chomp password" in page.text and "claude.ai" in page.text
+    assert (
+        page.status_code == 200
+        and "Chomp password" in page.text
+        and urlparse(CALLBACK).netloc in page.text
+    )
     return http.post(
         "/consent", data={"session": session, "password": password}, follow_redirects=False
     )
@@ -161,7 +165,9 @@ def test_health_is_only_for_the_local_container_check(public_settings, http):
         assert local.get("/health").json()["status"] == "ok"
 
 
-def test_full_oauth_flow_with_refresh_rotation(http):
+@pytest.mark.parametrize("callback", auth.CONNECTOR_CALLBACKS)
+def test_full_oauth_flow_with_refresh_rotation(http, monkeypatch, callback):
+    monkeypatch.setitem(globals(), "CALLBACK", callback)
     tok = sign_in(http)
     assert mcp(http, tok["access_token"]).status_code == 200
 

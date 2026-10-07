@@ -53,9 +53,10 @@ MAX_FAILURES = 5
 LOCKOUT_S = 900
 MIN_PASSWORD_LEN = 12
 MIN_SECRET_LEN = 32
-CLAUDE_CALLBACKS = (
+CONNECTOR_CALLBACKS = (
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+    "https://chatgpt.com/connector/oauth/e3AEiu3ZZRkR",
 )
 STATIC_CLIENT = "static-bearer"
 
@@ -116,7 +117,7 @@ class ChompAuthProvider:
         self.client = OAuthClientInformationFull(
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
-            redirect_uris=list(CLAUDE_CALLBACKS),
+            redirect_uris=list(CONNECTOR_CALLBACKS),
             token_endpoint_auth_method="client_secret_post",
             grant_types=["authorization_code", "refresh_token"],
             response_types=["code"],
