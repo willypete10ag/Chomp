@@ -203,7 +203,8 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     sign_in(http)
     r = http.get("/app")
     assert r.status_code == 200
-    text = r.text
+    assert "\xa0g" in r.text  # numbers never wrap away from their units
+    text = r.text.replace("\xa0", " ")
     assert "<h1>Today</h1>" in text
     assert "Egg, whole" in text and "Kirkland" in text
     # the meal header leads with the time, then the label
@@ -220,6 +221,15 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert 'class="week"' in text and 'aria-current="date"' in text
     assert 'type="date"' in text and "Page loaded at" in text
     assert "Back to today" not in text
+    assert f"/app/static/app.css?v={web.CSS_VERSION}" in text  # phones fetch new CSS
+
+
+def test_fiber_sugar_sodium_fold_away(http, conn, logged):
+    eggs, _, _ = logged
+    conn.execute("UPDATE entries SET sodium_mg = 140 WHERE food_id = ?", (eggs,))
+    sign_in(http)
+    text = http.get("/app").text.replace("\xa0", " ")
+    assert '<details class="extras">' in text and "Sodium 140 mg" in text
 
 
 def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
@@ -327,19 +337,21 @@ def test_foods_aliases_and_templates(http, conn, logged):
     add_food(conn, "Cached FDC hit", 100, 1, 1, 1, source="fdc")  # never used: hidden
     sign_in(http)
     r = http.get("/app/foods")
-    text = r.text
+    text = r.text.replace("\xa0", " ")
     assert "Egg white" in text and "Confirmed" in text
     assert "logged 1&times;" in text
     assert "Cached FDC hit" not in text
     assert "“my whites”" in text and "300 g" in text
-    assert "usual breakfast" in text and "143 kcal" in text
+    assert "<strong>Usual breakfast</strong>" in text and "143 kcal" in text
+    assert '<h2 class="section">Saved meals</h2>' in text
+    assert text.count('class="unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
     assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text
     assert "Nicknames" in r.text and "Saved meals" not in r.text
     assert "Clear" in r.text
     r = http.get("/app/foods", params={"q": "breakfast"})
-    assert "Saved meals" in r.text and "usual breakfast" in r.text
+    assert "Saved meals" in r.text and "Usual breakfast" in r.text
     r = http.get("/app/foods", params={"q": "zzz"})
     assert "Nothing matches" in r.text
     r = http.get("/app/foods", params={"q": "<script>"})
@@ -366,7 +378,7 @@ def test_food_details_show_serving_and_extra_nutrients(http, conn, logged):
         (whites,),
     )
     sign_in(http)
-    text = http.get("/app/foods").text
+    text = http.get("/app/foods").text.replace("\xa0", " ")
     # 52 kcal per 100 g -> 23.92 kcal in a 46 g serving
     assert "<b>Per serving</b> (3 tbsp): 24 kcal" in text
     assert "Sodium 166 mg" in text
