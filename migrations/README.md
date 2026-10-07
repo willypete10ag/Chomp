@@ -11,3 +11,4 @@ commit when a migration changes the design.
 | `0002_foods_saved.sql` | `foods.saved` for barcode-scanned foods |
 | `0003_oauth_tokens.sql` | `oauth_tokens`: hashed OAuth tokens for the connector (#24) |
 | `0004_web_sessions.sql` | `web_sessions`: hashed browser sign-ins for the dashboard |
+| `0005_undo_actions.sql` | `undo_actions`: before/after rows of dashboard edits, for Undo (#54) |

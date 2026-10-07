@@ -178,7 +178,10 @@ def test_pages_send_security_headers(http):
     assert "default-src 'none'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["cache-control"] == "no-store"
-    assert "<script" not in r.text
+    assert "script-src 'self'" in r.headers["content-security-policy"]
+    assert "'unsafe-inline'" not in r.headers["content-security-policy"]
+    assert f'<script src="/app/static/app.js?v={web.JS_VERSION}" defer></script>' in r.text
+    assert "<script>" not in r.text  # no inline scripts
 
 
 # --- static ---------------------------------------------------------------------------------
@@ -241,7 +244,8 @@ def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
     card = text[text.index(f'id="meal-{meal}"') :]
     card = card[: card.index("</section>")]
     assert "Meal total" not in card
-    assert card.count("143") == 1  # header kcal only
+    row = card[card.index("<summary>") : card.index("</summary>")]
+    assert "kcal" not in row  # the header carries the calories
     assert 'class="label"' not in card  # no guessed label
 
 
@@ -263,8 +267,10 @@ def test_edit_grams_resnapshots_from_the_food(http, conn, logged):
     sign_in(http)
     r = http.post(f"/app/entries/{eggs_entry.id}", data={"grams": "100"}, headers=ORIGIN)
     assert r.status_code == 303
-    assert r.headers["location"].endswith(f"saved={eggs_entry.id}#entry-{eggs_entry.id}")
-    assert "Saved: Egg, whole changed to 100 g." in http.get(r.headers["location"]).text
+    assert r.headers["location"].endswith(f"#entry-{eggs_entry.id}")
+    page = http.get(r.headers["location"]).text
+    assert "Changed Egg, whole from 200 g to 100 g." in page
+    assert 'class="undo"' in page
     updated = store.get_entry(conn, eggs_entry.id)
     assert updated.grams == 100
     assert updated.nutrients["kcal"] == pytest.approx(143)
@@ -289,7 +295,6 @@ def test_delete_needs_a_second_tap_and_confirms(http, logged):
     sign_in(http)
     assert "Yes, delete Egg, whole" in http.get("/app").text
     r = http.post(f"/app/entries/{entries[0].id}/delete", headers=ORIGIN)
-    assert "deleted=Egg" in r.headers["location"]
     assert "Deleted Egg, whole." in http.get(r.headers["location"]).text
 
 

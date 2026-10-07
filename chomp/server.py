@@ -317,11 +317,11 @@ def build_server(
     )
     if provider:
         auth.add_consent_route(server, provider)
-    web.add_routes(server, settings, provider)
-    expected_version = db.latest_version(settings.migrations_dir)
-    tz = settings.tz
     fdc = fdc or FDCClient(settings.fdc_api_key)
     off = off or OFFClient(settings.off_user_agent)
+    web.add_routes(server, settings, provider, fdc)
+    expected_version = db.latest_version(settings.migrations_dir)
+    tz = settings.tz
 
     def connect():
         return closing(db.connect(settings.db_path))

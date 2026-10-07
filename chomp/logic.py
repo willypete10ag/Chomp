@@ -166,6 +166,22 @@ def progress(totals: Mapping[str, float | None], targets: Mapping[str, float | N
     return out
 
 
+# Atwater factors, kcal per gram. Only used to compare a day's calorie target with its
+# protein, carbs and fat targets; logged calories always come from the food data.
+KCAL_PER_G = {"protein_g": 4.0, "carbs_g": 4.0, "fat_g": 9.0}
+
+
+def macro_kcal(targets: Mapping[str, float | None]) -> dict[str, float] | None:
+    """Calories implied by protein, carbs and fat targets: each macro's share and the total.
+
+    None unless all three targets are set.
+    """
+    if any(targets.get(k) is None for k in KCAL_PER_G):
+        return None
+    parts = {k: float(targets[k]) * f for k, f in KCAL_PER_G.items()}
+    return {**parts, "total": sum(parts.values())}
+
+
 # --- Time -----------------------------------------------------------------------------------
 
 

@@ -5,9 +5,11 @@ Macro math is delegated to logic.py; this module only moves rows around.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
@@ -223,6 +225,19 @@ def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def rename_food(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Row:
+    """Give a food a shorter display name. Search finds it by the new name from then on."""
+    name = name.strip()
+    if not name:
+        raise ValueError("a food needs a name")
+    get_food(conn, food_id)
+    with transaction(conn):
+        conn.execute(
+            "UPDATE foods SET name = ?, updated_at = datetime('now') WHERE id = ?", (name, food_id)
+        )
+    return get_food(conn, food_id)
+
+
 # --- Aliases and templates ------------------------------------------------------------------
 
 
@@ -259,6 +274,21 @@ def save_template(
             [(template_id, f, g) for f, g in items],
         )
     return template_id, row is not None
+
+
+def get_template_by_id(
+    conn: sqlite3.Connection, template_id: int
+) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
+    row = conn.execute(
+        "SELECT id, name FROM meal_templates WHERE id = ?", (template_id,)
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"no meal template with id {template_id}")
+    items = conn.execute(
+        "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
+        (template_id,),
+    ).fetchall()
+    return row, items
 
 
 def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
@@ -455,12 +485,52 @@ def delete_entry(conn: sqlite3.Connection, entry_id: int) -> tuple[EntryRow, boo
     entry = get_entry(conn, entry_id)
     with transaction(conn):
         conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
-        left = conn.execute(
-            "SELECT count(*) FROM entries WHERE meal_id = ?", (entry.meal_id,)
-        ).fetchone()[0]
-        if left == 0:
-            conn.execute("DELETE FROM meals WHERE id = ?", (entry.meal_id,))
-    return entry, left == 0
+        gone = _drop_if_empty(conn, entry.meal_id)
+    return entry, gone
+
+
+def move_entry(
+    conn: sqlite3.Connection, entry_id: int, meal_id: int | None, eaten_at: str | None = None
+) -> tuple[int, bool]:
+    """Move an entry to another meal, or (meal_id None) to a new meal at eaten_at. Its old
+    meal is deleted if this was its last entry. Returns (new meal_id, old meal deleted)."""
+    entry = get_entry(conn, entry_id)
+    if meal_id is not None:
+        get_meal(conn, meal_id)
+    elif eaten_at is None:
+        raise ValueError("a new meal needs a time")
+    with transaction(conn):
+        if meal_id is None:
+            meal_id = conn.execute("INSERT INTO meals (eaten_at) VALUES (?)", (eaten_at,)).lastrowid
+        conn.execute("UPDATE entries SET meal_id = ? WHERE id = ?", (meal_id, entry_id))
+        gone = _drop_if_empty(conn, entry.meal_id)
+    return meal_id, gone
+
+
+def merge_meals(conn: sqlite3.Connection, source_id: int, target_id: int) -> None:
+    """Move every entry of one meal into another and delete the emptied meal. The target
+    keeps its own time, label and note."""
+    if source_id == target_id:
+        raise ValueError("a meal can't be combined with itself")
+    get_meal(conn, source_id)
+    get_meal(conn, target_id)
+    with transaction(conn):
+        conn.execute("UPDATE entries SET meal_id = ? WHERE meal_id = ?", (target_id, source_id))
+        conn.execute("DELETE FROM meals WHERE id = ?", (source_id,))
+
+
+def delete_meal(conn: sqlite3.Connection, meal_id: int) -> None:
+    """Delete a meal and all its entries."""
+    get_meal(conn, meal_id)
+    with transaction(conn):
+        conn.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+
+
+def _drop_if_empty(conn: sqlite3.Connection, meal_id: int) -> bool:
+    left = conn.execute("SELECT count(*) FROM entries WHERE meal_id = ?", (meal_id,)).fetchone()[0]
+    if left == 0:
+        conn.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+    return left == 0
 
 
 def meals_between(conn: sqlite3.Connection, start_utc: str, end_utc: str) -> list[sqlite3.Row]:
@@ -507,3 +577,162 @@ def set_targets(conn: sqlite3.Connection, changes: Mapping[str, float | None]) -
             tuple(merged[k] for k in TARGET_KEYS),
         )
     return get_targets(conn)
+
+
+# --- Undo (dashboard edits) -----------------------------------------------------------------
+
+# The columns an undo restores, per table. Foods only ever change name from the dashboard.
+UNDO_COLUMNS = {
+    "meals": ("id", "eaten_at", "label", "note", "created_at"),
+    "entries": ("id", "meal_id", "food_id", "grams", *logic.NUTRIENTS, "created_at"),
+    "foods": ("id", "name"),
+}
+UNDO_KEEP_S = 86400  # undo records older than a day are pruned
+
+
+class UndoConflict(RuntimeError):
+    """The rows changed after the edit, so undoing it would overwrite something newer."""
+
+
+def capture(
+    conn: sqlite3.Connection,
+    *,
+    meals: Iterable[int] = (),
+    entries: Iterable[int] = (),
+    foods: Iterable[int] = (),
+    targets: bool = False,
+) -> dict:
+    """The current state of the given rows, JSON-ready: {table: {id: row or None}}, plus
+    the targets when asked. A meal brings its entries along."""
+    meals = set(meals)
+    entries = set(entries)
+    for m in meals:
+        entries.update(r[0] for r in conn.execute("SELECT id FROM entries WHERE meal_id = ?", (m,)))
+    state = {
+        "meals": _rows(conn, "meals", meals),
+        "entries": _rows(conn, "entries", entries),
+        "foods": _rows(conn, "foods", foods),
+    }
+    if targets:
+        state["targets"] = get_targets(conn)
+    return state
+
+
+def _rows(conn: sqlite3.Connection, table: str, ids: Iterable[int]) -> dict:
+    cols = ", ".join(UNDO_COLUMNS[table])
+    out = {}
+    for i in sorted(set(ids)):
+        row = conn.execute(f"SELECT {cols} FROM {table} WHERE id = ?", (i,)).fetchone()
+        out[str(i)] = dict(row) if row else None
+    return out
+
+
+def record_undo(
+    conn: sqlite3.Connection,
+    summary: str,
+    before: dict,
+    *,
+    meals: Iterable[int] = (),
+    subject: str = "owner",
+) -> int:
+    """Remember an edit for Undo: `before` from capture() ahead of it, and `meals` it created.
+
+    The after state covers the same rows plus the new meals and their entries; rows that
+    only exist after the edit are recorded as absent before it.
+    """
+    entries = {int(i) for i in before.get("entries", {})}
+    meal_ids = {int(i) for i in before.get("meals", {})} | set(meals)
+    after = capture(
+        conn,
+        meals=meal_ids,
+        entries=entries,
+        foods=map(int, before.get("foods", {})),
+        targets="targets" in before,
+    )
+    full = {t: dict(rows) for t, rows in before.items()}
+    for table in UNDO_COLUMNS:
+        for i in after[table]:
+            full.setdefault(table, {}).setdefault(i, None)
+    now = int(time.time())
+    with transaction(conn):
+        conn.execute("DELETE FROM undo_actions WHERE created_at < ?", (now - UNDO_KEEP_S,))
+        return conn.execute(
+            "INSERT INTO undo_actions (subject, summary, before, after, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (subject, summary, json.dumps(full), json.dumps(after), now),
+        ).lastrowid
+
+
+def get_undo(conn: sqlite3.Connection, undo_id: int, subject: str = "owner") -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, summary, used, created_at FROM undo_actions WHERE id = ? AND subject = ?",
+        (undo_id, subject),
+    ).fetchone()
+
+
+def undo(conn: sqlite3.Connection, undo_id: int, subject: str = "owner") -> str:
+    """Put the rows an edit touched back as they were. Returns the edit's summary.
+
+    Raises NotFound for an unknown or already undone edit, and UndoConflict if any of those
+    rows changed since (the undo would overwrite the newer change).
+    """
+    row = conn.execute(
+        "SELECT summary, before, after FROM undo_actions WHERE id = ? AND subject = ? AND used = 0",
+        (undo_id, subject),
+    ).fetchone()
+    if row is None:
+        raise NotFound("nothing to undo")
+    before, after = json.loads(row["before"]), json.loads(row["after"])
+    with transaction(conn):
+        current = {t: _rows(conn, t, map(int, after.get(t, {}))) for t in UNDO_COLUMNS}
+        if "targets" in after:
+            current["targets"] = get_targets(conn)
+        for i in after.get("meals", {}):
+            # an entry added to this meal since would be lost or orphaned by the undo
+            rows = conn.execute("SELECT id FROM entries WHERE meal_id = ?", (int(i),))
+            ids = {str(r[0]) for r in rows}
+            if not ids <= set(after.get("entries", {})):
+                raise UndoConflict("that meal changed since")
+        if json.loads(json.dumps(current)) != after:
+            raise UndoConflict("those entries changed since")
+        # Meals first (entries point at them), then entries, then meals that didn't exist
+        meals = before.get("meals", {})
+        for i, r in meals.items():
+            if r is not None:
+                _restore(conn, "meals", int(i), r)
+        for i, r in before.get("entries", {}).items():
+            if r is None:
+                conn.execute("DELETE FROM entries WHERE id = ?", (int(i),))
+            else:
+                _restore(conn, "entries", int(i), r)
+        for i, r in meals.items():
+            if r is None:
+                conn.execute("DELETE FROM meals WHERE id = ?", (int(i),))
+        for i, r in before.get("foods", {}).items():
+            _restore(conn, "foods", int(i), r)
+        if "targets" in before:
+            t = before["targets"]
+            conn.execute(
+                "INSERT INTO targets (id, kcal, protein_g, carbs_g, fat_g) VALUES (1, ?, ?, ?, ?)"
+                " ON CONFLICT(id) DO UPDATE SET kcal = excluded.kcal,"
+                " protein_g = excluded.protein_g, carbs_g = excluded.carbs_g,"
+                " fat_g = excluded.fat_g",
+                tuple(t[k] for k in TARGET_KEYS),
+            )
+        conn.execute("UPDATE undo_actions SET used = 1 WHERE id = ?", (undo_id,))
+    return row["summary"]
+
+
+def _restore(conn: sqlite3.Connection, table: str, row_id: int, values: dict) -> None:
+    cols = [c for c in UNDO_COLUMNS[table] if c != "id"]
+    exists = conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (row_id,)).fetchone()
+    if exists:
+        conn.execute(
+            f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in cols)} WHERE id = ?",
+            (*(values[c] for c in cols), row_id),
+        )
+    else:
+        conn.execute(
+            f"INSERT INTO {table} (id, {', '.join(cols)}) VALUES (?{', ?' * len(cols)})",
+            (row_id, *(values[c] for c in cols)),
+        )

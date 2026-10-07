@@ -33,14 +33,23 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
 (any day via arrows, a seven-day strip or a date picker; calories logged and remaining, then
 protein/carbs/fat with bars where targets exist, plus fiber/sugar/sodium; meals led by their
-time; tap an entry to edit its grams or, with a second tap, delete it, with a confirmation
-after), History (7/30/90-day averages and inline-SVG charts) and Foods (one search over saved
+time), History (7/30/90-day averages and inline-SVG charts) and Foods (one search over saved
 meals, nicknames and used foods, most logged first; tap a food for its per-serving values and
-source). No
-JavaScript; edits are form posts that go through `store.py` like the tools, so macros still
-come only from the database. A web app manifest lets phones add it to the home screen. It
-is single-user like the rest of Chomp; `web_sessions.subject` is where a user id goes once
-there are several.
+source, or to give it a shorter name).
+
+It also works without Claude (#54): Add food (search your foods, nicknames and saved meals, or
+USDA when `FDC_API_KEY` is set; log to a new meal at a time or into an existing one), change an
+entry's grams, move it to another meal, edit a meal's name, time, date and note, combine or
+delete meals, and set daily goals. Every edit is a form post through `store.py` like the
+tools, so macros still come only from the database. Each edit records the rows it touched
+before and after (`undo_actions`, migration 0005); the next page shows a confirmation with
+Undo, which applies only while those rows are unchanged (so it never overwrites a newer edit
+from Claude). A small same-origin script (`static/app.js`) adds sliders beside the number
+boxes, quick picks (a serving, your usual, half/double) and live previews of the calories and
+the day's total; it repeats `logic.scale` only for the preview, and every page works without
+it. A web app manifest lets phones add it to the home screen. It is single-user like the rest
+of Chomp; `web_sessions.subject` and `undo_actions.subject` are where a user id goes once there
+are several.
 
 ## MCP tools
 | Tool | Purpose | Key args |
@@ -77,7 +86,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Security
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
-- Dashboard sign-in: a password page (`AUTH_PASSWORD`, sharing the consent page's lockout) starts a 30-day session. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP with no scripts. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
+- Dashboard sign-in: a password page (`AUTH_PASSWORD`, sharing the consent page's lockout) starts a 30-day session. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal single-user OAuth 2.1 server. One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
