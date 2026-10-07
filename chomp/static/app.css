@@ -9,9 +9,12 @@
   --kcal: #1f7a4d;
   --protein: #2f6fb5;
   --carbs: #c98a16;
+  --carbs-text: #9a6700; /* darker than the bars for 4.5:1 text contrast on white */
   --fat: #b4508a;
   --over: #c0392b;
   --track: #e9ecea;
+  --on-accent: #ffffff;
+  --flash: #e3f2ea;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -25,9 +28,12 @@
     --kcal: #4cc38a;
     --protein: #6aa6ea;
     --carbs: #e6b04a;
+    --carbs-text: #e6b04a;
     --fat: #e07fb8;
     --over: #ef6b5b;
     --track: #2b322e;
+    --on-accent: #0e1a13;
+    --flash: #173326;
   }
 }
 * { box-sizing: border-box; }
@@ -40,7 +46,9 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 0; }
-body:has(.tabs) { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+/* Room for the fixed tab bar, the home-indicator safe area and a little more, so the
+   last card and its controls always scroll clear of the bar */
+body.has-tabs { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
 h1 { font-size: 1.5rem; margin: .5rem 0 1rem; }
 h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
 a { color: var(--accent); }
@@ -58,20 +66,67 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .empty { text-align: center; }
 .kcal { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-.p { color: var(--protein); } .c { color: var(--carbs); } .f { color: var(--fat); }
-.name { overflow-wrap: anywhere; }
+.kcal small { font-weight: 400; color: var(--muted); }
+.p { color: var(--protein); } .c { color: var(--carbs-text); } .f { color: var(--fat); }
+.name { overflow-wrap: anywhere; min-width: 0; }
+/* Numbers on the right of a row keep to one line; the name beside them wraps instead */
+.row > span:last-child:not(.name) { flex-shrink: 0; white-space: nowrap; text-align: right; }
+.clamp {
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.warn { color: var(--over); font-weight: 600; }
+.flash {
+  background: var(--flash); border: 1px solid var(--accent); border-radius: 10px;
+  padding: .6rem .8rem; margin: 0 0 1rem;
+}
+.fresh { text-align: center; }
 
-/* Day header */
+/* Day header, nearby days and date picker */
 .daynav { display: flex; align-items: center; justify-content: space-between; }
-.daynav h1 { margin: .5rem 0; text-align: center; flex: 1; }
+.daytitle { flex: 1; text-align: center; }
+.daytitle h1 { margin: .25rem 0 0; }
+.daytitle p { margin: 0; }
 .step {
   width: 2.75rem; height: 2.75rem; display: inline-flex; align-items: center;
   justify-content: center; font-size: 1.75rem; text-decoration: none; border-radius: 50%;
 }
 a.step:active { background: var(--track); }
+.step.off { color: var(--line); }
+.week { display: flex; gap: .25rem; margin: .5rem 0; }
+.week a {
+  flex: 1; display: flex; flex-direction: column; align-items: center; min-height: 2.9rem;
+  justify-content: center; border-radius: 10px; text-decoration: none; color: var(--text);
+  border: 1px solid transparent; font-size: .8rem;
+}
+.week a span { color: var(--muted); }
+.week a b { font-size: 1rem; }
+.week a.is-today { border-color: var(--accent); }
+.week a[aria-current] { background: var(--accent); color: var(--on-accent); }
+.week a[aria-current] span { color: inherit; }
+.jump {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .5rem; margin-bottom: 1rem;
+}
+.jump form { display: flex; gap: .5rem; }
+.jump input { width: auto; }
 
-/* Summary meters */
-.stat + .stat { margin-top: .75rem; }
+/* Summary: one big calorie figure, then protein, carbs and fat side by side */
+.hero { margin: 0; }
+.hero .big { font-size: 2rem; }
+.summary > .muted { margin: 0; }
+.macros {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr)); gap: .75rem;
+  margin-top: 1rem;
+}
+.macro strong { font-variant-numeric: tabular-nums; }
+.macro .target { font-size: .85rem; white-space: nowrap; }
+.macro .small:first-child { font-weight: 600; }
+.extras { margin: .75rem 0 0; }
 .meter { display: block; width: 100%; height: 8px; margin: .3rem 0 .15rem; border-radius: 4px; }
 .meter .track { fill: var(--track); }
 .fill.kcal { fill: var(--kcal); } .fill.protein_g { fill: var(--protein); }
@@ -79,12 +134,25 @@ a.step:active { background: var(--track); }
 .fill.over { fill: var(--over); }
 
 /* Meals and lists */
-.mealhead h2 { margin: 0; }
+.mealhead { margin-bottom: .25rem; }
+.mealhead h2 { margin: 0; font-variant-numeric: tabular-nums; }
+.mealhead .label { font-weight: 400; color: var(--muted); }
 .entries li { padding: .6rem 0; border-top: 1px solid var(--line); }
 .entries li:first-child { border-top: 0; }
 .total { border-top: 1px solid var(--line); padding-top: .5rem; }
-details summary { color: var(--accent); cursor: pointer; font-size: .85rem; padding: .25rem 0; }
+.entries li:target {
+  background: var(--flash); margin: 0 -.5rem; padding: .6rem .5rem; border-radius: 8px;
+}
+/* The whole entry or food row is the tap target for its details */
+.entries summary { list-style: none; cursor: pointer; min-height: 2.75rem; }
+.entries summary::-webkit-details-marker { display: none; }
+.entries details[open] > summary .name { color: var(--accent); }
+.edit, .more { padding-top: .5rem; }
+.more p { margin: .25rem 0; }
 details form { margin: .4rem 0; }
+.confirm summary {
+  color: var(--over); cursor: pointer; font-size: .85rem; padding: .5rem 0; display: inline-block;
+}
 .inline { display: flex; gap: .5rem; align-items: end; }
 .inline label { display: flex; flex-direction: column; font-size: .85rem; color: var(--muted); }
 .plain li { padding: .3rem 0; }
@@ -105,11 +173,13 @@ input {
 .inline input { width: 7rem; }
 button {
   font: inherit; border: 0; border-radius: 10px; padding: .55rem 1rem; min-height: 2.75rem;
-  background: var(--accent); color: #fff; cursor: pointer;
+  background: var(--accent); color: var(--on-accent); cursor: pointer;
 }
 button.danger { background: transparent; color: var(--over); border: 1px solid var(--over); }
 button.link { background: none; color: var(--muted); text-decoration: underline; padding: 0; min-height: 0; }
-.search { margin-bottom: 1rem; }
+.search { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+.search input { flex: 1; min-width: 0; }
+.search .clear { padding: .5rem; }
 .error { color: var(--over); }
 .login { max-width: 20rem; margin: 3rem auto; text-align: center; }
 .login img { border-radius: 16px; }
@@ -122,7 +192,9 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
   flex: 1; text-align: center; padding: .5rem; border-radius: 10px; text-decoration: none;
   border: 1px solid var(--line); background: var(--card);
 }
-.segment a[aria-current] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.segment a[aria-current] {
+  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+}
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; text-align: center; }
 .big { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .big.kcal { color: var(--kcal); } .big.protein_g { color: var(--protein); }
@@ -143,5 +215,5 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
   flex: 1; max-width: 10rem; text-align: center; padding: .9rem 0; color: var(--muted);
   text-decoration: none; font-weight: 600;
 }
-.tabs a[aria-current] { color: var(--accent); }
+.tabs a[aria-current] { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
 footer { text-align: center; padding: .5rem 0 1rem; }

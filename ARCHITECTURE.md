@@ -31,8 +31,12 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
-(any day's meals, totals and target progress; edit grams or delete an entry), History
-(7/30/90-day averages and inline-SVG charts) and Foods (used foods, aliases, templates). No
+(any day via arrows, a seven-day strip or a date picker; calories logged and remaining, then
+protein/carbs/fat with bars where targets exist, plus fiber/sugar/sodium; meals led by their
+time; tap an entry to edit its grams or, with a second tap, delete it, with a confirmation
+after), History (7/30/90-day averages and inline-SVG charts) and Foods (one search over saved
+meals, nicknames and used foods, most logged first; tap a food for its per-serving values and
+source). No
 JavaScript; edits are form posts that go through `store.py` like the tools, so macros still
 come only from the database. A web app manifest lets phones add it to the home screen. It
 is single-user like the rest of Chomp; `web_sessions.subject` is where a user id goes once
