@@ -9,8 +9,9 @@ Python 3.12 · `mcp` SDK v2 (`MCPServer`, which v1 called FastMCP; streamable HT
 ```
 chomp/
   server.py        # MCPServer app + tool registrations, /health
-  auth.py          # single-user OAuth 2.1 server + bearer token, consent page
-  cli.py           # `chomp` command: serve, backup, restore, export
+  auth.py          # OAuth 2.1 server + bearer token, consent page (password picks the user)
+  users.py         # users and their scrypt passwords (`chomp user add`)
+  cli.py           # `chomp` command: serve, backup, restore, export, user
   backup.py        # nightly SQLite backup with retention, restore
   export.py        # CSV/JSON export
   config.py        # settings from env

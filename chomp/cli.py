@@ -3,7 +3,11 @@
     chomp                      run the MCP server (same as `chomp serve`)
     chomp backup [--daily]     back up the database now, or nightly at BACKUP_AT
     chomp restore FILE --yes   replace the database with a backup (stop the server first)
-    chomp export --format csv|json [--start D] [--end D] [-o FILE]
+    chomp export --format csv|json [--user NAME] [--start D] [--end D] [-o FILE]
+    chomp user list            who keeps a log here
+    chomp user add NAME        add a person with their own log and password (asks for it)
+    chomp user password NAME   change someone's password (signs them out everywhere)
+    chomp user rename OLD NEW  change someone's display name
 
 Settings come from the environment (see .env.example).
 """
@@ -11,13 +15,14 @@ Settings come from the environment (see .env.example).
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import sys
 from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
-from chomp import auth, backup, db, export
+from chomp import auth, backup, db, export, users
 from chomp.config import Settings
 
 
@@ -59,7 +64,50 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     e.add_argument("--start", type=_date, help="first local date, YYYY-MM-DD")
     e.add_argument("--end", type=_date, help="last local date, inclusive")
     e.add_argument("-o", "--output", help="file to write (default: standard output)")
+    e.add_argument("--user", help="whose log to export (default: the owner)")
+
+    u = sub.add_parser("user", help="manage the people who keep a log here")
+    us = u.add_subparsers(dest="action", required=True)
+    us.add_parser("list", help="list users")
+    a = us.add_parser("add", help="add a user; asks for their password")
+    a.add_argument("name")
+    pw = us.add_parser("password", help="change a user's password; asks for it")
+    pw.add_argument("name")
+    rn = us.add_parser("rename", help="change a user's display name")
+    rn.add_argument("name")
+    rn.add_argument("new_name")
     return p
+
+
+def _new_password() -> str:
+    """Ask twice, without echo. Piped input (no terminal) is read as one line."""
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    first = getpass.getpass("Password (at least 12 characters): ")
+    if getpass.getpass("Same password again: ") != first:
+        raise users.UserError("the passwords didn't match")
+    return first
+
+
+def user_command(args, settings: Settings) -> None:
+    with closing(db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)) as c:
+        if args.action == "list":
+            for row in users.list_users(c):
+                owner = (
+                    " (owner, signs in with AUTH_PASSWORD)" if row["id"] == users.OWNER_ID else ""
+                )
+                print(f"{row['name']}: {row['meals']} meals{owner}")
+        elif args.action == "add":
+            users.add_user(c, args.name, _new_password(), settings.auth_password)
+            print(f"added {' '.join(args.name.split())}; they can sign in with that password now")
+        elif args.action == "password":
+            user = users.get_by_name(c, args.name)
+            users.set_password(c, user["id"], _new_password(), settings.auth_password)
+            print(f"changed {user['name']}'s password and signed them out everywhere")
+        elif args.action == "rename":
+            user = users.get_by_name(c, args.name)
+            users.rename(c, user["id"], args.new_name)
+            print(f"renamed {user['name']} to {' '.join(args.new_name.split())}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,13 +150,18 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             write = export.write_csv if args.format == "csv" else export.write_json
             with closing(db.connect(settings.db_path)) as conn:
+                conn.user_id = (
+                    users.get_by_name(conn, args.user)["id"] if args.user else users.OWNER_ID
+                )
                 if args.output:
                     with open(args.output, "w", encoding="utf-8", newline="") as out:
                         n = write(conn, out, settings.tz, args.start, args.end)
                 else:
                     n = write(conn, sys.stdout, settings.tz, args.start, args.end)
             log.info("exported %d %s", n, "entries" if args.format == "csv" else "meals")
-    except (auth.AuthConfigError, backup.BackupError, db.MigrationError) as err:
+        elif args.command == "user":
+            user_command(args, settings)
+    except (auth.AuthConfigError, backup.BackupError, db.MigrationError, users.UserError) as err:
         log.error("%s", err)
         return 1
     return 0

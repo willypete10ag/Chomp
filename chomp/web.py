@@ -10,10 +10,11 @@ pages work without it. Phones can add it to the home screen (web app manifest at
 Undo: each edit stores the rows it touched before and after (undo_actions, migration 0005)
 and the next page offers Undo, which only applies while those rows are unchanged.
 
-Sign-in: with PUBLIC_URL set, a password page (AUTH_PASSWORD, sharing the consent page's
-lockout) starts a 30-day session. The cookie holds a random token; only its SHA-256 hash is
-stored (web_sessions, migration 0004). POSTs must come from the dashboard's own origin. In
-local-only mode the dashboard needs no sign-in, like /mcp.
+Sign-in: with PUBLIC_URL set, a password page (each user's own password, sharing the consent
+page's lockout; see chomp/users.py) starts a 30-day session for that user, and every page
+shows only their log. The cookie holds a random token; only its SHA-256 hash is stored
+(web_sessions). POSTs must come from the dashboard's own origin. In local-only mode the
+dashboard needs no sign-in, like /mcp, and shows the owner's log.
 
 Cloudflare Access may sit in front of /app (README, "Dashboard"), but never in front of /mcp
 or the OAuth routes: Claude's servers can't complete a browser login.
@@ -40,7 +41,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db, logic, store
+from chomp import db, logic, store, users
 from chomp.auth import ChompAuthProvider
 from chomp.config import Settings
 from chomp.sources import SourceError
@@ -51,7 +52,6 @@ log = logging.getLogger("chomp.web")
 PREFIX = "/app"
 COOKIE = "chomp_session"
 SESSION_TTL_S = 30 * 86400
-SUBJECT = "owner"
 HISTORY_RANGES = (7, 30, 90)
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
@@ -121,26 +121,27 @@ class Sessions:
     def _connect(self):
         return closing(db.connect(self.db_path))
 
-    def create(self, subject: str = SUBJECT) -> str:
+    def create(self, user_id: int) -> str:
         token = secrets.token_urlsafe(32)
         now = int(time.time())
         with self._connect() as conn, db.transaction(conn):
             conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
             conn.execute(
-                "INSERT INTO web_sessions (token_hash, subject, expires_at) VALUES (?, ?, ?)",
-                (_hash(token), subject, now + SESSION_TTL_S),
+                "INSERT INTO web_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+                (_hash(token), user_id, now + SESSION_TTL_S),
             )
         return token
 
-    def subject(self, token: str) -> str | None:
+    def user(self, token: str) -> int | None:
+        """The user a session cookie belongs to, or None if it is unknown or expired."""
         if not token:
             return None
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT subject FROM web_sessions WHERE token_hash = ? AND expires_at > ?",
+                "SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_at > ?",
                 (_hash(token), int(time.time())),
             ).fetchone()
-        return row["subject"] if row else None
+        return row["user_id"] if row else None
 
     def delete(self, token: str) -> None:
         with self._connect() as conn, db.transaction(conn):
@@ -285,7 +286,13 @@ NAV = (("today", "", "Today"), ("history", "/history", "History"), ("foods", "/f
 
 
 def render(
-    title: str, body: str, active: str | None = None, *, signed_in: bool = False, status: int = 200
+    title: str,
+    body: str,
+    active: str | None = None,
+    *,
+    signed_in: bool = False,
+    user: str = "",
+    status: int = 200,
 ) -> HTMLResponse:
     nav = ""
     if active is not None:
@@ -298,7 +305,8 @@ def render(
     if signed_in:
         foot = (
             f'<footer><form method="post" action="{PREFIX}/logout">'
-            '<button class="link" type="submit">Sign out</button></form></footer>'
+            + (f'<span class="muted">{e(user)} · </span>' if user else "")
+            + '<button class="link" type="submit">Sign out</button></form></footer>'
         )
     page = (
         HEAD.format(
@@ -325,7 +333,7 @@ LOGIN_FORM = """<div class="login"><img src="{p}/static/icon-192.png" alt="" wid
 <label>Password<input type="password" name="password" autofocus required
  autocomplete="current-password"></label>
 <button type="submit">Sign in</button></form>
-<p class="muted">The same password you used to connect Claude to Chomp.</p></div>"""
+<p class="muted">Your own Chomp password, the one you use to connect Claude.</p></div>"""
 
 
 def login_page(next_url: str, error: str = "", status: int = 200) -> HTMLResponse:
@@ -861,14 +869,33 @@ def add_routes(
     js = (STATIC_DIR / "app.js").read_text()
     usda = fdc is not None and fdc.enabled
 
-    def connect():
-        return closing(db.connect(settings.db_path))
+    def user_of(request: Request) -> int | None:
+        """The signed-in user (#46), or None. Local-only mode is always the owner."""
+        if provider is None:
+            return users.OWNER_ID
+        if not hasattr(request.state, "user_id"):
+            request.state.user_id = sessions.user(request.cookies.get(COOKIE, ""))
+        return request.state.user_id
+
+    def connect(request: Request):
+        """A connection for the signed-in user's log. Routes check signed_in() first."""
+        user_id = user_of(request)
+        if user_id is None:
+            raise RuntimeError("not signed in")
+        return closing(db.connect(settings.db_path, user_id))
+
+    def account(request: Request) -> str:
+        """The signed-in user's name, for the page footer."""
+        if provider is None:
+            return ""
+        with connect(request) as conn:
+            return users.name_of(conn, store.user_of(conn)) or ""
 
     def today() -> date:
         return datetime.now(ZoneInfo(tz)).date()
 
     def signed_in(request: Request) -> bool:
-        return provider is None or sessions.subject(request.cookies.get(COOKIE, "")) is not None
+        return user_of(request) is not None
 
     def to_login(request: Request) -> RedirectResponse:
         path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
@@ -1011,16 +1038,17 @@ def add_routes(
         locked = "Too many wrong passwords. Wait 15 minutes, then try again."
         if provider.locked_out():
             return login_page(next_url, locked, 429)
-        if not provider.check_password(str(form.get("password", ""))):
+        user_id = provider.check_password(str(form.get("password", "")))
+        if user_id is None:
             log.warning("dashboard: wrong password")
             if provider.locked_out():
                 return login_page(next_url, locked, 429)
             return login_page(next_url, "Wrong password.", 401)
-        log.info("dashboard: signed in")
+        log.info("dashboard: user %d signed in", user_id)
         response = RedirectResponse(next_url, status_code=303, headers=SECURITY_HEADERS)
         response.set_cookie(
             COOKIE,
-            sessions.create(),
+            sessions.create(user_id),
             max_age=SESSION_TTL_S,
             path=PREFIX,
             secure=secure,
@@ -1094,7 +1122,7 @@ def add_routes(
         except ValueError:
             return message("Unknown date", "Dates look like 2026-10-06.", 400, signed_in=True)
         page_url = day_url(day)
-        with connect() as conn:
+        with connect(request) as conn:
             meals, totals, targets, ctx = load_day(conn, day)
             foods = store.get_foods(conn, (x.food_id for _, entries in meals for x in entries))
             banner = notice(conn, params, page_url)
@@ -1229,6 +1257,7 @@ def add_routes(
             "".join(head) + "".join(summary) + "".join(cards),
             "today",
             signed_in=provider is not None,
+            user=account(request),
         )
 
     # --- Add food ---
@@ -1254,7 +1283,7 @@ def add_routes(
         meal_id = int_param(params.get("meal"))
         want_usda = bool(params.get("usda")) and bool(q) and usda
         usda_rows, usda_note = [], ""
-        with connect() as conn:
+        with connect(request) as conn:
             meals, _, _, ctx = load_day(conn, day)
             meal = next((m for m, _ in meals if m["id"] == meal_id), None)
             if meal is None:  # gone, or on another day: log a new meal instead
@@ -1360,7 +1389,13 @@ def add_routes(
                 '<p class="muted small center">To find new foods, ask Claude, or set'
                 " FDC_API_KEY to search USDA here.</p>"
             )
-        return render("Add food", "".join(parts), "today", signed_in=provider is not None)
+        return render(
+            "Add food",
+            "".join(parts),
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+        )
 
     @server.custom_route(f"{PREFIX}/log", methods=["POST"])
     async def log_food(request: Request) -> Response:
@@ -1380,7 +1415,7 @@ def add_routes(
             return go(with_params(retry, problem="grams"))
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 food = store.get_food(conn, int_param(str(form.get("food_id", ""))) or 0)
                 into = meal_id if meal_id is not None else int_param(str(form.get("to", "")))
@@ -1421,7 +1456,7 @@ def add_routes(
         retry = add_url(day, meal_id, "")
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 template, rows = store.get_template_by_id(
                     conn, int_param(str(form.get("template_id", ""))) or 0
@@ -1462,7 +1497,7 @@ def add_routes(
         anchor = f"entry-{entry_id}"
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, entry_id)
                 day = meal_day(store.get_meal(conn, entry.meal_id))
@@ -1485,7 +1520,7 @@ def add_routes(
             return no
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, request.path_params["entry_id"])
                 day = meal_day(store.get_meal(conn, entry.meal_id))
@@ -1505,7 +1540,7 @@ def add_routes(
         form = await request.form()
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 entry = store.get_entry(conn, request.path_params["entry_id"])
                 old = store.get_meal(conn, entry.meal_id)
@@ -1544,7 +1579,7 @@ def add_routes(
         meal_id = request.path_params["meal_id"]
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
             except store.NotFound:
@@ -1570,7 +1605,7 @@ def add_routes(
         into = int_param(str(form.get("into", "")))
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
                 target = store.get_meal(conn, into if into is not None else 0)
@@ -1592,7 +1627,7 @@ def add_routes(
         meal_id = request.path_params["meal_id"]
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 meal = store.get_meal(conn, meal_id)
             except store.NotFound:
@@ -1611,12 +1646,12 @@ def add_routes(
             if not signed_in(request):
                 return to_login(request)
             back = safe_next(request.query_params.get("back", PREFIX))
-            with connect() as conn:
+            with connect(request) as conn:
                 current = store.get_targets(conn)
             values = {
                 k: num(v, 1).replace(",", "") if v is not None else "" for k, v in current.items()
             }
-            return goals_page(values, back)
+            return goals_page(request, values, back)
         if (no := refused(request, "Change goals")) is not None:
             return no
         form = await request.form()
@@ -1634,18 +1669,20 @@ def add_routes(
                     raise ValueError(value)
             except ValueError:
                 problem = f"{label} must be a number more than 0 and at most {most:,} {unit}."
-                return goals_page(values, back, problem, 400)
+                return goals_page(request, values, back, problem, 400)
             changes[key] = value
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             before = store.capture(conn, targets=True)
             store.set_targets(conn, changes)
             undo_id = store.record_undo(conn, "Updated your daily goals", before)
         log.info("dashboard: updated targets")
         return go(with_params(back, done=undo_id))
 
-    def goals_page(values: dict[str, str], back: str, error: str = "", status: int = 200):
+    def goals_page(
+        request: Request, values: dict[str, str], back: str, error: str = "", status: int = 200
+    ):
         body = (
             '<header class="daynav">'
             f'<a class="step" href="{e(back)}" aria-label="Back">&lsaquo;</a>'
@@ -1653,7 +1690,14 @@ def add_routes(
             '<span class="step off" aria-hidden="true"></span></header>'
             + goals_form(values, back, error)
         )
-        return render("Daily goals", body, "today", signed_in=provider is not None, status=status)
+        return render(
+            "Daily goals",
+            body,
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+            status=status,
+        )
 
     # --- Undo ---
 
@@ -1664,7 +1708,7 @@ def add_routes(
         form = await request.form()
         back = safe_next(str(form.get("back", PREFIX)))
         undo_id = request.path_params["undo_id"]
-        with connect() as conn:
+        with connect(request) as conn:
             try:
                 store.undo(conn, undo_id)
             except store.NotFound:
@@ -1686,7 +1730,7 @@ def add_routes(
         food_id = request.path_params["food_id"]
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
-        with connect() as conn, db.transaction(conn):
+        with connect(request) as conn, db.transaction(conn):
             try:
                 old = store.get_food(conn, food_id)
             except store.NotFound:
@@ -1718,7 +1762,7 @@ def add_routes(
         days = logic.date_range(first, last)
         lo, _ = logic.local_day_bounds(first, tz)
         _, hi = logic.local_day_bounds(last, tz)
-        with connect() as conn:
+        with connect(request) as conn:
             by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
             targets = store.get_targets(conn)
         totals = logic.sum_nutrients(by_day.values())
@@ -1769,7 +1813,13 @@ def add_routes(
                 f'<section class="card"><h2>Days</h2><ul class="days">{"".join(rows)}'
                 "</ul></section>"
             )
-        return render("History", "".join(parts), "history", signed_in=provider is not None)
+        return render(
+            "History",
+            "".join(parts),
+            "history",
+            signed_in=provider is not None,
+            user=account(request),
+        )
 
     # --- Foods, nicknames and templates ---
 
@@ -1779,7 +1829,7 @@ def add_routes(
             return to_login(request)
         q = request.query_params.get("q", "").strip()[:100]
         back = f"{PREFIX}/foods" + (f"?{urlencode({'q': q})}" if q else "")
-        with connect() as conn:
+        with connect(request) as conn:
             banner = notice(conn, request.query_params, back)
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT)
@@ -1845,4 +1895,6 @@ def add_routes(
             )
         elif not q:
             parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
-        return render("Foods", "".join(parts), "foods", signed_in=provider is not None)
+        return render(
+            "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
+        )

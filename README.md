@@ -171,6 +171,30 @@ and the connector would stop working.
    get Cloudflare's email-code page first), then ask Claude to call `server_info` (it must
    still work).
 
+### 8. Add another person
+
+Each person gets their own meal log, targets, nicknames and saved meals; the food list is
+shared. You are the owner (everything logged before this existed is yours) and keep signing
+in with `AUTH_PASSWORD`. Add someone else on the server, then type their password twice:
+
+```bash
+cd ~/chomp
+docker compose exec chomp chomp user add Sam
+docker compose exec chomp chomp user rename owner Will   # optional: your name on the dashboard
+docker compose exec chomp chomp user list
+```
+
+Their password (12+ characters) must differ from everyone else's: Chomp tells people apart by
+password alone, so the sign-in pages stay a single box. Then, in **their own** Claude account,
+they add the connector exactly as in step 6 (same URL, same `OAUTH_CLIENT_ID` and
+`OAUTH_CLIENT_SECRET`) and type **their** password on the "Connect Claude to Chomp" page. The
+dashboard is the same address; their password opens their log. To change someone's password
+(it signs them out everywhere): `docker compose exec chomp chomp user password Sam`. The
+`BEARER_TOKEN` header, if you use it, is always the owner's.
+
+If they use ChatGPT, their connector gets its own callback URL, which must be added to
+`CONNECTOR_CALLBACKS` in `chomp/auth.py` first (see "Add the ChatGPT connector").
+
 ### Updating
 
 ```bash
@@ -198,7 +222,8 @@ docker compose up -d
 ## Export
 
 CSV is one row per logged entry (for spreadsheets); JSON is everything (foods, meals and
-entries, aliases, templates, targets). `--start` and `--end` are inclusive local dates.
+entries, aliases, templates, targets). `--start` and `--end` are inclusive local dates. An
+export is the owner's log unless you add `--user NAME`.
 
 ```bash
 docker compose exec -T chomp chomp export --format csv > chomp.csv

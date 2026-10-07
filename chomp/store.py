@@ -1,6 +1,11 @@
 """Database reads and writes behind the MCP tools. Every function takes an open connection.
 
 Macro math is delegated to logic.py; this module only moves rows around.
+
+Users (#46): foods are shared, but meals, entries, targets, aliases, meal templates and undo
+history belong to one user. Functions that touch those need a connection opened for a user
+(db.connect(path, user_id)) and only ever see that user's rows; another user's meal or entry
+is NotFound.
 """
 
 from __future__ import annotations
@@ -25,6 +30,14 @@ FOOD_COLS = (
 
 class NotFound(LookupError):
     pass
+
+
+def user_of(conn: sqlite3.Connection) -> int:
+    """The user this connection was opened for."""
+    user_id = getattr(conn, "user_id", None)
+    if user_id is None:
+        raise RuntimeError("this connection was not opened for a user")
+    return user_id
 
 
 def nutrients_of(row: Mapping) -> logic.Nutrients:
@@ -173,22 +186,26 @@ def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sql
     where = " AND ".join("a.alias LIKE ?" for _ in words)
     return conn.execute(
         f"SELECT a.alias, a.default_grams, {', '.join('f.' + c for c in FOOD_COLS.split(', '))}"
-        f" FROM aliases a JOIN foods f ON f.id = a.food_id WHERE {where}"
+        f" FROM aliases a JOIN foods f ON f.id = a.food_id WHERE a.user_id = ? AND {where}"
         " ORDER BY (a.alias = ? COLLATE NOCASE) DESC, length(a.alias) LIMIT ?",
-        (*(f"%{w}%" for w in words), query.strip(), limit),
+        (user_of(conn), *(f"%{w}%" for w in words), query.strip(), limit),
     ).fetchall()
 
 
-# Foods the user has chosen: verified, added from a label or barcode, logged, aliased, or in
-# a template. FDC search hits are cached in foods too, but only as a lookup cache.
+# Foods someone has chosen: verified, added from a label or barcode, logged, aliased, or in
+# a template. FDC search hits are cached in foods too, but only as a lookup cache. Foods are
+# shared, so one person's saved foods are found by everyone.
 USED_FOOD = (
     "(f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
 )
-# How many entries log the food, as column `uses`
-USES = "(SELECT count(*) FROM entries e WHERE e.food_id = f.id) AS uses"
+# How many of this user's entries log the food, as column `uses` (one ? for the user id)
+USES = (
+    "(SELECT count(*) FROM entries e JOIN meals m ON m.id = e.meal_id"
+    " WHERE e.food_id = f.id AND m.user_id = ?) AS uses"
+)
 
 
 def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
@@ -202,7 +219,7 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
         f"SELECT {cols}, {USES} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
         f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
         " ORDER BY f.verified DESC, bm25(foods_fts)",
-        (match,),
+        (user_of(conn), match),
     )
     # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
     found: list[sqlite3.Row] = []
@@ -221,7 +238,7 @@ def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     return conn.execute(
         f"SELECT {cols}, {USES} FROM foods f WHERE {USED_FOOD}"
         " ORDER BY uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
-        (limit,),
+        (user_of(conn), limit),
     ).fetchall()
 
 
@@ -247,10 +264,10 @@ def save_alias(
     get_food(conn, food_id)
     with transaction(conn):
         conn.execute(
-            "INSERT INTO aliases (alias, food_id, default_grams) VALUES (?, ?, ?)"
-            " ON CONFLICT(alias) DO UPDATE SET food_id = excluded.food_id,"
+            "INSERT INTO aliases (user_id, alias, food_id, default_grams) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(user_id, alias) DO UPDATE SET food_id = excluded.food_id,"
             " default_grams = excluded.default_grams",
-            (alias, food_id, default_grams),
+            (user_of(conn), alias, food_id, default_grams),
         )
 
 
@@ -259,15 +276,18 @@ def save_template(
 ) -> tuple[int, bool]:
     """Create or replace a meal template. Returns (template_id, replaced)."""
     get_foods(conn, (f for f, _ in items))
+    user_id = user_of(conn)
     with transaction(conn):
-        row = conn.execute("SELECT id FROM meal_templates WHERE name = ?", (name,)).fetchone()
+        row = conn.execute(
+            "SELECT id FROM meal_templates WHERE user_id = ? AND name = ?", (user_id, name)
+        ).fetchone()
         if row is not None:
             template_id = row["id"]
             conn.execute("UPDATE meal_templates SET name = ? WHERE id = ?", (name, template_id))
             conn.execute("DELETE FROM meal_template_items WHERE template_id = ?", (template_id,))
         else:
             template_id = conn.execute(
-                "INSERT INTO meal_templates (name) VALUES (?)", (name,)
+                "INSERT INTO meal_templates (user_id, name) VALUES (?, ?)", (user_id, name)
             ).lastrowid
         conn.executemany(
             "INSERT INTO meal_template_items (template_id, food_id, grams) VALUES (?, ?, ?)",
@@ -280,7 +300,8 @@ def get_template_by_id(
     conn: sqlite3.Connection, template_id: int
 ) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
     row = conn.execute(
-        "SELECT id, name FROM meal_templates WHERE id = ?", (template_id,)
+        "SELECT id, name FROM meal_templates WHERE id = ? AND user_id = ?",
+        (template_id, user_of(conn)),
     ).fetchone()
     if row is None:
         raise NotFound(f"no meal template with id {template_id}")
@@ -294,18 +315,21 @@ def get_template_by_id(
 def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
     """A template by name (any case). If no name matches exactly, a single template whose
     name contains the phrase or is contained in it ('my usual breakfast') is used."""
-    row = conn.execute("SELECT id, name FROM meal_templates WHERE name = ?", (name,)).fetchone()
+    user_id = user_of(conn)
+    row = conn.execute(
+        "SELECT id, name FROM meal_templates WHERE user_id = ? AND name = ?", (user_id, name)
+    ).fetchone()
     if row is None:
         wanted = name.strip().lower()
         close = [
             r
-            for r in conn.execute("SELECT id, name FROM meal_templates")
+            for r in _templates(conn)
             if r["name"].lower() in wanted or wanted in r["name"].lower()
         ]
         if len(close) == 1:
             row = close[0]
     if row is None:
-        names = [r["name"] for r in conn.execute("SELECT name FROM meal_templates ORDER BY name")]
+        names = [r["name"] for r in _templates(conn)]
         known = ", ".join(repr(n) for n in names) if names else "none saved yet"
         raise NotFound(f"no meal template named {name!r} (templates: {known})")
     items = conn.execute(
@@ -315,11 +339,18 @@ def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list
     return row, items
 
 
+def _templates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """This user's meal templates (id, name) by name."""
+    return conn.execute(
+        "SELECT id, name FROM meal_templates WHERE user_id = ? ORDER BY name", (user_of(conn),)
+    ).fetchall()
+
+
 def templates_matching(conn: sqlite3.Connection, query: str) -> list[str]:
     """Names of meal templates the phrase names ("protein shake", "my usual breakfast")."""
     return [
         r["name"]
-        for r in conn.execute("SELECT name FROM meal_templates ORDER BY name")
+        for r in _templates(conn)
         if text.match_score(query, r["name"]) == 1 or text.match_score(r["name"], query) == 1
     ]
 
@@ -327,13 +358,14 @@ def templates_matching(conn: sqlite3.Connection, query: str) -> list[str]:
 def list_aliases(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT a.alias, a.default_grams, a.food_id, f.name, f.brand"
-        " FROM aliases a JOIN foods f ON f.id = a.food_id ORDER BY a.alias"
+        " FROM aliases a JOIN foods f ON f.id = a.food_id WHERE a.user_id = ? ORDER BY a.alias",
+        (user_of(conn),),
     ).fetchall()
 
 
 def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sqlite3.Row]]]:
     """Every meal template with its items (food name, grams and per-100 g nutrients)."""
-    templates = conn.execute("SELECT id, name FROM meal_templates ORDER BY name").fetchall()
+    templates = _templates(conn)
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     out = []
     for t in templates:
@@ -360,10 +392,12 @@ class EntryRow:
     nutrients: logic.Nutrients
 
 
+# Callers add "AND ..." conditions and pass the user id first
 ENTRY_SELECT = (
     "SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.kcal, e.protein_g,"
     " e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g, e.sodium_mg"
-    " FROM entries e JOIN foods f ON f.id = e.food_id"
+    " FROM entries e JOIN foods f ON f.id = e.food_id JOIN meals m ON m.id = e.meal_id"
+    " WHERE m.user_id = ?"
 )
 
 
@@ -389,7 +423,8 @@ def log_meal(
     """Create a meal with one entry per (food_id, grams), snapshotting nutrients."""
     with transaction(conn):
         meal_id = conn.execute(
-            "INSERT INTO meals (eaten_at, label, note) VALUES (?, ?, ?)", (eaten_at, label, note)
+            "INSERT INTO meals (user_id, eaten_at, label, note) VALUES (?, ?, ?, ?)",
+            (user_of(conn), eaten_at, label, note),
         ).lastrowid
         _insert_entries(conn, meal_id, items)
     return meal_id
@@ -416,7 +451,8 @@ def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[tuple[in
 
 def get_meal(conn: sqlite3.Connection, meal_id: int) -> sqlite3.Row:
     row = conn.execute(
-        "SELECT id, eaten_at, label, note FROM meals WHERE id = ?", (meal_id,)
+        "SELECT id, eaten_at, label, note FROM meals WHERE id = ? AND user_id = ?",
+        (meal_id, user_of(conn)),
     ).fetchone()
     if row is None:
         raise NotFound(f"no meal with id {meal_id}")
@@ -424,12 +460,12 @@ def get_meal(conn: sqlite3.Connection, meal_id: int) -> sqlite3.Row:
 
 
 def meal_entries(conn: sqlite3.Connection, meal_id: int) -> list[EntryRow]:
-    rows = conn.execute(f"{ENTRY_SELECT} WHERE e.meal_id = ? ORDER BY e.id", (meal_id,))
+    rows = conn.execute(f"{ENTRY_SELECT} AND e.meal_id = ? ORDER BY e.id", (user_of(conn), meal_id))
     return [_entry(r) for r in rows]
 
 
 def get_entry(conn: sqlite3.Connection, entry_id: int) -> EntryRow:
-    row = conn.execute(f"{ENTRY_SELECT} WHERE e.id = ?", (entry_id,)).fetchone()
+    row = conn.execute(f"{ENTRY_SELECT} AND e.id = ?", (user_of(conn), entry_id)).fetchone()
     if row is None:
         raise NotFound(f"no entry with id {entry_id}")
     return _entry(row)
@@ -471,6 +507,7 @@ def update_meal(
         changes["label"] = label.strip() or None
     if note is not None:
         changes["note"] = note.strip() or None
+    get_meal(conn, meal_id)
     with transaction(conn):
         if changes:
             conn.execute(
@@ -501,7 +538,9 @@ def move_entry(
         raise ValueError("a new meal needs a time")
     with transaction(conn):
         if meal_id is None:
-            meal_id = conn.execute("INSERT INTO meals (eaten_at) VALUES (?)", (eaten_at,)).lastrowid
+            meal_id = conn.execute(
+                "INSERT INTO meals (user_id, eaten_at) VALUES (?, ?)", (user_of(conn), eaten_at)
+            ).lastrowid
         conn.execute("UPDATE entries SET meal_id = ? WHERE id = ?", (meal_id, entry_id))
         gone = _drop_if_empty(conn, entry.meal_id)
     return meal_id, gone
@@ -535,9 +574,9 @@ def _drop_if_empty(conn: sqlite3.Connection, meal_id: int) -> bool:
 
 def meals_between(conn: sqlite3.Connection, start_utc: str, end_utc: str) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT id, eaten_at, label, note FROM meals WHERE eaten_at >= ? AND eaten_at < ?"
-        " ORDER BY eaten_at, id",
-        (start_utc, end_utc),
+        "SELECT id, eaten_at, label, note FROM meals"
+        " WHERE user_id = ? AND eaten_at >= ? AND eaten_at < ? ORDER BY eaten_at, id",
+        (user_of(conn), start_utc, end_utc),
     ).fetchall()
 
 
@@ -548,8 +587,8 @@ def entries_between(
     rows = conn.execute(
         "SELECT m.eaten_at, e.kcal, e.protein_g, e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g,"
         " e.sodium_mg FROM entries e JOIN meals m ON m.id = e.meal_id"
-        " WHERE m.eaten_at >= ? AND m.eaten_at < ?",
-        (start_utc, end_utc),
+        " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?",
+        (user_of(conn), start_utc, end_utc),
     ).fetchall()
     return [(r["eaten_at"], nutrients_of(r)) for r in rows]
 
@@ -561,7 +600,7 @@ TARGET_KEYS = ("kcal", "protein_g", "carbs_g", "fat_g")
 
 def get_targets(conn: sqlite3.Connection) -> dict[str, float | None]:
     row = conn.execute(
-        "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE id = 1"
+        "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE user_id = ?", (user_of(conn),)
     ).fetchone()
     return {k: (row[k] if row else None) for k in TARGET_KEYS}
 
@@ -570,20 +609,24 @@ def set_targets(conn: sqlite3.Connection, changes: Mapping[str, float | None]) -
     """Update the given targets (None clears one); others keep their value."""
     merged = {**get_targets(conn), **changes}
     with transaction(conn):
-        conn.execute(
-            "INSERT INTO targets (id, kcal, protein_g, carbs_g, fat_g) VALUES (1, ?, ?, ?, ?)"
-            " ON CONFLICT(id) DO UPDATE SET kcal = excluded.kcal, protein_g = excluded.protein_g,"
-            " carbs_g = excluded.carbs_g, fat_g = excluded.fat_g",
-            tuple(merged[k] for k in TARGET_KEYS),
-        )
+        _write_targets(conn, merged)
     return get_targets(conn)
+
+
+def _write_targets(conn: sqlite3.Connection, values: Mapping[str, float | None]) -> None:
+    conn.execute(
+        "INSERT INTO targets (user_id, kcal, protein_g, carbs_g, fat_g) VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT(user_id) DO UPDATE SET kcal = excluded.kcal,"
+        " protein_g = excluded.protein_g, carbs_g = excluded.carbs_g, fat_g = excluded.fat_g",
+        (user_of(conn), *(values[k] for k in TARGET_KEYS)),
+    )
 
 
 # --- Undo (dashboard edits) -----------------------------------------------------------------
 
 # The columns an undo restores, per table. Foods only ever change name from the dashboard.
 UNDO_COLUMNS = {
-    "meals": ("id", "eaten_at", "label", "note", "created_at"),
+    "meals": ("id", "user_id", "eaten_at", "label", "note", "created_at"),
     "entries": ("id", "meal_id", "food_id", "grams", *logic.NUTRIENTS, "created_at"),
     "foods": ("id", "name"),
 }
@@ -633,7 +676,6 @@ def record_undo(
     before: dict,
     *,
     meals: Iterable[int] = (),
-    subject: str = "owner",
 ) -> int:
     """Remember an edit for Undo: `before` from capture() ahead of it, and `meals` it created.
 
@@ -657,28 +699,28 @@ def record_undo(
     with transaction(conn):
         conn.execute("DELETE FROM undo_actions WHERE created_at < ?", (now - UNDO_KEEP_S,))
         return conn.execute(
-            "INSERT INTO undo_actions (subject, summary, before, after, created_at)"
+            "INSERT INTO undo_actions (user_id, summary, before, after, created_at)"
             " VALUES (?, ?, ?, ?, ?)",
-            (subject, summary, json.dumps(full), json.dumps(after), now),
+            (user_of(conn), summary, json.dumps(full), json.dumps(after), now),
         ).lastrowid
 
 
-def get_undo(conn: sqlite3.Connection, undo_id: int, subject: str = "owner") -> sqlite3.Row | None:
+def get_undo(conn: sqlite3.Connection, undo_id: int) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT id, summary, used, created_at FROM undo_actions WHERE id = ? AND subject = ?",
-        (undo_id, subject),
+        "SELECT id, summary, used, created_at FROM undo_actions WHERE id = ? AND user_id = ?",
+        (undo_id, user_of(conn)),
     ).fetchone()
 
 
-def undo(conn: sqlite3.Connection, undo_id: int, subject: str = "owner") -> str:
+def undo(conn: sqlite3.Connection, undo_id: int) -> str:
     """Put the rows an edit touched back as they were. Returns the edit's summary.
 
     Raises NotFound for an unknown or already undone edit, and UndoConflict if any of those
     rows changed since (the undo would overwrite the newer change).
     """
     row = conn.execute(
-        "SELECT summary, before, after FROM undo_actions WHERE id = ? AND subject = ? AND used = 0",
-        (undo_id, subject),
+        "SELECT summary, before, after FROM undo_actions WHERE id = ? AND user_id = ? AND used = 0",
+        (undo_id, user_of(conn)),
     ).fetchone()
     if row is None:
         raise NotFound("nothing to undo")
@@ -711,14 +753,7 @@ def undo(conn: sqlite3.Connection, undo_id: int, subject: str = "owner") -> str:
         for i, r in before.get("foods", {}).items():
             _restore(conn, "foods", int(i), r)
         if "targets" in before:
-            t = before["targets"]
-            conn.execute(
-                "INSERT INTO targets (id, kcal, protein_g, carbs_g, fat_g) VALUES (1, ?, ?, ?, ?)"
-                " ON CONFLICT(id) DO UPDATE SET kcal = excluded.kcal,"
-                " protein_g = excluded.protein_g, carbs_g = excluded.carbs_g,"
-                " fat_g = excluded.fat_g",
-                tuple(t[k] for k in TARGET_KEYS),
-            )
+            _write_targets(conn, before["targets"])
         conn.execute("UPDATE undo_actions SET used = 1 WHERE id = ?", (undo_id,))
     return row["summary"]
 

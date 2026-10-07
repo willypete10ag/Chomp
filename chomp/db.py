@@ -20,9 +20,17 @@ class MigrationError(RuntimeError):
     pass
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+class Connection(sqlite3.Connection):
+    """A connection that may be opened for one user (#46): store.py then reads and writes
+    only that user's meals, targets, aliases, templates and undo history."""
+
+    user_id: int | None = None
+
+
+def connect(path: str | Path, user_id: int | None = None) -> Connection:
     """Open a connection with foreign keys on, WAL for file DBs, and dict-like rows."""
-    conn = sqlite3.connect(path, timeout=10, isolation_level=None)
+    conn = sqlite3.connect(path, timeout=10, isolation_level=None, factory=Connection)
+    conn.user_id = user_id
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -77,14 +85,26 @@ def list_migrations(migrations_dir: Path) -> list[tuple[int, Path]]:
 
 
 def _apply(conn: sqlite3.Connection, sql: str, version: int, label: str) -> None:
-    # executescript() runs outside Python's transaction handling, so the script carries
-    # its own BEGIN/COMMIT and a failure rolls the whole step back.
+    # executescript() runs outside Python's transaction handling, so the script opens its own
+    # transaction and a failure rolls the whole step back. Foreign keys are off meanwhile so
+    # a migration can rebuild a table (create, copy, drop, rename: SQLite's recipe for what
+    # ALTER TABLE can't do) without the drop cascading into child rows; foreign_key_check
+    # then refuses to commit anything left pointing nowhere.
+    conn.execute("PRAGMA foreign_keys = OFF")
     try:
-        conn.executescript(f"BEGIN;\n{sql}\n;PRAGMA user_version = {version};\nCOMMIT;")
+        conn.executescript(f"BEGIN;\n{sql}\n;PRAGMA user_version = {version};")
+        broken = conn.execute("PRAGMA foreign_key_check").fetchone()
+        if broken is not None:
+            raise sqlite3.IntegrityError(
+                f"row {broken[1]} of {broken[0]} points at a missing {broken[2]} row"
+            )
+        conn.execute("COMMIT")
     except sqlite3.Error as e:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise MigrationError(f"{label} failed: {e}") from e
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def latest_version(migrations_dir: Path) -> int:
@@ -115,7 +135,9 @@ def migrate(conn: sqlite3.Connection, schema_path: Path, migrations_dir: Path) -
     return version
 
 
-def open_db(path: str | Path, schema_path: Path, migrations_dir: Path) -> sqlite3.Connection:
-    conn = connect(path)
+def open_db(
+    path: str | Path, schema_path: Path, migrations_dir: Path, user_id: int | None = None
+) -> Connection:
+    conn = connect(path, user_id)
     migrate(conn, schema_path, migrations_dir)
     return conn

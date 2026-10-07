@@ -1,8 +1,11 @@
-"""Endpoint auth (#24): a minimal single-user OAuth 2.1 authorization server plus an optional
-static bearer token, both checked by the MCP SDK's bearer middleware on /mcp.
+"""Endpoint auth (#24): a minimal OAuth 2.1 authorization server plus an optional static
+bearer token, both checked by the MCP SDK's bearer middleware on /mcp.
 
 OAuth: one pre-registered client (shared by Claude and ChatGPT), PKCE S256 (enforced by the SDK),
 a password-protected consent page instead of a user login, and refresh-token rotation.
+Users (#46): the password typed on the consent page says whose log the connector gets
+(chomp/users.py); every token carries that user as its subject. The static bearer token is
+the owner's.
 Issued tokens are stored hashed in SQLite (migration 0003) so a restart doesn't sign connectors
 out. Authorization codes and pending consent pages live in memory; they last minutes.
 
@@ -35,23 +38,22 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db
+from chomp import db, users
 from chomp.config import Settings
 
 log = logging.getLogger("chomp.auth")
 
 SCOPE = "chomp"
-SUBJECT = "owner"
 ACCESS_TTL_S = 3600
 REFRESH_TTL_S = 90 * 86400  # rotation resets it, so only 90 idle days force a new sign-in
 CODE_TTL_S = 300
 CONSENT_TTL_S = 600
 MAX_PENDING = 20
 # Consent-page lockout: after this many wrong passwords within the window, refuse every
-# attempt until the window passes. Single user, so one global counter is enough.
+# attempt until the window passes. One global counter covers every user: a household's worth.
 MAX_FAILURES = 5
 LOCKOUT_S = 900
-MIN_PASSWORD_LEN = 12
+MIN_PASSWORD_LEN = users.MIN_PASSWORD_LEN
 MIN_SECRET_LEN = 32
 CONNECTOR_CALLBACKS = (
     "https://claude.ai/api/mcp/auth_callback",
@@ -107,8 +109,20 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def subject(user_id: int) -> str:
+    return str(user_id)
+
+
+def user_id_of(subject: str | None) -> int | None:
+    """The user a token's subject names."""
+    try:
+        return int(subject) if subject else None
+    except ValueError:
+        return None
+
+
 class ChompAuthProvider:
-    """Single-user OAuth authorization server backed by Chomp's SQLite database."""
+    """OAuth authorization server for Chomp's users, backed by its SQLite database."""
 
     def __init__(self, settings: Settings):
         self.db_path = settings.db_path
@@ -166,14 +180,17 @@ class ChompAuthProvider:
         self.failures = [t for t in self.failures if t > cutoff]
         return len(self.failures) >= MAX_FAILURES
 
-    def check_password(self, password: str) -> bool:
-        if hmac.compare_digest(password.encode(), self.password.encode()):
-            return True
-        self.failures.append(time.time())
-        return False
+    def check_password(self, password: str) -> int | None:
+        """The id of the user with this password, or None (and a strike towards lockout)."""
+        with self._connect() as conn:
+            user_id = users.find_by_password(conn, password, self.password)
+        if user_id is None:
+            self.failures.append(time.time())
+        return user_id
 
-    def approve(self, session: str) -> str | None:
-        """Issue a code for an approved consent session; returns Claude's redirect URL."""
+    def approve(self, session: str, user_id: int) -> str | None:
+        """Issue the user a code for an approved consent session; returns the connector's
+        redirect URL."""
         item = self.pending.pop(session, None)
         if item is None or item[0] < time.time():
             return None
@@ -188,7 +205,7 @@ class ChompAuthProvider:
             redirect_uri=params.redirect_uri,
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
             resource=params.resource,
-            subject=SUBJECT,
+            subject=subject(user_id),
         )
         return construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
 
@@ -203,14 +220,19 @@ class ChompAuthProvider:
     # --- tokens ---
 
     def _issue(
-        self, client_id: str, scopes: list[str], resource: str | None, grant_id: str
+        self,
+        client_id: str,
+        user_id: int,
+        scopes: list[str],
+        resource: str | None,
+        grant_id: str,
     ) -> OAuthToken:
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
         now = int(time.time())
         rows = [
-            (_hash(access), "access", grant_id, client_id, " ".join(scopes), resource,
+            (_hash(access), "access", grant_id, client_id, user_id, " ".join(scopes), resource,
              now + ACCESS_TTL_S),
-            (_hash(refresh), "refresh", grant_id, client_id, " ".join(scopes), resource,
+            (_hash(refresh), "refresh", grant_id, client_id, user_id, " ".join(scopes), resource,
              now + REFRESH_TTL_S),
         ]  # fmt: skip
         with self._connect() as conn, db.transaction(conn):
@@ -218,8 +240,8 @@ class ChompAuthProvider:
             conn.execute("DELETE FROM oauth_tokens WHERE expires_at < ?", (now,))
             conn.executemany(
                 "INSERT INTO oauth_tokens"
-                " (token_hash, kind, grant_id, client_id, scopes, resource, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " (token_hash, kind, grant_id, client_id, user_id, scopes, resource, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         return OAuthToken(
@@ -241,9 +263,13 @@ class ChompAuthProvider:
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         self.codes.pop(authorization_code.code, None)
-        log.info("connector signed in")
+        user_id = user_id_of(authorization_code.subject)
+        if user_id is None:
+            raise ValueError("authorization code has no user")
+        log.info("connector signed in for user %d", user_id)
         return self._issue(
             client.client_id,
+            user_id,
             authorization_code.scopes,
             authorization_code.resource,
             secrets.token_urlsafe(16),
@@ -261,7 +287,7 @@ class ChompAuthProvider:
             scopes=row["scopes"].split(),
             expires_at=row["expires_at"],
             resource=row["resource"],
-            subject=SUBJECT,
+            subject=subject(row["user_id"]),
         )
 
     async def exchange_refresh_token(
@@ -272,14 +298,26 @@ class ChompAuthProvider:
     ) -> OAuthToken:
         row = self._load(refresh_token.token, "refresh")
         grant_id = row["grant_id"] if row else secrets.token_urlsafe(16)
+        user_id = row["user_id"] if row else user_id_of(refresh_token.subject)
+        if user_id is None:
+            raise ValueError("refresh token has no user")
         # _issue replaces every token in the grant, so the old refresh token stops working.
         return self._issue(
-            client.client_id, scopes or refresh_token.scopes, refresh_token.resource, grant_id
+            client.client_id,
+            user_id,
+            scopes or refresh_token.scopes,
+            refresh_token.resource,
+            grant_id,
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         if self.bearer and hmac.compare_digest(token.encode(), self.bearer.encode()):
-            return AccessToken(token=token, client_id=STATIC_CLIENT, scopes=[SCOPE])
+            return AccessToken(
+                token=token,
+                client_id=STATIC_CLIENT,
+                scopes=[SCOPE],
+                subject=subject(users.OWNER_ID),
+            )
         row = self._load(token, "access")
         if row is None:
             return None
@@ -289,7 +327,7 @@ class ChompAuthProvider:
             scopes=row["scopes"].split(),
             expires_at=row["expires_at"],
             resource=row["resource"],
-            subject=SUBJECT,
+            subject=subject(row["user_id"]),
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
@@ -308,12 +346,13 @@ CONSENT_PAGE = """<!doctype html><meta charset="utf-8">
 <title>Connect to Chomp</title>
 <body style="font-family:system-ui;max-width:28rem;margin:3rem auto;padding:0 1rem">
 <h1>Connect to Chomp</h1>
-<p>This connector is asking to read and write your meal log.<br>
+<p>This connector is asking to read and write your meal log. Your password decides
+whose log it gets.<br>
 After you allow it, you'll return to <b>{redirect}</b>.</p>
 {error}
 <form method="post" action="/consent">
 <input type="hidden" name="session" value="{session}">
-<p><label>Chomp password<br><input type="password" name="password" autofocus
+<p><label>Your Chomp password<br><input type="password" name="password" autofocus
  autocomplete="current-password" style="width:100%;padding:.5rem"></label></p>
 <button type="submit" style="padding:.5rem 1.5rem">Allow</button>
 </form></body>"""
@@ -347,12 +386,13 @@ def add_consent_route(server: MCPServer, provider: ChompAuthProvider) -> None:
             return HTMLResponse(LOCKED, status_code=429, headers=NO_STORE)
         if request.method == "GET":
             return page(session, params)
-        if not provider.check_password(str(form.get("password", ""))):
+        user_id = provider.check_password(str(form.get("password", "")))
+        if user_id is None:
             log.warning("consent: wrong password")
             if provider.locked_out():
                 return HTMLResponse(LOCKED, status_code=429, headers=NO_STORE)
             return page(session, params, "Wrong password.")
-        redirect = provider.approve(session)
+        redirect = provider.approve(session, user_id)
         if redirect is None:
             return HTMLResponse(EXPIRED, status_code=400, headers=NO_STORE)
         return RedirectResponse(redirect, status_code=302, headers=NO_STORE)
