@@ -94,7 +94,11 @@ def consent(http, challenge, password=PASSWORD):
     assert f"{loc.scheme}://{loc.netloc}{loc.path}" == f"{PUBLIC}/consent"
     session = parse_qs(loc.query)["session"][0]
     page = http.get(f"/consent?session={session}")
-    assert page.status_code == 200 and "Chomp password" in page.text and "claude.ai" in page.text
+    assert (
+        page.status_code == 200
+        and "Chomp password" in page.text
+        and urlparse(CALLBACK).netloc in page.text
+    )
     return http.post(
         "/consent", data={"session": session, "password": password}, follow_redirects=False
     )
@@ -161,7 +165,16 @@ def test_health_is_only_for_the_local_container_check(public_settings, http):
         assert local.get("/health").json()["status"] == "ok"
 
 
-def test_full_oauth_flow_with_refresh_rotation(http):
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
+        "https://chatgpt.com/connector/oauth/e3AEiu3ZZRkR",
+    ],
+)
+def test_full_oauth_flow_with_refresh_rotation(http, monkeypatch, callback):
+    monkeypatch.setitem(globals(), "CALLBACK", callback)
     tok = sign_in(http)
     assert mcp(http, tok["access_token"]).status_code == 200
 
@@ -228,7 +241,11 @@ def test_bad_verifier_and_wrong_secret_are_refused(http):
     assert bad.status_code == 400
 
 
-def test_unknown_client_and_foreign_redirect_are_refused(http):
+@pytest.mark.parametrize(
+    "redirect_uri",
+    ["https://evil.example.com/cb", "https://chatgpt.com/connector/oauth/another-connector"],
+)
+def test_unknown_client_and_foreign_redirect_are_refused(http, redirect_uri):
     _verifier, challenge = pkce()
     assert start(http, challenge, client_id="someone-else").status_code == 400
     r = http.get(
@@ -236,7 +253,7 @@ def test_unknown_client_and_foreign_redirect_are_refused(http):
         params={
             "response_type": "code",
             "client_id": CLIENT_ID,
-            "redirect_uri": "https://evil.example.com/cb",
+            "redirect_uri": redirect_uri,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
         },

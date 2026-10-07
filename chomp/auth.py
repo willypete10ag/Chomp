@@ -1,9 +1,9 @@
 """Endpoint auth (#24): a minimal single-user OAuth 2.1 authorization server plus an optional
 static bearer token, both checked by the MCP SDK's bearer middleware on /mcp.
 
-OAuth: one pre-registered client (Claude's custom connector), PKCE S256 (enforced by the SDK),
+OAuth: one pre-registered client (shared by Claude and ChatGPT), PKCE S256 (enforced by the SDK),
 a password-protected consent page instead of a user login, and refresh-token rotation.
-Issued tokens are stored hashed in SQLite (migration 0003) so a restart doesn't sign Claude
+Issued tokens are stored hashed in SQLite (migration 0003) so a restart doesn't sign connectors
 out. Authorization codes and pending consent pages live in memory; they last minutes.
 
 With PUBLIC_URL unset Chomp runs in local-only mode: no auth, loopback bind only.
@@ -53,9 +53,10 @@ MAX_FAILURES = 5
 LOCKOUT_S = 900
 MIN_PASSWORD_LEN = 12
 MIN_SECRET_LEN = 32
-CLAUDE_CALLBACKS = (
+CONNECTOR_CALLBACKS = (
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+    "https://chatgpt.com/connector/oauth/e3AEiu3ZZRkR",
 )
 STATIC_CLIENT = "static-bearer"
 
@@ -116,12 +117,12 @@ class ChompAuthProvider:
         self.client = OAuthClientInformationFull(
             client_id=settings.oauth_client_id,
             client_secret=settings.oauth_client_secret,
-            redirect_uris=list(CLAUDE_CALLBACKS),
+            redirect_uris=list(CONNECTOR_CALLBACKS),
             token_endpoint_auth_method="client_secret_post",
             grant_types=["authorization_code", "refresh_token"],
             response_types=["code"],
             scope=SCOPE,
-            client_name="Claude",
+            client_name="Chomp connector",
         )
         self.consent_base = f"{settings.public_url}/consent"
         self.pending: dict[str, tuple[float, AuthorizationParams]] = {}
@@ -304,10 +305,10 @@ class ChompAuthProvider:
 
 CONSENT_PAGE = """<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connect Claude to Chomp</title>
+<title>Connect to Chomp</title>
 <body style="font-family:system-ui;max-width:28rem;margin:3rem auto;padding:0 1rem">
-<h1>Connect Claude to Chomp</h1>
-<p>Claude is asking to read and write your meal log.<br>
+<h1>Connect to Chomp</h1>
+<p>This connector is asking to read and write your meal log.<br>
 After you allow it, you'll return to <b>{redirect}</b>.</p>
 {error}
 <form method="post" action="/consent">
@@ -316,8 +317,8 @@ After you allow it, you'll return to <b>{redirect}</b>.</p>
  autocomplete="current-password" style="width:100%;padding:.5rem"></label></p>
 <button type="submit" style="padding:.5rem 1.5rem">Allow</button>
 </form></body>"""
-EXPIRED = "This sign-in expired or is unknown. Start again from Claude's connector settings."
-LOCKED = "Too many wrong passwords. Wait 15 minutes, then start again from Claude."
+EXPIRED = "This sign-in expired or is unknown. Start again from your connector settings."
+LOCKED = "Too many wrong passwords. Wait 15 minutes, then start again from your connector."
 NO_STORE = {"Cache-Control": "no-store", "X-Frame-Options": "DENY"}
 
 

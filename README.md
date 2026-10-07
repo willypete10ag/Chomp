@@ -125,6 +125,18 @@ Alternative: if your dialog has a **Request headers** section, you can choose No
 add header `authorization` = `Bearer <BEARER_TOKEN>` instead. Claude allows only one
 connector per URL.
 
+### Add the ChatGPT connector
+
+In ChatGPT's custom MCP server form, use your public `/mcp` URL and **OAuth** with
+**User-Defined OAuth Client**. Enter the same `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`
+configured on Chomp, choose **client_secret_post**, and leave scopes blank. Keep the
+prefilled callback URL and discovered endpoints unchanged.
+
+The allowlist includes `https://chatgpt.com/connector/oauth/e3AEiu3ZZRkR` alongside both
+Claude callbacks. Deploy this version before connecting. A recreated connector with a
+different callback needs its exact URL added to the allowlist; do not use a wildcard.
+This enables OAuth authentication; ChatGPT voice-mode tool support is not verified.
+
 ### 7. Open the dashboard
 
 Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
