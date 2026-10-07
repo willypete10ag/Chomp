@@ -178,6 +178,7 @@ button {
 button.danger { background: transparent; color: var(--over); border: 1px solid var(--over); }
 button.link { background: none; color: var(--muted); text-decoration: underline; padding: 0; min-height: 0; }
 .search { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+.search input { flex: 1; min-width: 0; }
 .search .clear { padding: .5rem; }
 .error { color: var(--over); }
 .login { max-width: 20rem; margin: 3rem auto; text-align: center; }
