@@ -140,8 +140,9 @@ This enables OAuth authentication; ChatGPT voice-mode tool support is not verifi
 ### 7. Open the dashboard
 
 Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
-meals against your targets (tap Edit on an item to fix its grams or delete it), 7/30/90-day
-history charts, and your saved foods, aliases and meal templates. A sign-in lasts 30 days;
+meals against your targets (tap an item to fix its grams or delete it; the arrows, the row of
+days and the date box move between days), 7/30/90-day history charts, and your saved meals,
+nicknames and foods. A sign-in lasts 30 days;
 the same five-wrong-passwords lockout applies.
 
 On a phone, add it to the home screen so it opens like an app:

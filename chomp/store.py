@@ -185,6 +185,8 @@ USED_FOOD = (
     " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
 )
+# How many entries log the food, as column `uses`
+USES = "(SELECT count(*) FROM entries e WHERE e.food_id = f.id) AS uses"
 
 
 def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
@@ -195,7 +197,7 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
         return []
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     rows = conn.execute(
-        f"SELECT {cols} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
+        f"SELECT {cols}, {USES} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
         f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
         " ORDER BY f.verified DESC, bm25(foods_fts)",
         (match,),
@@ -212,11 +214,11 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
 
 
 def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Foods the user has used (see USED_FOOD), verified first, then by name."""
+    """Foods the user has used (see USED_FOOD), most logged first, then verified, then by name."""
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     return conn.execute(
-        f"SELECT {cols} FROM foods f WHERE {USED_FOOD}"
-        " ORDER BY f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
+        f"SELECT {cols}, {USES} FROM foods f WHERE {USED_FOOD}"
+        " ORDER BY uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
         (limit,),
     ).fetchall()
 

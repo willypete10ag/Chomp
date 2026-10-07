@@ -205,13 +205,34 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert r.status_code == 200
     text = r.text
     assert "<h1>Today</h1>" in text
-    assert "Breakfast" in text and "Egg, whole" in text and "Kirkland" in text
+    assert "Egg, whole" in text and "Kirkland" in text
+    # the meal header leads with the time, then the label
+    assert '<span class="label">Breakfast</span></h2>' in text
     # 200 g eggs (286 kcal) + 300 g whites (156 kcal), from the stored snapshots
-    assert "442 kcal" in text
-    # protein 25.2 + 32.7 = 57.9 g of 180 g
-    assert "57.9g <span class='muted'>/ 180g</span>" in text
-    assert "122.1g left" in text
+    assert '<span class="big kcal">442</span> kcal logged' in text
+    assert "Meal total" in text  # two items: keep the combined row
+    # protein 25.2 + 32.7 = 57.9 g of 180 g; carbs and fat show grams without a target
+    assert '<strong>57.9</strong> <span class="muted target">/ 180 g</span>' in text
+    assert "122.1 g left" in text
+    assert '<div class="small c">Carbs</div>' in text
+    assert '<span class="sr">Protein</span>' in text  # full names for screen readers
     assert 'aria-label="Next day"' not in text  # no stepping into the future
+    assert 'class="week"' in text and 'aria-current="date"' in text
+    assert 'type="date"' in text and "Page loaded at" in text
+    assert "Back to today" not in text
+
+
+def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
+    eggs, _, _ = logged
+    when = logic.format_utc(datetime.now(UTC))
+    meal = store.log_meal(conn, [(eggs, 100)], when, None)
+    sign_in(http)
+    text = http.get("/app").text
+    card = text[text.index(f'id="meal-{meal}"') :]
+    card = card[: card.index("</section>")]
+    assert "Meal total" not in card
+    assert card.count("143") == 1  # header kcal only
+    assert 'class="label"' not in card  # no guessed label
 
 
 def test_other_days_and_bad_dates(http, logged):
@@ -219,7 +240,7 @@ def test_other_days_and_bad_dates(http, logged):
     r = http.get("/app?date=2020-01-01")
     assert r.status_code == 200
     assert "Nothing logged on this day" in r.text
-    assert "Jump to today" in r.text
+    assert "Back to today" in r.text
     assert http.get("/app?date=yesterday").status_code == 200
     assert http.get("/app?date=13/2").status_code == 400
     for edge in ("9999-12-31", "0001-01-01"):
@@ -232,7 +253,8 @@ def test_edit_grams_resnapshots_from_the_food(http, conn, logged):
     sign_in(http)
     r = http.post(f"/app/entries/{eggs_entry.id}", data={"grams": "100"}, headers=ORIGIN)
     assert r.status_code == 303
-    assert r.headers["location"].endswith(f"#entry-{eggs_entry.id}")
+    assert r.headers["location"].endswith(f"saved={eggs_entry.id}#entry-{eggs_entry.id}")
+    assert "Saved: Egg, whole changed to 100 g." in http.get(r.headers["location"]).text
     updated = store.get_entry(conn, eggs_entry.id)
     assert updated.grams == 100
     assert updated.nutrients["kcal"] == pytest.approx(143)
@@ -243,8 +265,22 @@ def test_edit_rejects_bad_grams(http, conn, logged, grams):
     _, _, entries = logged
     sign_in(http)
     r = http.post(f"/app/entries/{entries[0].id}", data={"grams": grams}, headers=ORIGIN)
-    assert r.status_code == 400
+    assert r.status_code == 303
     assert store.get_entry(conn, entries[0].id).grams == 200
+    # back on the same day, the entry open with the typed value and the reason
+    page = http.get(r.headers["location"]).text
+    item = page[page.index(f'id="entry-{entries[0].id}"') :]
+    assert item.startswith(f'id="entry-{entries[0].id}"><details open>')
+    assert f'value="{grams}"' in item and 'role="alert"' in item
+
+
+def test_delete_needs_a_second_tap_and_confirms(http, logged):
+    _, _, entries = logged
+    sign_in(http)
+    assert "Yes, delete Egg, whole" in http.get("/app").text
+    r = http.post(f"/app/entries/{entries[0].id}/delete", headers=ORIGIN)
+    assert "deleted=Egg" in r.headers["location"]
+    assert "Deleted Egg, whole." in http.get(r.headers["location"]).text
 
 
 def test_edit_and_delete_refuse_cross_site_posts(http, conn, logged):
@@ -292,13 +328,20 @@ def test_foods_aliases_and_templates(http, conn, logged):
     sign_in(http)
     r = http.get("/app/foods")
     text = r.text
-    assert "Egg white" in text and "Verified" in text
+    assert "Egg white" in text and "Confirmed" in text
+    assert "logged 1&times;" in text
     assert "Cached FDC hit" not in text
     assert "“my whites”" in text and "300 g" in text
     assert "usual breakfast" in text and "143 kcal" in text
+    assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text
-    assert "Aliases" not in r.text
+    assert "Nicknames" in r.text and "Saved meals" not in r.text
+    assert "Clear" in r.text
+    r = http.get("/app/foods", params={"q": "breakfast"})
+    assert "Saved meals" in r.text and "usual breakfast" in r.text
+    r = http.get("/app/foods", params={"q": "zzz"})
+    assert "Nothing matches" in r.text
     r = http.get("/app/foods", params={"q": "<script>"})
     assert "<script>" not in r.text and "&lt;script&gt;" in r.text
 
@@ -314,3 +357,17 @@ def test_number_formatting():
     assert web.clock("2026-10-05T08:05:00-04:00") == "8:05 AM"
     assert web.clock("2026-10-05T00:30:00-04:00") == "12:30 AM"
     assert web.clock("2026-10-05T13:00:00-04:00") == "1:00 PM"
+
+
+def test_food_details_show_serving_and_extra_nutrients(http, conn, logged):
+    _, whites, _ = logged
+    conn.execute(
+        "UPDATE foods SET serving_g = 46, serving_desc = '3 tbsp', sodium_mg = 166 WHERE id = ?",
+        (whites,),
+    )
+    sign_in(http)
+    text = http.get("/app/foods").text
+    # 52 kcal per 100 g -> 23.92 kcal in a 46 g serving
+    assert "<b>Per serving</b> (3 tbsp): 24 kcal" in text
+    assert "Sodium 166 mg" in text
+    assert "Confirmed by you" in text and "Not confirmed yet" in text

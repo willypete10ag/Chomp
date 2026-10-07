@@ -65,8 +65,26 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "same-origin",
 }
 
-NUTRIENT_LABELS = {"kcal": "Calories", "protein_g": "Protein", "carbs_g": "Carbs", "fat_g": "Fat"}
-UNITS = {"kcal": "kcal", "protein_g": "g", "carbs_g": "g", "fat_g": "g"}
+NUTRIENT_LABELS = {
+    "kcal": "Calories",
+    "protein_g": "Protein",
+    "carbs_g": "Carbs",
+    "fat_g": "Fat",
+    "fiber_g": "Fiber",
+    "sugar_g": "Sugar",
+    "sodium_mg": "Sodium",
+}
+UNITS = {
+    "kcal": "kcal",
+    "protein_g": "g",
+    "carbs_g": "g",
+    "fat_g": "g",
+    "fiber_g": "g",
+    "sugar_g": "g",
+    "sodium_mg": "mg",
+}
+LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
+MACROS = (("protein_g", "p", "P"), ("carbs_g", "c", "C"), ("fat_g", "f", "F"))
 SOURCES = {"fdc": "USDA", "off": "Open Food Facts", "label": "Label", "manual": "Manual"}
 
 
@@ -123,14 +141,18 @@ def num(value: float | None, places: int = 0) -> str:
 
 
 def amount(key: str, value: float | None) -> str:
-    unit = UNITS.get(key, "")
-    places = logic.DISPLAY_PLACES[key]
-    return f"{num(value, places)} {unit}" if key == "kcal" else f"{num(value, places)}{unit}"
+    return f"{num(value, logic.DISPLAY_PLACES[key])} {UNITS[key]}"
 
 
 def clock(local_iso: str) -> str:
     dt = datetime.fromisoformat(local_iso)
     return f"{dt.hour % 12 or 12}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
+
+
+def long_date(day: date, today: date) -> str:
+    return (
+        day.strftime("%A, %B ") + str(day.day) + (f", {day.year}" if day.year != today.year else "")
+    )
 
 
 def day_title(day: date, today: date) -> str:
@@ -143,16 +165,27 @@ def day_title(day: date, today: date) -> str:
 
 
 def macros_line(n: logic.Nutrients) -> str:
-    return (
-        f'<span class="p">P {num(n["protein_g"], 1)}</span>'
-        f' <span class="c">C {num(n["carbs_g"], 1)}</span>'
-        f' <span class="f">F {num(n["fat_g"], 1)}</span>'
+    """'P 20 C 3.2 F 22' on screen; 'Protein 20 g' and so on for screen readers."""
+    return " ".join(
+        f'<span class="{cls}"><span aria-hidden="true">{letter}</span>'
+        f'<span class="sr">{NUTRIENT_LABELS[key]}</span> {num(n[key], 1)}'
+        f'<span class="sr"> g</span></span>'
+        for key, cls, letter in MACROS
     )
 
 
-def meter(percent: float | None, kind: str) -> str:
+def extras_line(n: logic.Nutrients) -> str:
+    """Fiber, sugar and sodium, where known: 'Fiber 3 g · Sodium 120 mg'."""
+    return " · ".join(
+        f"{NUTRIENT_LABELS[k]} {amount(k, n[k])}" for k in logic.OPTIONAL if n.get(k) is not None
+    )
+
+
+def meter(percent: float | None, kind: str, *, warn_over: bool = False) -> str:
+    """A progress bar. Only warn_over bars turn red past 100% (going over a protein target
+    isn't a mistake)."""
     width = 0.0 if percent is None else max(0.0, min(percent, 100.0))
-    over = " over" if percent is not None and percent > 100 else ""
+    over = " over" if warn_over and percent is not None and percent > 100 else ""
     return (
         f'<svg class="meter" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true">'
         f'<rect class="track" width="100" height="8"/>'
@@ -220,7 +253,7 @@ HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="apple-touch-icon" href="{p}/static/apple-touch-icon.png">
 <link rel="icon" href="{p}/static/icon-192.png">
 <link rel="stylesheet" href="{p}/static/app.css">
-<title>{title}</title></head><body>"""
+<title>{title}</title></head><body{body_class}>"""
 
 NAV = (("today", "", "Today"), ("history", "/history", "History"), ("foods", "/foods", "Foods"))
 
@@ -242,7 +275,12 @@ def render(
             '<button class="link" type="submit">Sign out</button></form></footer>'
         )
     page = (
-        HEAD.format(theme=THEME, p=PREFIX, title=e(f"{title} · Chomp"))
+        HEAD.format(
+            theme=THEME,
+            p=PREFIX,
+            title=e(f"{title} · Chomp"),
+            body_class=' class="has-tabs"' if nav else "",
+        )
         + f"<main>{body}</main>{foot}{nav}</body></html>"
     )
     return HTMLResponse(page, status_code=status, headers=SECURITY_HEADERS)
@@ -292,6 +330,93 @@ def parse_grams(value: str) -> float:
     if not math.isfinite(grams) or grams <= 0 or grams > MAX_GRAMS:
         raise ValueError(f"Grams must be more than 0 and at most {MAX_GRAMS:,}.")
     return grams
+
+
+def int_param(value: str | None) -> int | None:
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
+
+
+def week_strip(day: date, today: date) -> str:
+    """Seven day links around the shown day (never past today), the shown day marked."""
+    end = min(day + timedelta(days=3), today)
+    links = []
+    for d in logic.date_range(end - timedelta(days=6), end):
+        current = ' aria-current="date"' if d == day else ""
+        mark = ' class="is-today"' if d == today else ""
+        links.append(
+            f'<a href="{PREFIX}?date={d.isoformat()}"{current}{mark}'
+            f' aria-label="{e(long_date(d, today))}"><span>{d.strftime("%a")[0]}</span>'
+            f"<b>{d.day}</b></a>"
+        )
+    return f'<nav class="week" aria-label="Nearby days">{"".join(links)}</nav>'
+
+
+def entry_item(x: store.EntryRow, single: bool, error: tuple[int, str, str] | None) -> str:
+    """One logged food. Tapping the row opens its grams editor and a guarded delete.
+
+    In a one-item meal the meal header already carries the calories, so the row leaves them out.
+    """
+    n = logic.round_for_display(x.nutrients)
+    brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
+    kcal = "" if single else f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span>'
+    value, problem, is_open = num(x.grams, 1).replace(",", ""), "", ""
+    if error and error[0] == x.id:
+        value, is_open = error[1], " open"
+        problem = f'<p class="error" role="alert">{e(error[2])}</p>'
+    extras = extras_line(n)
+    return (
+        f'<li id="entry-{x.id}"><details{is_open}><summary>'
+        f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
+        f"{brand}</span>{kcal}</div>"
+        f'<div class="row small muted"><span>{num(x.grams, 1)} g</span>'
+        f"<span>{macros_line(n)}</span></div></summary>"
+        f'<div class="edit">{problem}'
+        + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
+        + f'<form class="inline" method="post" action="{PREFIX}/entries/{x.id}">'
+        f'<label>Grams <input name="grams" inputmode="decimal" required value="{e(value)}">'
+        f'</label><button type="submit">Save</button></form>'
+        + (f'<p class="muted small">{extras}</p>' if extras else "")
+        + '<details class="confirm"><summary>Delete…</summary>'
+        f'<form method="post" action="{PREFIX}/entries/{x.id}/delete">'
+        f'<button class="danger" type="submit">Yes, delete {e(x.name)}</button></form>'
+        "</details></div></details></li>"
+    )
+
+
+def food_item(row) -> str:
+    """A saved food: name (two lines at most), kcal and macros per 100 g; tap for details."""
+    per_100g = store.nutrients_of(row)
+    n = logic.round_for_display(per_100g)
+    meta = []
+    if row["brand"]:
+        meta.append(e(row["brand"]))
+    if row["uses"]:
+        meta.append(f"logged {row['uses']}&times;")
+    if row["verified"]:
+        meta.append('<span class="badge ok">Confirmed</span>')
+    more = [f"<p><b>Name:</b> {e(row['name'])}</p>"]
+    if row["serving_g"]:
+        s = logic.round_for_display(logic.scale(per_100g, row["serving_g"]))
+        desc = row["serving_desc"] or f"{num(row['serving_g'], 1)} g"
+        more.append(
+            f"<p><b>Per serving</b> ({e(desc)}): {num(s['kcal'])} kcal · {macros_line(s)}</p>"
+        )
+    if extras := extras_line(n):
+        more.append(f"<p><b>Per 100 g:</b> {extras}</p>")
+    checked = (
+        "Confirmed by you" if row["verified"] else "Not confirmed yet; check it against the label"
+    )
+    more.append(f"<p><b>Source:</b> {SOURCES[row['source']]} · {checked}</p>")
+    return (
+        f'<li><details><summary><div class="row"><span class="name clamp">{e(row["name"])}</span>'
+        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+        f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+        f"<span>{macros_line(n)}</span></div></summary>"
+        f'<div class="more small">{"".join(more)}</div></details></li>'
+    )
 
 
 MANIFEST = json.dumps(
@@ -354,8 +479,9 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             origin = f"{parts.scheme}://{parts.netloc}"
         return origin == settings.public_url
 
-    def back_to_day(day: date, anchor: str = "") -> RedirectResponse:
-        url = f"{PREFIX}?date={day.isoformat()}" + (f"#{anchor}" if anchor else "")
+    def back_to_day(day: date, anchor: str = "", **params: str | int) -> RedirectResponse:
+        query = urlencode({"date": day.isoformat(), **params})
+        url = f"{PREFIX}?{query}" + (f"#{anchor}" if anchor else "")
         return RedirectResponse(url, status_code=303, headers=SECURITY_HEADERS)
 
     # --- static files (no sign-in: the home-screen installer fetches these) ---
@@ -429,8 +555,9 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
         if not signed_in(request):
             return to_login(request)
         now = today()
+        params = request.query_params
         try:
-            day = logic.parse_local_date(request.query_params.get("date"), tz)
+            day = logic.parse_local_date(params.get("date"), tz)
             if not MIN_YEAR <= day.year <= MAX_YEAR:  # keeps day ± 1 and its bounds in range
                 raise ValueError(day)
         except ValueError:
@@ -446,81 +573,116 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
         progress = logic.progress(totals, targets)
         shown = logic.round_for_display(totals)
 
+        # After an edit: a confirmation, or the rejected value back on its entry
+        flash = ""
+        error: tuple[int, str, str] | None = None
+        if (saved := int_param(params.get("saved"))) is not None:
+            for _, entries in meals:
+                for x in entries:
+                    if x.id == saved:
+                        flash = f"Saved: {x.name} changed to {num(x.grams, 1)} g."
+        elif deleted := params.get("deleted", "")[:120]:
+            flash = f"Deleted {deleted}."
+        elif (failed := int_param(params.get("error"))) is not None:
+            raw = params.get("grams", "")[:20]
+            try:
+                parse_grams(raw)
+            except ValueError as err:
+                error = (failed, raw, str(err))
+
+        page_url = f"{PREFIX}?date={day.isoformat()}"
         prev_day, next_day = day - timedelta(days=1), day + timedelta(days=1)
+        forward = (
+            f'<a class="step" href="{PREFIX}?date={next_day.isoformat()}" aria-label="Next'
+            ' day">&rsaquo;</a>'
+            if day < now
+            else '<span class="step off" aria-hidden="true">&rsaquo;</span>'
+        )
         head = [
             '<header class="daynav">',
             f'<a class="step" href="{PREFIX}?date={prev_day.isoformat()}" aria-label="Previous'
             ' day">&lsaquo;</a>',
-            f"<h1>{e(day_title(day, now))}</h1>",
-            f'<a class="step" href="{PREFIX}?date={next_day.isoformat()}" aria-label="Next'
-            ' day">&rsaquo;</a>'
-            if day < now
-            else '<span class="step"></span>',
+            f'<div class="daytitle"><h1>{e(day_title(day, now))}</h1>'
+            f'<p class="muted small">{e(long_date(day, now))}</p></div>',
+            forward,
             "</header>",
+            week_strip(day, now),
+            f'<div class="jump"><form method="get" action="{PREFIX}">'
+            f'<input type="date" name="date" value="{day.isoformat()}" max="{now.isoformat()}"'
+            ' aria-label="Pick a date" required><button type="submit">Go</button></form>',
+            f'<a href="{PREFIX}">Back to today</a>' if day != now else "",
+            "</div>",
         ]
-        if day != now:
-            head.append(f'<p class="center"><a href="{PREFIX}">Jump to today</a></p>')
+        if flash:
+            head.append(f'<p class="flash" role="status">{e(flash)}</p>')
 
-        rows = []
-        for key in logic.CORE:
+        summary = [
+            f'<section class="card summary" aria-label="Totals for {e(day_title(day, now))}">'
+        ]
+        kcal = progress.get("kcal")
+        summary.append(
+            f'<p class="hero"><span class="big kcal">{num(shown["kcal"])}</span> kcal logged</p>'
+        )
+        if kcal:
+            left = round(kcal["remaining"])
+            state = (
+                f"{num(left)} remaining"
+                if left >= 0
+                else f'<span class="warn">{num(-left)} over</span>'
+            )
+            summary.append(
+                meter(kcal["percent"], "kcal", warn_over=True)
+                + f'<p class="muted small">{state} · Goal {num(kcal["target"])}</p>'
+            )
+        macros = []
+        for key, cls, _ in MACROS:
             p = progress.get(key)
-            eaten = amount(key, shown[key])
+            eaten = num(shown[key], logic.DISPLAY_PLACES[key])
             if p:
-                left = p["remaining"]
-                note = (
-                    f"{amount(key, abs(round(left, logic.DISPLAY_PLACES[key])))}"
-                    f" {'left' if left >= 0 else 'over'}"
-                )
-                value = f"{eaten} <span class='muted'>/ {amount(key, p['target'])}</span>"
-                rows.append(
-                    f'<div class="stat {key}"><div class="row"><span>{NUTRIENT_LABELS[key]}'
-                    f"</span><span>{value}</span></div>{meter(p['percent'], key)}"
+                left = round(p["remaining"], logic.DISPLAY_PLACES[key])
+                note = f"{amount(key, abs(left))} {'left' if left >= 0 else 'over'}"
+                macros.append(
+                    f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                    f"<div><strong>{eaten}</strong>"
+                    f' <span class="muted target">/ {amount(key, p["target"])}</span></div>'
+                    f"{meter(p['percent'], key)}"
                     f'<div class="muted small">{note}</div></div>'
                 )
             else:
-                rows.append(
-                    f'<div class="stat {key}"><div class="row"><span>{NUTRIENT_LABELS[key]}'
-                    f"</span><span>{eaten}</span></div></div>"
+                macros.append(
+                    f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                    f"<div><strong>{eaten}</strong> g</div></div>"
                 )
-        summary = f'<section class="card summary">{"".join(rows)}'
-        if not any(progress.values()):
-            summary += (
+        summary.append(f'<div class="macros">{"".join(macros)}</div>')
+        if extras := extras_line(shown):
+            summary.append(f'<p class="muted small extras">{extras}</p>')
+        if not progress:
+            summary.append(
                 '<p class="muted small">No daily targets yet. Tell Claude something like'
                 " “my protein target is 180 g”.</p>"
             )
-        summary += "</section>"
+        summary.append("</section>")
 
         cards = []
         for meal, entries in meals:
+            single = len(entries) == 1
             meal_totals = logic.round_for_display(logic.sum_nutrients(x.nutrients for x in entries))
-            items = []
-            for x in entries:
-                n = logic.round_for_display(x.nutrients)
-                brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
-                items.append(
-                    f'<li id="entry-{x.id}"><div class="row"><span class="name">{e(x.name)}'
-                    f'{brand}</span><span class="kcal">{num(n["kcal"])}</span></div>'
-                    f'<div class="row small muted"><span>{num(x.grams, 1)} g</span>'
-                    f"<span>{macros_line(n)}</span></div>"
-                    f"<details><summary>Edit</summary>"
-                    f'<form class="inline" method="post" action="{PREFIX}/entries/{x.id}">'
-                    f'<label>Grams <input name="grams" inputmode="decimal" required'
-                    f' value="{num(x.grams, 1).replace(",", "")}"></label>'
-                    f'<button type="submit">Save</button></form>'
-                    f'<form method="post" action="{PREFIX}/entries/{x.id}/delete">'
-                    f'<button class="danger" type="submit">Delete {e(x.name)}</button></form>'
-                    f"</details></li>"
-                )
-            label = meal["label"] or "Meal"
+            items = "".join(entry_item(x, single, error) for x in entries)
             when = clock(logic.local_iso(meal["eaten_at"], tz))
+            label = meal["label"] or ""
+            label_html = f' <span class="label">{e(label[:1].upper() + label[1:])}</span>'
             note = f'<p class="muted small">{e(meal["note"])}</p>' if meal["note"] else ""
+            total = (
+                ""
+                if single
+                else '<div class="row small muted total"><span>Meal total</span>'
+                f"<span>{macros_line(meal_totals)}</span></div>"
+            )
             cards.append(
                 f'<section class="card meal" id="meal-{meal["id"]}"><div class="row mealhead">'
-                f"<h2>{e(label.capitalize())} <span class='muted small'>{when}</span></h2>"
+                f"<h2>{when}{label_html if label else ''}</h2>"
                 f'<span class="kcal">{num(meal_totals["kcal"])} kcal</span></div>{note}'
-                f'<ul class="entries">{"".join(items)}</ul>'
-                f'<div class="row small muted total"><span>Meal total</span>'
-                f"<span>{macros_line(meal_totals)}</span></div></section>"
+                f'<ul class="entries">{items}</ul>{total}</section>'
             )
         if not cards:
             cards.append(
@@ -528,9 +690,14 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
                 '<p class="muted small">Tell Claude what you ate and it shows up here.</p>'
                 "</section>"
             )
+        loaded = clock(datetime.now(ZoneInfo(tz)).isoformat())
+        cards.append(
+            f'<p class="fresh muted small">Page loaded at {loaded}.'
+            f' <a href="{e(page_url)}">Refresh</a></p>'
+        )
         return render(
             day_title(day, now),
-            "".join(head) + summary + "".join(cards),
+            "".join(head) + "".join(summary) + "".join(cards),
             "today",
             signed_in=provider is not None,
         )
@@ -544,18 +711,22 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
         if not same_origin(request):
             return message("Not allowed", "Edit entries from the dashboard.", 403)
         form = await request.form()
-        try:
-            grams = parse_grams(str(form.get("grams", "")).replace(",", "").strip())
-        except ValueError as err:
-            return message("Couldn't save", str(err), 400, signed_in=True)
+        raw = str(form.get("grams", "")).replace(",", "").strip()
+        entry_id = request.path_params["entry_id"]
+        anchor = f"entry-{entry_id}"
         with connect() as conn:
             try:
-                entry = store.update_entry(conn, request.path_params["entry_id"], grams, None)
+                entry = store.get_entry(conn, entry_id)
+                day = logic.local_date(store.get_meal(conn, entry.meal_id)["eaten_at"], tz)
             except store.NotFound:
                 return message("Not found", "That entry no longer exists.", 404, signed_in=True)
-            eaten_at = store.get_meal(conn, entry.meal_id)["eaten_at"]
-        log.info("dashboard: updated entry %d", entry.id)
-        return back_to_day(logic.local_date(eaten_at, tz), f"entry-{entry.id}")
+            try:
+                grams = parse_grams(raw)
+            except ValueError:
+                return back_to_day(day, anchor, error=entry_id, grams=raw[:20])
+            store.update_entry(conn, entry_id, grams, None)
+        log.info("dashboard: updated entry %d", entry_id)
+        return back_to_day(day, anchor, saved=entry_id)
 
     @server.custom_route(PREFIX + "/entries/{entry_id:int}/delete", methods=["POST"])
     async def remove_entry(request: Request) -> Response:
@@ -567,11 +738,12 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             try:
                 entry = store.get_entry(conn, request.path_params["entry_id"])
                 eaten_at = store.get_meal(conn, entry.meal_id)["eaten_at"]
-                store.delete_entry(conn, entry.id)
+                _, meal_gone = store.delete_entry(conn, entry.id)
             except store.NotFound:
                 return message("Not found", "That entry no longer exists.", 404, signed_in=True)
         log.info("dashboard: deleted entry %d", entry.id)
-        return back_to_day(logic.local_date(eaten_at, tz))
+        anchor = "" if meal_gone else f"meal-{entry.meal_id}"
+        return back_to_day(logic.local_date(eaten_at, tz), anchor, deleted=entry.name)
 
     # --- History ---
 
@@ -643,7 +815,7 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             )
         return render("History", "".join(parts), "history", signed_in=provider is not None)
 
-    # --- Foods, aliases and templates ---
+    # --- Foods, nicknames and templates ---
 
     @server.custom_route(f"{PREFIX}/foods", methods=["GET"])
     async def foods(request: Request) -> Response:
@@ -651,65 +823,35 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
             return to_login(request)
         q = request.query_params.get("q", "").strip()[:100]
         with connect() as conn:
-            rows = (
-                store.search_foods(conn, q, FOODS_LIMIT)
-                if q
-                else store.list_used_foods(conn, FOODS_LIMIT)
-            )
-            aliases = store.list_aliases(conn)
-            templates = store.list_templates(conn)
+            if q:
+                rows = store.search_foods(conn, q, FOODS_LIMIT)
+                nicknames = store.search_aliases(conn, q, FOODS_LIMIT)
+                names = set(store.templates_matching(conn, q))
+                templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
+            else:
+                rows = store.list_used_foods(conn, FOODS_LIMIT)
+                nicknames = store.list_aliases(conn)
+                templates = store.list_templates(conn)
 
+        clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
         parts = [
             "<h1>Foods</h1>",
             f'<form class="search" method="get" action="{PREFIX}/foods">'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Search your foods"'
-            ' aria-label="Search your foods"></form>',
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods, nicknames, meals"'
+            ' aria-label="Search foods, nicknames and saved meals">'
+            f'<button type="submit">Search</button>{clear}</form>',
         ]
-        items = []
-        for row in rows:
-            n = logic.round_for_display(store.nutrients_of(row))
-            badges = f'<span class="badge">{SOURCES[row["source"]]}</span>'
-            if row["verified"]:
-                badges += ' <span class="badge ok">Verified</span>'
-            serving = (
-                f" · serving {e(row['serving_desc'] or num(row['serving_g'], 1) + ' g')}"
-                if row["serving_g"]
-                else ""
-            )
-            brand = f' <span class="muted">{e(row["brand"])}</span>' if row["brand"] else ""
-            items.append(
-                f'<li><div class="row"><span class="name">{e(row["name"])}{brand}</span>'
-                f'<span class="kcal">{num(n["kcal"])}</span></div>'
-                f'<div class="row small muted"><span>{badges}</span>'
-                f"<span>{macros_line(n)}</span></div>"
-                f'<div class="small muted">per 100 g{serving}</div></li>'
-            )
-        if items:
-            heading = f"Matches for “{e(q)}”" if q else "Your foods"
-            parts.append(
-                f'<section class="card"><h2>{heading}</h2><p class="muted small">kcal'
-                f' per 100 g</p><ul class="entries">{"".join(items)}</ul></section>'
-            )
-        else:
-            text = f"No saved foods match “{e(q)}”." if q else "No saved foods yet."
-            parts.append(f'<section class="card empty"><p>{text}</p></section>')
+        if q and not (rows or nicknames or templates):
+            parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')
 
-        if aliases and not q:
-            lis = "".join(
-                f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted">'
-                f"{e(a['name'])}{grams_note(a['default_grams'])}</span></li>"
-                for a in aliases
-            )
-            parts.append(
-                f'<section class="card"><h2>Aliases</h2><ul class="plain">{lis}</ul></section>'
-            )
-        if templates and not q:
+        # Reusable meals and nicknames first, so they're reachable without scrolling every food
+        if templates:
             cards = []
             for t, t_items in templates:
                 snaps = [logic.snapshot(store.nutrients_of(i), i["grams"]) for i in t_items]
                 t_totals = logic.round_for_display(logic.sum_nutrients(snaps))
                 lis = "".join(
-                    f'<li class="row small"><span>{e(i["name"])}</span>'
+                    f'<li class="row small"><span class="name">{e(i["name"])}</span>'
                     f'<span class="muted">{num(i["grams"], 1)} g</span></li>'
                     for i in t_items
                 )
@@ -719,5 +861,24 @@ def add_routes(server: MCPServer, settings: Settings, provider: ChompAuthProvide
                     f'<ul class="plain">{lis}</ul><div class="small muted">'
                     f"{macros_line(t_totals)}</div></div>"
                 )
-            parts.append(f'<section class="card"><h2>Meal templates</h2>{"".join(cards)}</section>')
+            parts.append(f'<section class="card"><h2>Saved meals</h2>{"".join(cards)}</section>')
+        if nicknames:
+            lis = "".join(
+                f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted name">'
+                f"{e(a['name'])}{grams_note(a['default_grams'])}</span></li>"
+                for a in nicknames
+            )
+            parts.append(
+                f'<section class="card"><h2>Nicknames</h2><ul class="plain">{lis}</ul></section>'
+            )
+        if rows:
+            heading = "Foods" if q else "Your foods"
+            note = "most logged first, " if not q else ""
+            parts.append(
+                f'<section class="card"><div class="row"><h2>{heading}</h2>'
+                f'<span class="muted small">{note}per 100 g</span></div>'
+                f'<ul class="entries">{"".join(food_item(r) for r in rows)}</ul></section>'
+            )
+        elif not q:
+            parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
         return render("Foods", "".join(parts), "foods", signed_in=provider is not None)
