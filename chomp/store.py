@@ -283,6 +283,15 @@ def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list
     return row, items
 
 
+def templates_matching(conn: sqlite3.Connection, query: str) -> list[str]:
+    """Names of meal templates the phrase names ("protein shake", "my usual breakfast")."""
+    return [
+        r["name"]
+        for r in conn.execute("SELECT name FROM meal_templates ORDER BY name")
+        if text.match_score(query, r["name"]) == 1 or text.match_score(r["name"], query) == 1
+    ]
+
+
 def list_aliases(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT a.alias, a.default_grams, a.food_id, f.name, f.brand"
