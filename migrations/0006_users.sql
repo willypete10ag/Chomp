@@ -103,8 +103,8 @@ CREATE TABLE undo_actions_new (
     used        INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL            -- unix seconds
 );
-INSERT INTO undo_actions_new (id, user_id, summary, before, after, used, created_at)
-    SELECT id, 1, summary, before, after, used, created_at FROM undo_actions;
+-- Pending undos are not carried over: their meal snapshots lack user_id, so they could only
+-- fail. Undo is offered for 30 minutes, so this loses at most the last few edits' Undo button.
 DROP TABLE undo_actions;
 ALTER TABLE undo_actions_new RENAME TO undo_actions;
 

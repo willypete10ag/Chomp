@@ -95,8 +95,10 @@ def test_migration_gives_existing_data_to_the_owner(tmp_path):
         assert store.get_meal(conn, 7)["label"] == "lunch"
         assert [a["alias"] for a in store.list_aliases(conn)] == ["my eggs"]
         assert store.get_targets(conn)["kcal"] == 2100
-        for table in ("oauth_tokens", "web_sessions", "undo_actions"):
+        for table in ("oauth_tokens", "web_sessions"):
             assert [r[0] for r in conn.execute(f"SELECT user_id FROM {table}")] == [1]
+        # Old undo snapshots lack user_id, so pending undos are dropped
+        assert conn.execute("SELECT count(*) FROM undo_actions").fetchone()[0] == 0
         assert [tuple(r) for r in conn.execute("SELECT id, name FROM users")] == [(1, "owner")]
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [tuple(r) for r in conn.execute("SELECT user_id, kcal FROM daily_totals")] == [
@@ -134,6 +136,27 @@ def test_passwords_are_hashed_unique_and_identify_the_user(conn):
         users.add_user(conn, "sam", "yet another password", PASSWORD)
     with pytest.raises(users.UserError, match="at least"):
         users.add_user(conn, "Third", "short", PASSWORD)
+
+
+def test_server_refuses_an_owner_password_another_user_has(settings, conn, monkeypatch):
+    import dataclasses
+
+    from chomp import server
+
+    add_her(conn)
+    assert users.password_clash(conn, PASSWORD) is None
+    assert users.password_clash(conn, HER_PASSWORD) == "Sam"
+    clash = dataclasses.replace(
+        settings,
+        host="0.0.0.0",
+        public_url="https://chomp.example.com",
+        auth_password=HER_PASSWORD,
+        oauth_client_id=CLIENT_ID,
+        oauth_client_secret=CLIENT_SECRET,
+    )
+    monkeypatch.setattr("chomp.config.Settings.from_env", lambda: clash)
+    with pytest.raises(SystemExit, match="Sam's password"):
+        server.main()
 
 
 def test_new_password_signs_the_user_out_everywhere(conn):

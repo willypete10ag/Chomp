@@ -993,6 +993,11 @@ def main() -> None:
     auth.check_settings(settings)  # fail on bad auth config before touching the database
     with closing(db.connect(settings.db_path)) as conn:
         version = db.migrate(conn, settings.schema_path, settings.migrations_dir)
+        if settings.public_url and (name := users.password_clash(conn, settings.auth_password)):
+            raise SystemExit(
+                f"AUTH_PASSWORD is also {name}'s password; change one of them"
+                f" (chomp user password {name})"
+            )
     log.info("database ready at schema version %d", version)
     if not settings.fdc_api_key:
         log.warning("FDC_API_KEY is not set; search_food will only find saved foods")

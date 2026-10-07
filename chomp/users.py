@@ -63,6 +63,18 @@ def find_by_password(conn: sqlite3.Connection, password: str, owner_password: st
     return None
 
 
+def password_clash(conn: sqlite3.Connection, owner_password: str) -> str | None:
+    """The name of a user whose password is also AUTH_PASSWORD, if any. That password would
+    sign them in as the owner, so the server refuses to start until one of them changes."""
+    rows = conn.execute(
+        "SELECT name, password_hash FROM users WHERE password_hash IS NOT NULL ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        if owner_password and verify_password(owner_password, row["password_hash"]):
+            return row["name"]
+    return None
+
+
 def name_of(conn: sqlite3.Connection, user_id: int) -> str | None:
     row = conn.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
     return row["name"] if row else None

@@ -56,7 +56,7 @@ Each person has their own log (#46, migration 0006): `meals` (and so entries), `
 (use counts are per person). User 1 is the owner, holds everything logged before users
 existed, and signs in with `AUTH_PASSWORD`. Others are added with `chomp user add NAME` and
 have a scrypt-hashed password in `users`. A password alone identifies the person (no two
-users may share one), so the consent page and dashboard sign-in stay a single password box;
+users may share one; the server won't start if `AUTH_PASSWORD` matches another user's), so the consent page and dashboard sign-in stay a single password box;
 the sign-in's user becomes the OAuth token's subject or the dashboard session's user.
 `store.py` reads the user from the connection (`db.connect(path, user_id)`) and treats
 another user's meal or entry as not found. The static `BEARER_TOKEN` is the owner's; in
