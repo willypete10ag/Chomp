@@ -140,10 +140,13 @@ This enables OAuth authentication; ChatGPT voice-mode tool support is not verifi
 ### 7. Open the dashboard
 
 Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
-meals against your targets (tap an item to fix its grams or delete it; the arrows, the row of
-days and the date box move between days), 7/30/90-day history charts, and your saved meals,
-nicknames and foods. A sign-in lasts 30 days;
-the same five-wrong-passwords lockout applies.
+meals against your targets (the arrows, the row of days and the date box move between days),
+7/30/90-day history charts, and your saved meals, nicknames and foods. It works without
+Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
+set), tapping an item gives a grams slider, a move to another meal and delete, **Edit meal…**
+changes a meal's name, time or date or combines it with another, **Edit goals** sets your
+daily targets, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
+five-wrong-passwords lockout applies.
 
 On a phone, add it to the home screen so it opens like an app:
 

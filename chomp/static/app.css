@@ -83,7 +83,30 @@ ul { margin: 0; padding: 0; list-style: none; }
 .flash {
   background: var(--flash); border: 1px solid var(--accent); border-radius: 10px;
   padding: .6rem .8rem; margin: 0 0 1rem;
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
 }
+.flash form { margin: 0; flex-shrink: 0; }
+.flash .undo {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  font-weight: 600; padding: .3rem .9rem; min-height: 2.5rem;
+}
+.flash.bad { border-color: var(--over); color: var(--over); }
+/* Confirmations float above the tab bar, so they show wherever the page lands */
+.toast {
+  position: fixed; left: 1rem; right: 1rem; z-index: 10; max-width: 38rem; margin: 0 auto;
+  bottom: calc(4.5rem + env(safe-area-inset-bottom)); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
+}
+.toast.bad { background: var(--card); }
+.toast > span { flex: 1; }
+.dismiss {
+  background: none; color: var(--muted); padding: 0 .25rem; min-height: 2.5rem; font-size: 1.4rem;
+}
+body.has-tabs:has(.toast) { padding-bottom: calc(10rem + env(safe-area-inset-bottom)); }
+[hidden] { display: none !important; }
+/* Sliders, quick picks and live previews need the script; without it the boxes still work */
+.js-only { display: none !important; }
+.js .js-only { display: revert !important; }
+.js .chips.js-only { display: flex !important; }
 .fresh { text-align: center; }
 
 /* Day header, nearby days and date picker */
@@ -157,8 +180,6 @@ details form { margin: .4rem 0; }
 .confirm summary {
   color: var(--over); cursor: pointer; font-size: .85rem; padding: .5rem 0; display: inline-block;
 }
-.inline { display: flex; gap: .5rem; align-items: end; }
-.inline label { display: flex; flex-direction: column; font-size: .85rem; color: var(--muted); }
 .plain li { padding: .3rem 0; }
 .days li + li { border-top: 1px solid var(--line); }
 .days a { padding: .6rem 0; color: inherit; text-decoration: none; }
@@ -182,11 +203,83 @@ h2.section small { font-size: .8rem; font-weight: 400; color: var(--muted); floa
 .entries li.unconfirmed { border-left: 3px solid var(--carbs); padding-left: .6rem; }
 
 /* Forms */
+.stack { display: grid; gap: .75rem; margin: .4rem 0; }
+.stack label, .amount label {
+  display: grid; gap: .3rem; font-size: .85rem; color: var(--muted);
+}
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.new-meal { display: grid; gap: .75rem; }
+.amount { display: grid; gap: .35rem; }
+.amount .field { display: flex; align-items: center; gap: .4rem; }
+.amount .field input {
+  width: 7.5rem; font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.amount .unit { color: var(--muted); font-size: .95rem; }
+input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 2.25rem; padding: 0;
+  margin: 0; border: 0; background: transparent; min-height: 0; accent-color: var(--accent);
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px; background: var(--track);
+}
+input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--track); }
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 28px; height: 28px; border-radius: 50%; margin-top: -11px;
+  background: var(--accent); border: 3px solid var(--card); box-shadow: 0 1px 4px rgb(0 0 0 / .3);
+}
+input[type=range]::-moz-range-thumb {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+  border: 3px solid var(--card); box-shadow: 0 1px 4px rgb(0 0 0 / .3);
+}
+.goal.p input[type=range]::-webkit-slider-thumb { background: var(--protein); }
+.goal.c input[type=range]::-webkit-slider-thumb { background: var(--carbs); }
+.goal.f input[type=range]::-webkit-slider-thumb { background: var(--fat); }
+.goal.p input[type=range]::-moz-range-thumb { background: var(--protein); }
+.goal.c input[type=range]::-moz-range-thumb { background: var(--carbs); }
+.goal.f input[type=range]::-moz-range-thumb { background: var(--fat); }
+.goal label { font-weight: 600; font-size: .95rem; color: var(--text); }
+.goal.kcal label { color: var(--kcal); } .goal.p label { color: var(--protein); }
+.goal.c label { color: var(--carbs-text); } .goal.f label { color: var(--fat); }
+.goal + .goal { border-top: 1px solid var(--line); padding-top: .75rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.chip {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
+  padding: .3rem .8rem; min-height: 2.25rem; font-size: .85rem;
+}
+.chip:active { background: var(--track); }
+.preview {
+  margin: 0; padding: .5rem .7rem; border-radius: 10px; background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+.splitbar { display: block; width: 100%; height: 10px; border-radius: 5px; overflow: hidden; }
+.split p { margin: .4rem 0 0; }
+select {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
+}
+.button {
+  display: inline-flex; align-items: center; justify-content: center; text-decoration: none;
+  border-radius: 10px; padding: .55rem 1rem; min-height: 2.75rem; font-weight: 600;
+  background: var(--accent); color: var(--on-accent);
+}
+.button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.button.add, .button.wide { display: flex; width: 100%; margin-bottom: 1rem; }
+.mealtools {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .5rem; border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .6rem;
+}
+.mealtools .button { min-height: 2.5rem; padding: .35rem .8rem; font-size: .9rem; }
+.mealtools > details { width: 100%; }
+.mealtools > details:not([open]) { width: auto; }
+details.sub > summary {
+  color: var(--accent); cursor: pointer; font-size: .9rem; padding: .5rem 0; display: inline-block;
+}
+details.sub[open] > summary { font-weight: 600; }
+.edit > details, .more details { margin-top: .25rem; }
 input {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
   border-radius: 10px; padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
 }
-.inline input { width: 7rem; }
 button {
   font: inherit; border: 0; border-radius: 10px; padding: .55rem 1rem; min-height: 2.75rem;
   background: var(--accent); color: var(--on-accent); cursor: pointer;

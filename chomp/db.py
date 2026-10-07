@@ -34,7 +34,11 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """Run a block as one write transaction (connections are in autocommit mode)."""
+    """Run a block as one write transaction (connections are in autocommit mode). Inside
+    another transaction it joins that one, so callers can make several writes atomic."""
+    if conn.in_transaction:
+        yield conn
+        return
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
