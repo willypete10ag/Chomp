@@ -48,6 +48,19 @@
     problem.hidden = false;
   }
 
+  // ZXing gives UPC-E in its 8-digit compressed form; Chomp's lookups (and the server, which
+  // reads 8 digits as EAN-8) need the UPC-A it stands for
+  function upcA(upce) {
+    var d = upce.substr(1, 6);
+    var last = d.charAt(5);
+    var body;
+    if (last <= "2") body = d.substr(0, 2) + last + "0000" + d.substr(2, 3);
+    else if (last === "3") body = d.substr(0, 3) + "00000" + d.substr(3, 2);
+    else if (last === "4") body = d.substr(0, 4) + "00000" + d.charAt(4);
+    else body = d.substr(0, 5) + "0000" + last;
+    return upce.charAt(0) + body + upce.charAt(7);
+  }
+
   function found(code) {
     stop();
     input.value = code;
@@ -66,7 +79,9 @@
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     try {
       var source = new Z.HTMLCanvasElementLuminanceSource(canvas);
-      return reader.decodeWithState(new Z.BinaryBitmap(new Z.HybridBinarizer(source))).getText();
+      var result = reader.decodeWithState(new Z.BinaryBitmap(new Z.HybridBinarizer(source)));
+      var text = result.getText();
+      return result.getBarcodeFormat() === Z.BarcodeFormat.UPC_E ? upcA(text) : text;
     } catch (err) {
       return null; // nothing readable in this frame
     } finally {

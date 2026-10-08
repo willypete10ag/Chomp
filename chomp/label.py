@@ -51,7 +51,10 @@ def available() -> bool:
 def _prepare(data: bytes) -> Image.Image:
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data))  # reads only the header
+        # Pillow only refuses images over twice MAX_IMAGE_PIXELS, so check before decoding
+        if img.width * img.height > MAX_PIXELS:
+            raise LabelError("That photo is too large. Try a smaller one.")
         img.load()
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as e:
         raise LabelError("That file isn't a photo Chomp can read. Try a JPEG or PNG.") from e

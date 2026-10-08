@@ -318,3 +318,14 @@ def test_foods_filters_narrow_and_reorder(app, conn):
     assert "Oat bran" in page and "Oat milk" not in page
     assert '<input type="hidden" name="view" value="confirmed">' in page
     assert "Oat milk" in app.get("/app/foods?view=bogus").text  # unknown view: everything
+
+
+def test_read_photo_refuses_huge_images_before_decoding():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("1", (8000, 8000)).save(buf, format="PNG")  # 64 M pixels, a tiny file
+    with pytest.raises(label.LabelError, match="too large"):
+        label.read_photo(buf.getvalue())
