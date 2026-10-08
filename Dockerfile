@@ -13,6 +13,10 @@ COPY chomp ./chomp
 RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
+# tesseract reads nutrition label photos on the dashboard's New food page (#59).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
 # Fixed uid/gid so the backup folder on the host can be chowned to match (see README).
 RUN groupadd --system --gid 10001 chomp \
     && useradd --system --uid 10001 --gid chomp --home-dir /app --no-create-home chomp \

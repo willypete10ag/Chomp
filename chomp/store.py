@@ -135,8 +135,12 @@ def save_label_food(
     per_100g: logic.Nutrients,
     serving_g: float,
     serving_desc: str | None,
+    source: str = "label",
+    verified: bool = True,
 ) -> tuple[sqlite3.Row, int | None]:
-    """Insert a food read from a package label (verified: it is the user's own label).
+    """Insert a food read from a package label (verified: it is the user's own label), or,
+    with source 'manual', one typed in by hand. The dashboard (#59) saves label foods
+    unverified unless the person ticked every value, and typed-in foods always unverified.
 
     If another food already holds the barcode, the barcode moves to the new food so future
     scans find the label values; the old food keeps its id for past entries. Returns the
@@ -150,28 +154,47 @@ def save_label_food(
             conn.execute("UPDATE foods SET gtin = NULL WHERE id = ?", (previous,))
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, verified, {NUTRIENT_COLS}, serving_g,"
-            f" serving_desc) VALUES (?, ?, ?, 'label', 1, {NUTRIENT_MARKS}, ?, ?)",
-            (name, brand, gtin, *(n[k] for k in logic.NUTRIENTS), serving_g, serving_desc),
+            f" serving_desc) VALUES (?, ?, ?, ?, ?, {NUTRIENT_MARKS}, ?, ?)",
+            (
+                name,
+                brand,
+                gtin,
+                source,
+                int(verified),
+                *(n[k] for k in logic.NUTRIENTS),
+                serving_g,
+                serving_desc,
+            ),
         )
         return get_food(conn, cur.lastrowid), previous
 
 
+FOOD_DETAILS = ("name", "brand", "serving_g", "serving_desc")
+
+
 def confirm_food(
-    conn: sqlite3.Connection, food_id: int, corrections: logic.Nutrients
+    conn: sqlite3.Connection,
+    food_id: int,
+    corrections: logic.Nutrients,
+    details: Mapping[str, str | float | None] | None = None,
 ) -> tuple[sqlite3.Row, list[str]]:
-    """Mark a food verified, applying per-100 g corrections for the keys given.
+    """Mark a food verified, applying per-100 g corrections for the keys given, and any
+    `details` (name, brand, serving_g, serving_desc) given.
 
     Returns the updated row and the names of nutrients that changed. Past entries keep
     their snapshots.
     """
+    details = dict(details or {})
+    if unknown := set(details) - set(FOOD_DETAILS):
+        raise ValueError(f"unknown food details: {sorted(unknown)}")
     current = nutrients_of(get_food(conn, food_id))
     merged = logic.round_nutrients({**current, **corrections})
     changed = [k for k in logic.NUTRIENTS if merged[k] != current[k]]
-    sets = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
+    sets = ", ".join(f"{k} = ?" for k in (*logic.NUTRIENTS, *details))
     with transaction(conn):
         conn.execute(
             f"UPDATE foods SET verified = 1, updated_at = datetime('now'), {sets} WHERE id = ?",
-            (*(merged[k] for k in logic.NUTRIENTS), food_id),
+            (*(merged[k] for k in logic.NUTRIENTS), *details.values(), food_id),
         )
     return get_food(conn, food_id), changed
 

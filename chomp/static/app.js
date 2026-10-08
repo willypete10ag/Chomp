@@ -161,5 +161,30 @@
     sync();
   });
 
+  // New food from a label photo: count the ticked values and say whether saving now gives
+  // a confirmed food (every filled-in value ticked) or an unconfirmed one
+  document.querySelectorAll("form[data-ticks]").forEach(function (form) {
+    var count = form.querySelector("[data-tick-count]");
+    var save = form.querySelector("[data-save]");
+    var sync = function () {
+      var filled = 0;
+      var ticked = 0;
+      form.querySelectorAll(".vrow").forEach(function (row) {
+        var box = row.querySelector("input[type=number]");
+        var tick = row.querySelector("input[type=checkbox]");
+        if (!box || !tick || box.value.trim() === "") return;
+        filled += 1;
+        if (tick.checked) ticked += 1;
+      });
+      var all = filled > 0 && ticked === filled;
+      count.textContent = ticked + " of " + filled + " values ticked" +
+        (all ? ". Saves as confirmed." : ". Tick every value to save it as confirmed.");
+      save.textContent = all ? "Save as confirmed" : "Save as unconfirmed";
+    };
+    form.addEventListener("input", sync);
+    form.addEventListener("change", sync);
+    sync();
+  });
+
   document.querySelectorAll("form").forEach(changed);
 })();

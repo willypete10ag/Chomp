@@ -4,8 +4,9 @@ Server-rendered HTML on the same Starlette app as /mcp: charts are inline SVG an
 edit (log food, change grams, move an entry, edit or combine meals, rename a food, set
 goals, undo) is a plain form post that goes through store.py. A small script served from
 here (static/app.js, no third-party code) adds sliders, quick picks and live previews; the
-pages work without it. Phones can add it to the home screen (web app manifest at
-/app/manifest.webmanifest).
+pages work without it. New food (#59) also loads static/scan.js and the vendored ZXing
+reader for camera barcode scans, and reads label photos with tesseract (chomp/label.py).
+Phones can add it to the home screen (web app manifest at /app/manifest.webmanifest).
 
 Undo: each edit stores the rows it touched before and after (undo_actions, migration 0005)
 and the next page offers Undo, which only applies while those rows are unchanged.
@@ -37,15 +38,20 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
+import anyio
 from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from chomp import db, logic, store, users
+from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
+from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.sources import SourceError
+from chomp.sources import gtin as gtins
 from chomp.sources.fdc import FDCClient
+from chomp.sources.off import OFFClient
 
 log = logging.getLogger("chomp.web")
 
@@ -62,21 +68,28 @@ UNDO_SHOW_S = 30 * 60  # how long a confirmation keeps its Undo button
 TIME_RE = re.compile(r"(\d{2}):(\d{2})(:\d{2})?")
 MIN_YEAR, MAX_YEAR = 1900, 2999
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-ICONS = {
+# Served as is from static/. zxing.min.js is the vendored ZXing barcode reader
+# (@zxing/library 0.21.3, Apache-2.0, LICENSE-zxing.txt), used by scan.js on New food.
+STATIC = {
     "icon-192.png": "image/png",
     "icon-512.png": "image/png",
     "apple-touch-icon.png": "image/png",
+    "scan.js": "text/javascript",
+    "zxing.min.js": "text/javascript",
 }
 THEME = "#1f7a4d"
 # In the stylesheet and script URLs, so a phone's cached copy is replaced as soon as they change
 CSS_VERSION = hashlib.sha256((STATIC_DIR / "app.css").read_bytes()).hexdigest()[:10]
 JS_VERSION = hashlib.sha256((STATIC_DIR / "app.js").read_bytes()).hexdigest()[:10]
+STATIC_VERSIONS = {
+    name: hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:10] for name in STATIC
+}
 
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self';"
-        " manifest-src 'self';"
+        " manifest-src 'self'; media-src 'self' blob: mediastream:;"
         " form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     ),
     "X-Frame-Options": "DENY",
@@ -333,7 +346,7 @@ HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="apple-touch-icon" href="{p}/static/apple-touch-icon.png">
 <link rel="icon" href="{p}/static/icon-192.png">
 <link rel="stylesheet" href="{p}/static/app.css?v={css_version}">
-<script src="{p}/static/app.js?v={js_version}" defer></script>
+<script src="{p}/static/app.js?v={js_version}" defer></script>{scripts}
 <title>{title}</title></head><body{body_class}>"""
 
 NAV = (("today", "", "Today"), ("history", "/history", "History"), ("foods", "/foods", "Foods"))
@@ -347,7 +360,9 @@ def render(
     signed_in: bool = False,
     user: str = "",
     status: int = 200,
+    scripts: tuple[str, ...] = (),
 ) -> HTMLResponse:
+    """A dashboard page. `scripts` are extra static scripts (STATIC) this page loads."""
     nav = ""
     if active is not None:
         links = "".join(
@@ -370,6 +385,10 @@ def render(
             js_version=JS_VERSION,
             title=e(f"{title} · Chomp"),
             body_class=' class="has-tabs"' if nav else "",
+            scripts="".join(
+                f'<script src="{PREFIX}/static/{name}?v={STATIC_VERSIONS[name]}" defer></script>'
+                for name in scripts
+            ),
         )
         + f"<main>{body}</main>{foot}{nav}</body></html>"
     )
@@ -709,6 +728,171 @@ PROBLEMS = {
     "name": "A food needs a name.",
 }
 
+# --- New food (#59): barcode scan, label photo, or typed in; all fill the same form ----------
+
+# The values a new food's form asks for, per serving, in the order labels print them
+FORM_MAIN = ("kcal", "fat_g", "carbs_g", "fiber_g", "sugar_g", "protein_g", "sodium_mg")
+FORM_KEYS = ("serving_g", *FORM_MAIN, *logic.MICROS)
+FORM_LABELS = {**NUTRIENT_LABELS, "serving_g": "Serving size"}
+FORM_UNITS = {**UNITS, "serving_g": "g"}
+FORM_PLACES = {**logic.DISPLAY_PLACES, "serving_g": 1}
+MAX_VALUE = 100_000  # per serving, in any unit: anything bigger is a misread
+SERVING_DESC_MAX = 60
+PHOTO_MAX = 20 * 1024 * 1024
+# Where a barcode was found, for the form's heading
+FOUND_IN = {
+    "saved": "Already in Chomp",
+    "fdc": "Found in USDA FoodData Central",
+    "off": "Found on Open Food Facts",
+}
+MODES = ("barcode", "label", "manual")
+
+
+def field_text(key: str, value: float | None) -> str:
+    """A value as a form box shows it: plain digits, no thousands separators."""
+    if value is None:
+        return ""
+    text = f"{round(value, FORM_PLACES[key]):.{FORM_PLACES[key]}f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def scanned_values(row) -> dict[str, str]:
+    """A saved food's values per serving (per 100 g when it has no serving size), as the
+    form shows them. Saving compares against these to see what the person changed."""
+    basis = row["serving_g"] or 100.0
+    per = logic.scale(store.nutrients_of(row), basis)
+    return {"serving_g": field_text("serving_g", basis)} | {
+        k: field_text(k, per[k]) for k in FORM_KEYS[1:]
+    }
+
+
+def parse_value(key: str, text: str) -> float | None:
+    """A form value, or None when blank. Raises ValueError with a message for the person."""
+    text = text.replace(",", "").strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        raise ValueError(f"{FORM_LABELS[key]} must be a number.") from None
+    if not math.isfinite(value) or value < 0 or value > MAX_VALUE:
+        raise ValueError(f"{FORM_LABELS[key]} must be a number from 0 to {MAX_VALUE:,}.")
+    if key == "serving_g" and value == 0:
+        raise ValueError("Serving size must be more than 0 g.")
+    return value
+
+
+def value_row(key: str, value: str, *, tick: bool | None) -> str:
+    """One value: its name, a number box, the unit, and (label photos only) a tick box the
+    person checks once the value matches the label."""
+    required = key in ("serving_g", *logic.CORE)
+    box = (
+        f'<input id="f-{key}" name="{key}" type="number" step="any" min="0"'
+        f' inputmode="decimal" autocomplete="off" value="{e(value)}"'
+        + (" required" if required else "")
+        + ">"
+    )
+    check = ""
+    if tick is not None:
+        check = (
+            f'<label class="tick"><input type="checkbox" name="ok_{key}" value="1"'
+            + (" checked" if tick else "")
+            + f'><span class="sr">{e(FORM_LABELS[key])} matches the label</span></label>'
+        )
+    return (
+        f'<div class="vrow"><label for="f-{key}">{e(FORM_LABELS[key])}</label>'
+        f'<span class="field">{box}<span class="unit">{FORM_UNITS[key]}</span></span>'
+        f"{check}</div>"
+    )
+
+
+@dataclass
+class FoodForm:
+    """What the New food form shows: its mode, the values (as typed or pre-filled), and
+    for a label photo which values are ticked."""
+
+    mode: str  # 'barcode', 'label' or 'manual'
+    values: dict[str, str]
+    ticks: frozenset[str] = frozenset()
+    name: str = ""
+    brand: str = ""
+    barcode: str = ""
+    serving_desc: str = ""
+    food_id: int | None = None
+    heading: str = ""
+    note: str = ""  # shown above the values (e.g. what to check)
+    error: str = ""
+    ocr_text: str = ""
+
+
+MODE_HELP = {
+    "barcode": "Check the values against the package and fix anything that's off. A scanned"
+    " food counts as confirmed.",
+    "label": "Fix any value Chomp misread, then tick each one once it matches the label."
+    " Only a food with every value ticked counts as confirmed.",
+    "manual": "Enter the values for one serving. Foods typed in by hand stay unconfirmed"
+    " (shown in amber) until checked against a label.",
+}
+
+
+def food_form(f: FoodForm) -> str:
+    ticking = f.mode == "label"
+
+    def row(key: str) -> str:
+        return value_row(key, f.values.get(key, ""), tick=(key in f.ticks) if ticking else None)
+
+    open_micros = any(f.values.get(k) for k in logic.MICROS)
+    barcode = (
+        f'<input type="hidden" name="barcode" value="{e(f.barcode)}">'
+        f'<p class="small muted">Barcode {e(f.barcode)}</p>'
+        if f.mode == "barcode"
+        else "<label>Barcode <small>(optional, so a scan finds it)</small><input"
+        f' name="barcode" inputmode="numeric" autocomplete="off" value="{e(f.barcode)}"></label>'
+    )
+    parts = [
+        f'<form class="stack newfood" method="post" action="{PREFIX}/foods/new"'
+        + (" data-ticks" if ticking else "")
+        + ">",
+        f'<input type="hidden" name="mode" value="{f.mode}">',
+        f'<input type="hidden" name="food_id" value="{f.food_id}">' if f.food_id else "",
+        f'<p class="error" role="alert">{e(f.error)}</p>' if f.error else "",
+        f'<label>Name<input name="name" value="{e(f.name)}" required'
+        f' maxlength="{FOOD_NAME_MAX}" autocomplete="off"></label>',
+        f'<label>Brand <small>(optional)</small><input name="brand" value="{e(f.brand)}"'
+        f' maxlength="{FOOD_NAME_MAX}" autocomplete="off"></label>',
+        barcode,
+        f'<p class="small muted">{e(MODE_HELP[f.mode])}</p>',
+        f'<p class="small warn">{e(f.note)}</p>' if f.note else "",
+        '<div class="values">'
+        + (
+            '<div class="vhead small muted"><span>Per serving</span><span>On label?</span></div>'
+            if ticking
+            else '<div class="vhead small muted"><span>Per serving</span></div>'
+        ),
+        row("serving_g"),
+        f'<label class="desc">Serving as printed <small>(optional)</small><input'
+        f' name="serving_desc" value="{e(f.serving_desc)}" maxlength="{SERVING_DESC_MAX}"'
+        ' placeholder="2/3 cup (55g)" autocomplete="off"></label>',
+        *(row(k) for k in FORM_MAIN),
+        "</div>",
+        f'<details class="extras"{" open" if open_micros else ""}><summary>Vitamins and'
+        ' minerals <small class="muted">(optional)</small></summary><div class="values">'
+        + "".join(row(k) for k in logic.MICROS)
+        + "</div></details>",
+    ]
+    if ticking:
+        parts.append('<p class="small muted js-only" data-tick-count></p>')
+    label = "Save as confirmed" if f.mode == "barcode" else "Save food"
+    parts.append(f'<button type="submit" data-save>{label}</button>')
+    if f.ocr_text:
+        parts.append(
+            '<details class="sub"><summary>What Chomp read on the photo</summary>'
+            f'<pre class="ocr small">{e(f.ocr_text)}</pre></details>'
+        )
+    parts.append("</form>")
+    return "".join(parts)
+
+
 # Daily goals: key, name, unit, slider start, slider end, slider step, most allowed
 GOALS = (
     ("kcal", "Calories", "kcal", 800, 5000, 25, 20_000),
@@ -913,15 +1097,20 @@ def add_routes(
     settings: Settings,
     provider: ChompAuthProvider | None,
     fdc: FDCClient | None = None,
+    off: OFFClient | None = None,
 ) -> None:
     """Register the dashboard. provider is None in local-only mode (no sign-in). With fdc
-    configured, Add food can also search USDA FoodData Central."""
+    configured, Add food can also search USDA FoodData Central. New food looks barcodes up
+    through fdc and off."""
     tz = settings.tz
     sessions = Sessions(settings.db_path)
     secure = bool(settings.public_url)
     css = (STATIC_DIR / "app.css").read_text()
     js = (STATIC_DIR / "app.js").read_text()
     usda = fdc is not None and fdc.enabled
+    fdc = fdc or FDCClient(settings.fdc_api_key)
+    off = off or OFFClient(settings.off_user_agent)
+    ocr_limit = anyio.CapacityLimiter(1)  # one label photo at a time; OCR is CPU-heavy
 
     def user_of(request: Request) -> int | None:
         """The signed-in user (#46), or None. Local-only mode is always the owner."""
@@ -1065,11 +1254,11 @@ def add_routes(
     @server.custom_route(PREFIX + "/static/{name}", methods=["GET"])
     async def icon(request: Request) -> Response:
         name = request.path_params["name"]
-        if name not in ICONS:
+        if name not in STATIC:
             return Response("Not found", status_code=404)
         return Response(
             (STATIC_DIR / name).read_bytes(),
-            media_type=ICONS[name],
+            media_type=STATIC[name],
             headers={"Cache-Control": "max-age=86400"},
         )
 
@@ -1445,6 +1634,10 @@ def add_routes(
                 '<p class="muted small center">To find new foods, ask Claude, or set'
                 " FDC_API_KEY to search USDA here.</p>"
             )
+        parts.append(
+            f'<p class="muted small center">Not here? <a href="{PREFIX}/foods/new">Add a new'
+            " food</a> by barcode, label photo or by hand.</p>"
+        )
         return render(
             "Add food",
             "".join(parts),
@@ -1774,6 +1967,269 @@ def add_routes(
         log.info("dashboard: undid action %d", undo_id)
         return go(with_params(back, undone=undo_id))
 
+    # --- New food (#59) ---
+
+    def new_food_page(request: Request, body: str, status: int = 200) -> Response:
+        header = (
+            '<header class="daynav">'
+            f'<a class="step" href="{PREFIX}/foods" aria-label="Back to Foods">&lsaquo;</a>'
+            '<div class="daytitle"><h1>New food</h1></div>'
+            '<span class="step off" aria-hidden="true"></span></header>'
+        )
+        return render(
+            "New food",
+            header + body,
+            "foods",
+            signed_in=provider is not None,
+            user=account(request),
+            status=status,
+            scripts=("zxing.min.js", "scan.js"),
+        )
+
+    def new_food_url(**params: str) -> str:
+        query = urlencode({k: v for k, v in params.items() if v})
+        return f"{PREFIX}/foods/new" + (f"?{query}" if query else "")
+
+    def barcode_card(code: str = "", error: str = "") -> str:
+        return (
+            '<section class="card"><h2>Scan a barcode</h2>'
+            '<div class="scanner" data-scanner hidden><video muted playsinline'
+            ' aria-label="Camera view"></video><p class="small muted" data-scan-status></p>'
+            '<button type="button" class="link" data-scan-stop>Stop scanning</button></div>'
+            '<p class="small error" data-scan-error hidden></p>'
+            '<button type="button" class="js-only wide" data-scan-start>Scan with camera</button>'
+            f'<form class="stack" method="get" action="{PREFIX}/foods/new" data-barcode-form>'
+            + (f'<p class="error" role="alert">{e(error)}</p>' if error else "")
+            + '<label>Or type the number under the barcode<input name="barcode"'
+            f' inputmode="numeric" autocomplete="off" value="{e(code)}" required></label>'
+            '<button type="submit">Look it up</button></form>'
+            '<p class="small muted">Chomp looks it up in USDA FoodData Central and Open Food'
+            " Facts. A scanned food counts as confirmed.</p></section>"
+        )
+
+    def label_card(code: str = "", error: str = "") -> str:
+        hidden = f'<input type="hidden" name="barcode" value="{e(code)}">' if code else ""
+        unavailable = (
+            ""
+            if label_reader.available()
+            else '<p class="small warn">Label reading isn\'t installed on this server, so this'
+            " won't fill anything in. Type the values instead.</p>"
+        )
+        return (
+            '<section class="card"><h2>Read a nutrition label</h2>'
+            '<p class="small muted">Take a photo of the Nutrition Facts panel, straight on'
+            " and filling the frame. Chomp fills in what it can read; you check each value."
+            f"</p>{unavailable}"
+            f'<form class="stack" method="post" action="{PREFIX}/foods/label"'
+            f' enctype="multipart/form-data">{hidden}'
+            + (f'<p class="error" role="alert">{e(error)}</p>' if error else "")
+            + '<input type="file" name="photo" accept="image/*" required'
+            ' aria-label="Label photo"><button type="submit">Read label</button></form></section>'
+        )
+
+    def type_card(code: str = "") -> str:
+        return (
+            '<section class="card"><h2>Type it in</h2><p class="small muted">Foods typed in by'
+            " hand stay unconfirmed.</p>"
+            f'<a class="button ghost wide" href="{e(new_food_url(how="type", barcode=code))}">'
+            "Type in a food</a></section>"
+        )
+
+    @server.custom_route(f"{PREFIX}/foods/new", methods=["GET", "POST"])
+    async def new_food(request: Request) -> Response:
+        if request.method == "POST":
+            return await save_new_food(request)
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        typed = params.get("barcode", "").strip()[:40]
+        if params.get("how") == "type":
+            form = FoodForm("manual", {}, barcode=typed)
+            return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
+        if not typed:
+            return new_food_page(request, barcode_card() + label_card() + type_card())
+        try:
+            code = gtins.normalize(typed)
+        except gtins.InvalidBarcode:
+            problem = "That isn't a barcode number. Check the digits and try again."
+            body = barcode_card(typed, problem) + label_card() + type_card()
+            return new_food_page(request, body, 400)
+        with connect(request) as conn:
+            hit = await barcode_lookup(conn, code, fdc, off)
+        if hit.row is None:
+            if hit.unreachable:
+                text = (
+                    "USDA and Open Food Facts can't be reached right now. Try again in a"
+                    " minute, or read the label instead."
+                )
+            else:
+                text = (
+                    f"Nothing found for {code.lstrip('0') or code} in USDA or Open Food"
+                    " Facts. Read the nutrition label, or type it in; the barcode is kept"
+                    " so the next scan finds it."
+                )
+            body = (
+                f'<section class="card empty"><p>{e(text)}</p></section>'
+                + label_card(code)
+                + type_card(code)
+                + barcode_card()
+            )
+            return new_food_page(request, body)
+        row = hit.row
+        # Saving here confirms the food, so OFF's generic "unverified" note doesn't apply
+        note = "; ".join(f for f in hit.flags if not f.startswith("unverified"))
+        if not row["serving_g"]:
+            note = "; ".join(
+                filter(None, [note, "No serving size on record, so these values are per 100 g."])
+            )
+        form = FoodForm(
+            "barcode",
+            scanned_values(row),
+            name=row["name"],
+            brand=row["brand"] or "",
+            barcode=code,
+            serving_desc=row["serving_desc"] or "",
+            food_id=row["id"],
+            note=note,
+        )
+        status = "Confirmed" if row["verified"] else "Not confirmed yet"
+        head = f'<p class="muted small">{e(FOUND_IN[hit.found_in])} · {status}</p>'
+        return new_food_page(request, f'<section class="card">{head}{food_form(form)}</section>')
+
+    @server.custom_route(f"{PREFIX}/foods/label", methods=["POST"])
+    async def read_label(request: Request) -> Response:
+        if (no := refused(request, "Read labels")) is not None:
+            return no
+        size = int_param(request.headers.get("content-length"))
+        if size is not None and size > PHOTO_MAX:
+            body = label_card(error="That photo is too big. Try one under 20 MB.")
+            return new_food_page(request, body, 413)
+        async with request.form(max_files=1, max_fields=5) as form:
+            code = str(form.get("barcode", "")).strip()[:40]
+            photo = form.get("photo")
+            data = await photo.read() if hasattr(photo, "read") else b""
+        if not data or len(data) > PHOTO_MAX:
+            body = label_card(code, "Choose a photo of the label.")
+            return new_food_page(request, body, 400)
+        try:
+            read = await anyio.to_thread.run_sync(label_reader.read_photo, data, limiter=ocr_limit)
+        except label_reader.LabelError as err:
+            return new_food_page(request, label_card(code, str(err)) + type_card(code), 400)
+        found = {k: field_text(k, v) for k, v in read.values.items()}
+        if read.serving_g is not None:
+            found["serving_g"] = field_text("serving_g", read.serving_g)
+        notes = []
+        if read.serving_ml:
+            notes.append("The serving is printed in mL; enter its weight in grams.")
+        missing = [FORM_LABELS[k] for k in ("serving_g", *logic.CORE) if k not in found]
+        if missing:
+            notes.append(f"Couldn't read: {', '.join(missing)}. Type them in from the label.")
+        log.info("dashboard: label photo read, %d values", len(found))
+        form = FoodForm(
+            "label",
+            found,
+            barcode=code,
+            serving_desc=read.serving_desc or "",
+            note=" ".join(notes),
+            ocr_text=read.text,
+        )
+        return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
+
+    async def save_new_food(request: Request) -> Response:
+        if (no := refused(request, "Add foods")) is not None:
+            return no
+        form = await request.form()
+        mode = str(form.get("mode", ""))
+        if mode not in MODES:
+            mode = "manual"
+        values = {k: str(form.get(k, "")).strip()[:20] for k in FORM_KEYS}
+        f = FoodForm(
+            mode,
+            values,
+            ticks=frozenset(k for k in FORM_KEYS if form.get(f"ok_{k}")),
+            name=" ".join(str(form.get("name", "")).split())[:FOOD_NAME_MAX],
+            brand=" ".join(str(form.get("brand", "")).split())[:FOOD_NAME_MAX],
+            barcode=str(form.get("barcode", "")).strip()[:40],
+            serving_desc=" ".join(str(form.get("serving_desc", "")).split())[:SERVING_DESC_MAX],
+            food_id=int_param(str(form.get("food_id", ""))) if mode == "barcode" else None,
+        )
+
+        def again(error: str) -> Response:
+            f.error = error
+            body = f'<section class="card">{food_form(f)}</section>'
+            return new_food_page(request, body, 400)
+
+        try:
+            parsed = {k: parse_value(k, v) for k, v in values.items()}
+        except ValueError as err:
+            return again(str(err))
+        if not f.name:
+            return again("A food needs a name.")
+        missing = [FORM_LABELS[k] for k in ("serving_g", *logic.CORE) if parsed[k] is None]
+        if missing:
+            return again(f"Fill in {', '.join(missing)} from the label.")
+        serving = parsed.pop("serving_g")
+        if sum(parsed[k] for k in ("protein_g", "carbs_g", "fat_g")) > serving * 1.05:
+            return again(
+                "Protein, carbs and fat add up to more than the serving weighs. Check the"
+                " serving size and those values."
+            )
+        try:
+            gtin = gtins.normalize(f.barcode) if f.barcode else None
+        except gtins.InvalidBarcode:
+            return again("That barcode isn't valid. Check the digits, or leave it empty.")
+        details = {
+            "name": f.name,
+            "brand": f.brand or None,
+            "serving_desc": f.serving_desc or None,
+        }
+        with connect(request) as conn:
+            if mode == "barcode":
+                try:
+                    row = store.get_food(conn, f.food_id or 0)
+                except store.NotFound:
+                    return go(new_food_url(barcode=f.barcode))
+                # Only values the person changed are corrections; the rest stay as stored,
+                # unrounded. A different serving size restates every value.
+                shown = scanned_values(row)
+                restated = field_text("serving_g", serving) != shown["serving_g"]
+                changed = {
+                    k: v for k, v in parsed.items() if restated or field_text(k, v) != shown[k]
+                }
+                corrections = {
+                    k: None if v is None else v * 100.0 / serving for k, v in changed.items()
+                }
+                if restated or row["serving_g"]:
+                    details["serving_g"] = serving
+                row, _ = store.confirm_food(conn, row["id"], corrections, details)
+                confirmed = True
+            else:
+                confirmed = (
+                    mode == "label"
+                    and {
+                        "serving_g",
+                        *(k for k, v in parsed.items() if v is not None),
+                    }
+                    <= f.ticks
+                )
+                try:
+                    per_100g = logic.per_serving_to_per_100g(parsed, serving)
+                except ValueError as err:
+                    return again(str(err))
+                row, _ = store.save_label_food(
+                    conn,
+                    name=f.name,
+                    brand=f.brand or None,
+                    gtin=gtin,
+                    per_100g=per_100g,
+                    serving_g=serving,
+                    serving_desc=f.serving_desc or None,
+                    source="label" if mode == "label" else "manual",
+                    verified=confirmed,
+                )
+        log.info("dashboard: added food %d (%s, confirmed=%s)", row["id"], mode, confirmed)
+        return go(f"{PREFIX}/foods?{urlencode({'q': row['name'], 'added': row['id']})}")
+
     # --- Food names ---
 
     @server.custom_route(PREFIX + "/foods/{food_id:int}/rename", methods=["POST"])
@@ -1879,6 +2335,20 @@ def add_routes(
 
     # --- Foods, nicknames and templates ---
 
+    def added_notice(conn, food_id: int) -> str:
+        """The banner after New food saves one, with a link to log it."""
+        try:
+            row = store.get_food(conn, food_id)
+        except store.NotFound:
+            return ""
+        state = "confirmed" if row["verified"] else "unconfirmed"
+        log_it = add_url(today(), None, row["name"])
+        return toast(
+            f"<span>Saved {e(row['name'])} ({state}).</span>"
+            f'<a class="undo" href="{e(log_it)}">Log it</a>',
+            "status",
+        )
+
     @server.custom_route(f"{PREFIX}/foods", methods=["GET"])
     async def foods(request: Request) -> Response:
         if not signed_in(request):
@@ -1887,6 +2357,8 @@ def add_routes(
         back = f"{PREFIX}/foods" + (f"?{urlencode({'q': q})}" if q else "")
         with connect(request) as conn:
             banner = notice(conn, request.query_params, back)
+            if (added := int_param(request.query_params.get("added"))) is not None:
+                banner += added_notice(conn, added)
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT)
                 nicknames = store.search_aliases(conn, q, FOODS_LIMIT)
@@ -1905,6 +2377,7 @@ def add_routes(
             f'<input type="search" name="q" value="{e(q)}" placeholder="Foods, nicknames, meals"'
             ' aria-label="Search foods, nicknames and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
+            f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
         if q and not (rows or nicknames or templates):
             parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')

@@ -22,10 +22,12 @@ chomp/
     fdc.py         # USDA FoodData Central client
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
+  barcode.py       # barcode chain (saved -> FDC -> OFF), shared by the tool and dashboard
+  label.py         # nutrition label photo OCR (tesseract) and its text parser
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
   web.py           # /app web dashboard (server-rendered, sign-in, entry edits)
-  static/          # dashboard CSS and home-screen icons
+  static/          # dashboard CSS, JS, icons, vendored ZXing barcode reader
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push
