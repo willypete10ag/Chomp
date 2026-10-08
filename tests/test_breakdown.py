@@ -8,7 +8,7 @@ from mcp import Client
 from test_tools import call
 from test_web import http, logged, public_settings, sign_in  # noqa: F401 (fixtures)
 
-from chomp import store
+from chomp import label, store
 from chomp.server import build_server
 from chomp.sources import FoodRecord
 from chomp.sources import fdc as fdcmod
@@ -72,6 +72,19 @@ def test_cached_food_gains_details_it_lacked(conn):
     rec.nutrients = {**base, "sat_fat_g": 0.5, "cholesterol_mg": 10}
     row, created = store.cache_record(conn, rec)
     assert not created and row["sat_fat_g"] == 0.5 and row["cholesterol_mg"] == 10
+
+
+@pytest.mark.parametrize(
+    ("line", "grams"),
+    [
+        ("Includes 10g Added Sugars 20%", 10),
+        ("Includes <1g Added Sugars 1%", 1),
+        ("Includes less than 1g Added Sugars", 1),
+        ("Added Sugars 4g", 4),
+    ],
+)
+def test_label_reads_added_sugars(line, grams):
+    assert label.parse(f"Total Sugars 12g\n{line}\nProtein 3g").values["added_sugar_g"] == grams
 
 
 # --- tools ----------------------------------------------------------------------------------

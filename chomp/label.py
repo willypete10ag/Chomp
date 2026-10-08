@@ -151,8 +151,10 @@ SERVING = re.compile(r"serv(?:ing|\.)\s*size\s*:?\s*(.*)")
 SERVING_AMOUNT = re.compile(rf"{NUMBER}\s*(g|ml)\b")
 SERVING_SLIP = re.compile(r"\((\d+(?:\.\d+)?)9\)")  # "(55g)" read as "(559)"
 ENERGY_KCAL = re.compile(rf"{NUMBER}\s*kcal\b")
-# US labels put the amount first: "Includes 10g Added Sugars"
-INCLUDES_ADDED = re.compile(rf"incl(?:udes|\.)?\s*{NUMBER}\s*{UNIT}\s*added\s*sugars?")
+# US labels put the amount first: "Includes 10g Added Sugars", "Includes <1g Added Sugars"
+INCLUDES_ADDED = re.compile(
+    rf"incl(?:udes|\.)?\s*(?:<\s*|less\s*than\s*)?{NUMBER}\s*{UNIT}\s*added\s*sugars?"
+)
 
 
 def _fix_ocr(text: str) -> str:
