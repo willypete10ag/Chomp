@@ -219,6 +219,32 @@ async def test_confirm_food_adds_micros_per_serving(server, conn):
     assert out["food"]["per_100g"]["kcal"] == 42
 
 
+@pytest.mark.anyio
+async def test_confirm_food_percent_dv_needs_the_serving(server, conn):
+    food = add_food(conn, "Milk", 42, 3.4, 5, 1)
+    async with Client(server) as client:
+        msg = await call_error(
+            client, "confirm_food", food_id=food, micronutrients_percent_dv={"thiamin_mg": 25}
+        )
+    assert "per_serving_g" in msg
+    assert store.get_food(conn, food)["thiamin_mg"] is None
+
+
+@pytest.mark.anyio
+async def test_range_totals_name_partial_micros_per_day(server, conn):
+    eggs = add_food(conn, "Egg, whole", *EGGS)
+    milk = add_food(conn, "Milk", 42, 3.4, 5, 1)
+    conn.execute("UPDATE foods SET calcium_mg = 120 WHERE id = ?", (milk,))
+    store.log_meal(conn, [(eggs, 100), (milk, 100)], "2026-10-05T16:00:00Z", None)
+    store.log_meal(conn, [(milk, 100)], "2026-10-06T16:00:00Z", None)
+    async with Client(server) as client:
+        out = await call(client, "get_totals", start="2026-10-05", end="2026-10-06")
+    first, second = out["per_day"]
+    assert first["totals"]["micronutrients_partial"] == ["calcium_mg"]
+    assert second["totals"]["micronutrients_partial"] == []
+    assert out["totals"]["micronutrients_partial"] == ["calcium_mg"]
+
+
 # --- dashboard and export -------------------------------------------------------------------
 
 

@@ -828,9 +828,10 @@ def build_server(
 
         Use when the user confirms an unverified food (usually from Open Food Facts) or
         reports that a value is wrong, or to add vitamins and minerals from the label to a
-        food that lacks them. Only pass nutrients that need correcting or adding; the rest
-        are kept. Corrections apply to future logs only; past entries keep their values
-        (use update_entry to re-snapshot one). Returns the food and which nutrients changed.
+        food that lacks them (% DV figures need per_serving_g). Only pass nutrients that
+        need correcting or adding; the rest are kept. Corrections apply to future logs
+        only; past entries keep their values (use update_entry to re-snapshot one).
+        Returns the food and which nutrients changed.
         """
         given = {
             k: v
@@ -846,6 +847,12 @@ def build_server(
             if v is not None
         }
         with tool_errors(), connect() as conn:
+            if micronutrients_percent_dv and per_serving_g is None:
+                # % DV is always per serving, so it can't be read as per 100 g
+                raise ValueError(
+                    "micronutrients_percent_dv is per serving: pass per_serving_g with the "
+                    "label's serving size in grams"
+                )
             given |= _micros(micronutrients, micronutrients_percent_dv)
             if per_serving_g is not None:
                 if not given:
@@ -982,6 +989,9 @@ def build_server(
             entries = store.entries_between(conn, lo, hi)
             rows = [n for _, n in entries]
             day_totals = logic.totals_by_day(entries, tz)
+            day_rows: dict = {}
+            for eaten_at, n in entries:
+                day_rows.setdefault(logic.local_date(eaten_at, tz), []).append(n)
             totals = logic.sum_nutrients(day_totals.values())
             per_logged = logic.average(totals, len(day_totals)) if day_totals else None
             targets = store.get_targets(conn)
@@ -997,7 +1007,9 @@ def build_server(
                 per_day=[
                     DayTotals(
                         date=d.isoformat(),
-                        totals=_nutrients(day_totals.get(d) or logic.sum_nutrients([])),
+                        totals=_nutrients(
+                            day_totals.get(d) or logic.sum_nutrients([]), day_rows.get(d, [])
+                        ),
                     )
                     for d in days
                 ],
