@@ -92,6 +92,23 @@ NUTRIENT_LABELS = {
     "fiber_g": "Fiber",
     "sugar_g": "Sugar",
     "sodium_mg": "Sodium",
+    "vitamin_d_mcg": "Vitamin D",
+    "calcium_mg": "Calcium",
+    "iron_mg": "Iron",
+    "potassium_mg": "Potassium",
+    "vitamin_a_mcg": "Vitamin A",
+    "vitamin_c_mg": "Vitamin C",
+    "vitamin_e_mg": "Vitamin E",
+    "vitamin_k_mcg": "Vitamin K",
+    "thiamin_mg": "Thiamin (B1)",
+    "riboflavin_mg": "Riboflavin (B2)",
+    "niacin_mg": "Niacin (B3)",
+    "vitamin_b6_mg": "Vitamin B6",
+    "folate_mcg": "Folate",
+    "vitamin_b12_mcg": "Vitamin B12",
+    "phosphorus_mg": "Phosphorus",
+    "magnesium_mg": "Magnesium",
+    "zinc_mg": "Zinc",
 }
 UNITS = {
     "kcal": "kcal",
@@ -101,6 +118,7 @@ UNITS = {
     "fiber_g": "g",
     "sugar_g": "g",
     "sodium_mg": "mg",
+    **{k: logic.unit_of(k) for k in logic.MICROS},
 }
 LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
 NBSP = "\u00a0"  # keeps a number on the same line as its unit
@@ -204,6 +222,42 @@ def extras_line(n: logic.Nutrients) -> str:
     """Fiber, sugar and sodium, where known: 'Fiber 3 g · Sodium 120 mg'."""
     return " · ".join(
         f"{NUTRIENT_LABELS[k]} {amount(k, n[k])}" for k in logic.OPTIONAL if n.get(k) is not None
+    )
+
+
+def micros_line(n: logic.Nutrients) -> str:
+    """Vitamins and minerals, where known: 'Vitamin D 2 mcg · Iron 1.8 mg'."""
+    return " · ".join(
+        f"{NUTRIENT_LABELS[k]} {amount(k, n[k])}" for k in logic.MICROS if n.get(k) is not None
+    )
+
+
+def micros_table(n: logic.Nutrients, partial: list[str]) -> str:
+    """A day's vitamins and minerals with their share of the Daily Value. Ones only some
+    foods report are starred: the real amount is higher."""
+    rows = []
+    for k in logic.MICROS:
+        if n.get(k) is None:
+            continue
+        star = '<span aria-hidden="true">*</span><span class="sr"> (partial)</span>'
+        rows.append(
+            f'<tr><th scope="row">{NUTRIENT_LABELS[k]}</th>'
+            f"<td>{amount(k, n[k])}{star if k in partial else ''}</td>"
+            f'<td class="muted">{num(logic.percent_dv(k, n[k]))}%</td></tr>'
+        )
+    if not rows:
+        return ""
+    note = (
+        '<p class="muted small">* Only some of these foods list it, so the real amount is'
+        " higher.</p>"
+        if partial
+        else ""
+    )
+    return (
+        '<details class="extras"><summary class="small">Vitamins and minerals</summary>'
+        '<table class="micros small"><thead><tr><th scope="col">Nutrient</th>'
+        '<th scope="col">Amount</th><th scope="col">Daily Value</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table>{note}</details>"
     )
 
 
@@ -553,7 +607,7 @@ def entry_item(
     if error and error[0] == x.id:
         value, is_open = error[1], " open"
         problem = f'<p class="error" role="alert">{e(error[2])}</p>'
-    extras = extras_line(n)
+    extras = " · ".join(filter(None, (extras_line(n), micros_line(n))))
     per_100g = store.nutrients_of(food)
     base = ctx.kcal - (x.nutrients["kcal"] or 0)
     move = ""
@@ -609,7 +663,7 @@ def food_item(row, back: str) -> str:
         more.append(
             f"<p><b>Per serving</b> ({e(desc)}): {num(s['kcal'])} kcal · {macros_line(s)}</p>"
         )
-    if extras := extras_line(n):
+    if extras := " · ".join(filter(None, (extras_line(n), micros_line(n)))):
         more.append(f"<p><b>Per 100 g:</b> {extras}</p>")
     checked = (
         "Confirmed by you" if row["verified"] else "Not confirmed yet; check it against the label"
@@ -1124,6 +1178,7 @@ def add_routes(
         page_url = day_url(day)
         with connect(request) as conn:
             meals, totals, targets, ctx = load_day(conn, day)
+            rows = [x.nutrients for _, entries in meals for x in entries]
             foods = store.get_foods(conn, (x.food_id for _, entries in meals for x in entries))
             banner = notice(conn, params, page_url)
         progress = logic.progress(totals, targets)
@@ -1205,6 +1260,7 @@ def add_routes(
                 '<details class="extras"><summary class="small">Fiber, sugar and sodium</summary>'
                 f'<p class="muted small">{extras}</p></details>'
             )
+        summary.append(micros_table(shown, logic.partial_micros(rows)))
         if not progress:
             summary.append(
                 f'<p class="muted small">No daily goals yet. <a href="{goals_url}">Set them'

@@ -35,6 +35,24 @@ NUTRIENT_IDS: dict[str, tuple[int, ...]] = {
     "fiber_g": (1079,),
     "sugar_g": (2000, 1063),
     "sodium_mg": (1093,),
+    # Vitamins and minerals (#53). Amounts are converted from the unit FDC reports.
+    "vitamin_d_mcg": (1114, 1110),  # D2 + D3 in µg, else IU
+    "calcium_mg": (1087,),
+    "iron_mg": (1089,),
+    "potassium_mg": (1092,),
+    "vitamin_a_mcg": (1106,),  # RAE; the IU figure (1104) can't be converted
+    "vitamin_c_mg": (1162,),
+    "vitamin_e_mg": (1109,),  # alpha-tocopherol
+    "vitamin_k_mcg": (1185,),  # phylloquinone
+    "thiamin_mg": (1165,),
+    "riboflavin_mg": (1166,),
+    "niacin_mg": (1167,),
+    "vitamin_b6_mg": (1175,),
+    "folate_mcg": (1190, 1177),  # DFE, else total folate (the same unless fortified)
+    "vitamin_b12_mcg": (1178,),
+    "phosphorus_mg": (1091,),
+    "magnesium_mg": (1090,),
+    "zinc_mg": (1095,),
 }
 ENERGY_KJ = 1062
 
@@ -47,6 +65,9 @@ LABEL_KEYS = {
     "fiber": "fiber_g",
     "sugars": "sugar_g",
     "sodium": "sodium_mg",
+    "calcium": "calcium_mg",
+    "iron": "iron_mg",
+    "potassium": "potassium_mg",
 }
 GRAM_UNITS = {"g", "grm", "gram", "grams"}
 FDC_GTIN_ORDER = {12: 0, 13: 1, 14: 2, 8: 3}
@@ -79,6 +100,10 @@ def parse_nutrients(food_nutrients: Iterable[Mapping[str, Any]]) -> logic.Nutrie
                 v, unit = amounts[nid]
                 if key == "kcal" and unit == "kj":
                     v = logic.kj_to_kcal(v)
+                elif key in logic.MICROS:
+                    v = logic.convert_amount(key, v, unit)
+                    if v is None:
+                        continue
                 value = v
                 break
         if key == "kcal" and value is None and ENERGY_KJ in amounts:

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from chomp import __version__, db, logic
 from chomp.store import user_of
 
-NUTRIENTS = ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "sugar_g", "sodium_mg")
+NUTRIENTS = logic.NUTRIENTS
 CSV_COLUMNS = (
     "date",
     "time",
@@ -43,7 +43,7 @@ def _entries(conn: sqlite3.Connection, lo: str, hi: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT m.id AS meal_id, m.eaten_at, m.label AS meal_label, m.note AS meal_note,"
         " e.id AS entry_id, e.food_id, f.name AS food, f.brand, e.grams,"
-        " e.kcal, e.protein_g, e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g, e.sodium_mg"
+        f" {', '.join(f'e.{k}' for k in NUTRIENTS)}"
         " FROM entries e JOIN meals m ON m.id = e.meal_id JOIN foods f ON f.id = e.food_id"
         " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?"
         " ORDER BY m.eaten_at, m.id, e.id",
@@ -140,8 +140,8 @@ def to_json(
         "foods": _dicts(
             conn,
             "SELECT id AS food_id, name, brand, gtin, source, source_id, verified, saved,"
-            " kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, serving_g,"
-            " serving_desc, created_at, updated_at FROM foods ORDER BY id",
+            f" {', '.join(NUTRIENTS)}, serving_g, serving_desc, created_at, updated_at"
+            " FROM foods ORDER BY id",
         ),
         "meals": list(meals.values()),
         "aliases": _dicts(

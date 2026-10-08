@@ -22,9 +22,11 @@ from chomp import logic, text
 from chomp.db import transaction
 from chomp.sources import FoodRecord
 
+# Nutrient columns, the same on foods (per 100 g) and entries (snapshot)
+NUTRIENT_COLS = ", ".join(logic.NUTRIENTS)
+NUTRIENT_MARKS = ", ".join("?" * len(logic.NUTRIENTS))
 FOOD_COLS = (
-    "id, name, brand, gtin, source, source_id, verified, kcal, protein_g, carbs_g, fat_g, "
-    "fiber_g, sugar_g, sodium_mg, serving_g, serving_desc"
+    f"id, name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS}, serving_g, serving_desc"
 )
 
 
@@ -84,13 +86,13 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
         ).fetchone()
         if row is None and rec.gtin:
             row = food_by_gtin(conn, rec.gtin)
-        if row is not None:
-            return row, False
         n = logic.round_nutrients(rec.nutrients)
+        if row is not None:
+            same = (row["source"], row["source_id"]) == (rec.source, rec.source_id)
+            return (_fill_micros(conn, row, n) if same else row), False
         cur = conn.execute(
-            "INSERT INTO foods (name, brand, gtin, source, source_id, verified, kcal, protein_g,"
-            " carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, serving_g, serving_desc)"
-            " VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO foods (name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS},"
+            f" serving_g, serving_desc) VALUES (?, ?, ?, ?, ?, 0, {NUTRIENT_MARKS}, ?, ?)",
             (
                 rec.name,
                 rec.brand,
@@ -103,6 +105,19 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
             ),
         )
         return get_food(conn, cur.lastrowid), True
+
+
+def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients) -> sqlite3.Row:
+    """Fill in vitamins and minerals a food cached before #53 lacks, from the same upstream
+    record. Only empty columns of unconfirmed foods change; macros never do."""
+    if row["verified"]:
+        return row
+    missing = {k: n[k] for k in logic.MICROS if row[k] is None and n.get(k) is not None}
+    if not missing:
+        return row
+    sets = ", ".join(f"{k} = ?" for k in missing)
+    conn.execute(f"UPDATE foods SET {sets} WHERE id = ?", (*missing.values(), row["id"]))
+    return get_food(conn, row["id"])
 
 
 def mark_saved(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row:
@@ -134,9 +149,8 @@ def save_label_food(
             previous = old["id"]
             conn.execute("UPDATE foods SET gtin = NULL WHERE id = ?", (previous,))
         cur = conn.execute(
-            "INSERT INTO foods (name, brand, gtin, source, verified, kcal, protein_g, carbs_g,"
-            " fat_g, fiber_g, sugar_g, sodium_mg, serving_g, serving_desc)"
-            " VALUES (?, ?, ?, 'label', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO foods (name, brand, gtin, source, verified, {NUTRIENT_COLS}, serving_g,"
+            f" serving_desc) VALUES (?, ?, ?, 'label', 1, {NUTRIENT_MARKS}, ?, ?)",
             (name, brand, gtin, *(n[k] for k in logic.NUTRIENTS), serving_g, serving_desc),
         )
         return get_food(conn, cur.lastrowid), previous
@@ -393,9 +407,9 @@ class EntryRow:
 
 
 # Callers add "AND ..." conditions and pass the user id first
+ENTRY_NUTRIENTS = ", ".join(f"e.{k}" for k in logic.NUTRIENTS)
 ENTRY_SELECT = (
-    "SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.kcal, e.protein_g,"
-    " e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g, e.sodium_mg"
+    f"SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, {ENTRY_NUTRIENTS}"
     " FROM entries e JOIN foods f ON f.id = e.food_id JOIN meals m ON m.id = e.meal_id"
     " WHERE m.user_id = ?"
 )
@@ -443,8 +457,8 @@ def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[tuple[in
     foods = get_foods(conn, (f for f, _ in items))
     snaps = [(f, g, logic.snapshot(nutrients_of(foods[f]), g)) for f, g in items]
     conn.executemany(
-        "INSERT INTO entries (meal_id, food_id, grams, kcal, protein_g, carbs_g, fat_g,"
-        " fiber_g, sugar_g, sodium_mg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        f"INSERT INTO entries (meal_id, food_id, grams, {NUTRIENT_COLS})"
+        f" VALUES (?, ?, ?, {NUTRIENT_MARKS})",
         [(meal_id, f, g, *(s[k] for k in logic.NUTRIENTS)) for f, g, s in snaps],
     )
 
@@ -471,6 +485,9 @@ def get_entry(conn: sqlite3.Connection, entry_id: int) -> EntryRow:
     return _entry(row)
 
 
+SNAPSHOT_SETS = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
+
+
 def update_entry(
     conn: sqlite3.Connection, entry_id: int, grams: float | None, food_id: int | None
 ) -> EntryRow:
@@ -481,8 +498,7 @@ def update_entry(
     snap = logic.snapshot(nutrients_of(get_food(conn, new_food)), new_grams)
     with transaction(conn):
         conn.execute(
-            "UPDATE entries SET food_id = ?, grams = ?, kcal = ?, protein_g = ?, carbs_g = ?,"
-            " fat_g = ?, fiber_g = ?, sugar_g = ?, sodium_mg = ? WHERE id = ?",
+            f"UPDATE entries SET food_id = ?, grams = ?, {SNAPSHOT_SETS} WHERE id = ?",
             (new_food, new_grams, *(snap[k] for k in logic.NUTRIENTS), entry_id),
         )
     return get_entry(conn, entry_id)
@@ -585,8 +601,7 @@ def entries_between(
 ) -> list[tuple[str, logic.Nutrients]]:
     """(meal eaten_at, entry nutrients) for every entry in [start, end)."""
     rows = conn.execute(
-        "SELECT m.eaten_at, e.kcal, e.protein_g, e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g,"
-        " e.sodium_mg FROM entries e JOIN meals m ON m.id = e.meal_id"
+        f"SELECT m.eaten_at, {ENTRY_NUTRIENTS} FROM entries e JOIN meals m ON m.id = e.meal_id"
         " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?",
         (user_of(conn), start_utc, end_utc),
     ).fetchall()

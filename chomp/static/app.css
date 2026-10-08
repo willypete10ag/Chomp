@@ -154,6 +154,11 @@ a.step:active { background: var(--track); }
   color: var(--accent); cursor: pointer; min-height: 2.75rem; display: flex; align-items: center;
 }
 .extras p { margin: 0; }
+.micros { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.micros th, .micros td { padding: .3rem 0; border-top: 1px solid var(--line); text-align: right; }
+.micros th:first-child { text-align: left; font-weight: 400; }
+.micros thead th { border-top: 0; color: var(--muted); font-weight: 400; }
+.micros + p { margin-top: .4rem; }
 .meter { display: block; width: 100%; height: 8px; margin: .3rem 0 .15rem; border-radius: 4px; }
 .meter .track { fill: var(--track); }
 .fill.kcal { fill: var(--kcal); } .fill.protein_g { fill: var(--protein); }
