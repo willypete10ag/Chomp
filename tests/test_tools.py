@@ -111,7 +111,7 @@ async def test_logged_fdc_food_ranks_as_saved(server, conn, fdc_eggs):
 async def test_search_ranks_alias_then_verified_saved_then_fdc(server, conn, fdc_eggs):
     plain = add_food(conn, "Egg white omelette", 50, 10, 1, 0)
     verified = add_food(conn, "Egg white bites", 70, 8, 4, 2, verified=1)
-    conn.execute("INSERT INTO aliases VALUES ('my egg whites', ?, 300)", (plain,))
+    conn.execute("INSERT INTO aliases VALUES (1, 'my egg whites', ?, 300)", (plain,))
     async with Client(server) as client:
         out = await call(client, "search_food", query="egg white", limit=4)
     r = out["results"]
@@ -461,7 +461,7 @@ async def test_get_day_uses_local_midnight(server, conn):
 @pytest.mark.anyio
 async def test_get_day_progress_against_targets(server, conn):
     eggs = add_food(conn, "Egg", *EGGS)
-    conn.execute("INSERT INTO targets (id, kcal, protein_g) VALUES (1, 2000, 180)")
+    conn.execute("INSERT INTO targets (user_id, kcal, protein_g) VALUES (1, 2000, 180)")
     async with Client(server) as client:
         await call(
             client,

@@ -30,7 +30,7 @@ def add_food(conn, name="Egg, whole, raw", brand=None, source="fdc", source_id="
 def test_baseline_and_migrations_create_schema(conn):
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert names >= TABLES | {"foods_fts"}
-    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 5
+    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 6
     cols = {r[1] for r in conn.execute("PRAGMA table_info(foods)")}
     assert "saved" in cols
 
@@ -41,8 +41,8 @@ def test_connection_pragmas(conn):
 
 
 def test_migrate_is_idempotent(conn):
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 5
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 5
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 6
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 6
 
 
 def test_applies_numbered_migrations_in_order(tmp_path: Path):
@@ -124,7 +124,9 @@ def test_source_record_is_unique(conn):
 
 def test_template_can_hold_same_food_twice(conn):
     fid = add_food(conn)
-    tid = conn.execute("INSERT INTO meal_templates (name) VALUES ('usual breakfast')").lastrowid
+    tid = conn.execute(
+        "INSERT INTO meal_templates (user_id, name) VALUES (1, 'usual breakfast')"
+    ).lastrowid
     for grams in (100, 50):
         conn.execute(
             "INSERT INTO meal_template_items (template_id, food_id, grams) VALUES (?, ?, ?)",
@@ -141,12 +143,12 @@ def test_entries_snapshot_all_nutrients(conn):
 
 def test_foreign_keys_enforced(conn):
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO aliases (alias, food_id) VALUES ('ghost', 999)")
+        conn.execute("INSERT INTO aliases (user_id, alias, food_id) VALUES (1, 'ghost', 999)")
 
 
 def test_nested_transactions_join_the_outer_one(conn):
     with pytest.raises(RuntimeError), db.transaction(conn):
         with db.transaction(conn):
-            conn.execute("INSERT INTO targets (id, kcal) VALUES (1, 2000)")
+            conn.execute("INSERT INTO targets (user_id, kcal) VALUES (1, 2000)")
         raise RuntimeError
     assert conn.execute("SELECT count(*) FROM targets").fetchone()[0] == 0

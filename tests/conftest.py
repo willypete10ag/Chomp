@@ -30,7 +30,8 @@ def settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 def conn(settings: Settings):
-    c = db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)
+    # Opened for the owner, like the dashboard and tools in local-only mode
+    c = db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir, 1)
     yield c
     c.close()
 

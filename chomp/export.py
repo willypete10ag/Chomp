@@ -2,7 +2,8 @@
 
 CSV is one row per logged entry, for spreadsheets. JSON is everything a person would want to
 keep: foods, meals with their entries, aliases, meal templates and targets. Times are local
-ISO 8601 with offset; nutrient values are the stored snapshots, unrounded.
+ISO 8601 with offset; nutrient values are the stored snapshots, unrounded. An export covers
+the user the connection was opened for (#46); foods are shared and always exported in full.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import TextIO
 from zoneinfo import ZoneInfo
 
 from chomp import __version__, db, logic
+from chomp.store import user_of
 
 NUTRIENTS = ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "sugar_g", "sodium_mg")
 CSV_COLUMNS = (
@@ -43,8 +45,9 @@ def _entries(conn: sqlite3.Connection, lo: str, hi: str) -> list[sqlite3.Row]:
         " e.id AS entry_id, e.food_id, f.name AS food, f.brand, e.grams,"
         " e.kcal, e.protein_g, e.carbs_g, e.fat_g, e.fiber_g, e.sugar_g, e.sodium_mg"
         " FROM entries e JOIN meals m ON m.id = e.meal_id JOIN foods f ON f.id = e.food_id"
-        " WHERE m.eaten_at >= ? AND m.eaten_at < ? ORDER BY m.eaten_at, m.id, e.id",
-        (lo, hi),
+        " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?"
+        " ORDER BY m.eaten_at, m.id, e.id",
+        (user_of(conn), lo, hi),
     ).fetchall()
 
 
@@ -110,19 +113,25 @@ def to_json(
                 **{k: r[k] for k in NUTRIENTS},
             }
         )
+    user_id = user_of(conn)
     templates = []
-    for t in _dicts(conn, "SELECT id, name FROM meal_templates ORDER BY name"):
+    for t in _dicts(
+        conn, "SELECT id, name FROM meal_templates WHERE user_id = ? ORDER BY name", (user_id,)
+    ):
         items = _dicts(
             conn,
             "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
             (t["id"],),
         )
         templates.append({"name": t["name"], "items": items})
-    targets = conn.execute("SELECT kcal, protein_g, carbs_g, fat_g FROM targets").fetchone()
+    targets = conn.execute(
+        "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE user_id = ?", (user_id,)
+    ).fetchone()
     return {
         "chomp_version": __version__,
         "schema_version": db.schema_version(conn),
         "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "user": conn.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()[0],
         "tz": tz,
         "range": {
             "start": start.isoformat() if start else None,
@@ -135,7 +144,11 @@ def to_json(
             " serving_desc, created_at, updated_at FROM foods ORDER BY id",
         ),
         "meals": list(meals.values()),
-        "aliases": _dicts(conn, "SELECT alias, food_id, default_grams FROM aliases ORDER BY alias"),
+        "aliases": _dicts(
+            conn,
+            "SELECT alias, food_id, default_grams FROM aliases WHERE user_id = ? ORDER BY alias",
+            (user_id,),
+        ),
         "meal_templates": templates,
         "targets": dict(targets) if targets else None,
     }

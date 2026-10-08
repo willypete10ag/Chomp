@@ -47,9 +47,20 @@ Undo, which applies only while those rows are unchanged (so it never overwrites 
 from Claude). A small same-origin script (`static/app.js`) adds sliders beside the number
 boxes, quick picks (a serving, your usual, half/double) and live previews of the calories and
 the day's total; it repeats `logic.scale` only for the preview, and every page works without
-it. A web app manifest lets phones add it to the home screen. It is single-user like the rest
-of Chomp; `web_sessions.subject` and `undo_actions.subject` are where a user id goes once there
-are several.
+it. A web app manifest lets phones add it to the home screen.
+
+### Users
+Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
+`aliases`, `meal_templates`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
+`user_id`; `foods` are shared, so anyone's saved or label foods turn up in everyone's search
+(use counts are per person). User 1 is the owner, holds everything logged before users
+existed, and signs in with `AUTH_PASSWORD`. Others are added with `chomp user add NAME` and
+have a scrypt-hashed password in `users`. A password alone identifies the person (no two
+users may share one; the server won't start if `AUTH_PASSWORD` matches another user's), so the consent page and dashboard sign-in stay a single password box;
+the sign-in's user becomes the OAuth token's subject or the dashboard session's user.
+`store.py` reads the user from the connection (`db.connect(path, user_id)`) and treats
+another user's meal or entry as not found. The static `BEARER_TOKEN` is the owner's; in
+local-only mode everything is the owner's.
 
 ## MCP tools
 | Tool | Purpose | Key args |
@@ -86,15 +97,15 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Security
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
-- Dashboard sign-in: a password page (`AUTH_PASSWORD`, sharing the consent page's lockout) starts a 30-day session. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
-- Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal single-user OAuth 2.1 server. One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
+- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
+- Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
 - The container runs as uid 10001 with a read-only root filesystem and no capabilities; the database lives in the `chomp-data` volume.
 
 ## Backup and export
 - `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one.
-- `chomp export --format csv|json`: CSV is one row per entry; JSON holds foods, meals with entries, aliases, templates and targets. Both take inclusive local `--start`/`--end`.
+- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, aliases, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.

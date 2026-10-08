@@ -2,7 +2,9 @@
 
 `SCHEMA.sql` in the repo root is baseline version 1. Each later change is a file here named
 `NNNN_<short_name>.sql` (starting at `0002_`), applied in order by `chomp/db.py` inside a
-transaction and recorded in `PRAGMA user_version`. Never edit a migration that has run against
+transaction and recorded in `PRAGMA user_version`. Foreign keys are off while a migration runs,
+so it can rebuild a table (create new, copy, drop old, rename), and `PRAGMA foreign_key_check`
+must pass before it commits. Never edit a migration that has run against
 a real database; add a new one. Update `SCHEMA.sql`'s comments or ARCHITECTURE.md in the same
 commit when a migration changes the design.
 
@@ -12,3 +14,4 @@ commit when a migration changes the design.
 | `0003_oauth_tokens.sql` | `oauth_tokens`: hashed OAuth tokens for the connector (#24) |
 | `0004_web_sessions.sql` | `web_sessions`: hashed browser sign-ins for the dashboard |
 | `0005_undo_actions.sql` | `undo_actions`: before/after rows of dashboard edits, for Undo (#54) |
+| `0006_users.sql` | `users`; `user_id` on meals, targets, aliases, templates, undo, sessions, tokens (#46) |

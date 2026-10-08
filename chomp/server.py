@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from typing import Annotated, Literal, TypedDict
 
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, auth, db, logic, store, text, web
+from chomp import __version__, auth, db, logic, store, text, users, web
 from chomp.config import Settings
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -260,6 +261,7 @@ class ServerInfo(TypedDict):
     version: str
     schema_version: int
     tz: str
+    user: str
 
 
 class LogItem(BaseModel):
@@ -323,8 +325,19 @@ def build_server(
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
 
+    def current_user() -> int:
+        """Whose log this call reads and writes: the user the connector signed in as (#46).
+        Local-only mode has no sign-in, so it is the owner's."""
+        if provider is None:
+            return users.OWNER_ID
+        token = get_access_token()
+        user_id = auth.user_id_of(token.subject if token else None)
+        if user_id is None:
+            raise ToolError("Not signed in to Chomp; reconnect the connector.")
+        return user_id
+
     def connect():
-        return closing(db.connect(settings.db_path))
+        return closing(db.connect(settings.db_path, current_user()))
 
     def meal_out(conn, meal_id: int) -> Meal:
         meal = store.get_meal(conn, meal_id)
@@ -355,7 +368,7 @@ def build_server(
         if provider and not auth.is_loopback(request.client.host if request.client else ""):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         try:
-            with connect() as conn:
+            with closing(db.connect(settings.db_path)) as conn:
                 version = db.schema_version(conn)
         except Exception:
             log.exception("health check failed")
@@ -367,17 +380,21 @@ def build_server(
 
     @server.tool(annotations=READ_ONLY)
     def server_info() -> ServerInfo:
-        """Report Chomp's version, database schema version, and display timezone.
+        """Report Chomp's version, database schema version, display timezone, and whose
+        meal log this connector reads and writes.
 
-        Use this to check that the Chomp connector is reachable. It returns no nutrition data.
+        Use this to check that the Chomp connector is reachable, or when the user asks whose
+        log they are signed in to. It returns no nutrition data.
         """
         with connect() as conn:
             version = db.schema_version(conn)
+            name = users.name_of(conn, store.user_of(conn)) or ""
         return {
             "name": "chomp",
             "version": __version__,
             "schema_version": version,
             "tz": tz,
+            "user": name,
         }
 
     @server.tool(annotations=LOOKUP)
@@ -976,6 +993,11 @@ def main() -> None:
     auth.check_settings(settings)  # fail on bad auth config before touching the database
     with closing(db.connect(settings.db_path)) as conn:
         version = db.migrate(conn, settings.schema_path, settings.migrations_dir)
+        if settings.public_url and (name := users.password_clash(conn, settings.auth_password)):
+            raise SystemExit(
+                f"AUTH_PASSWORD is also {name}'s password; change one of them"
+                f" (chomp user password {name})"
+            )
     log.info("database ready at schema version %d", version)
     if not settings.fdc_api_key:
         log.warning("FDC_API_KEY is not set; search_food will only find saved foods")
