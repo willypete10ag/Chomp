@@ -123,11 +123,13 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
 
 
 def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients) -> sqlite3.Row:
-    """Fill in vitamins and minerals a food cached before #53 lacks, from the same upstream
-    record. Only empty columns of unconfirmed foods change; macros never do."""
+    """Fill in vitamins and minerals (#53) and label details (#63) a food cached before them
+    lacks, from the same upstream record. Only empty columns of unconfirmed foods change;
+    macros never do."""
     if row["verified"]:
         return row
-    missing = {k: n[k] for k in logic.MICROS if row[k] is None and n.get(k) is not None}
+    keys = logic.DETAILS + logic.MICROS
+    missing = {k: n[k] for k in keys if row[k] is None and n.get(k) is not None}
     if not missing:
         return row
     sets = ", ".join(f"{k} = ?" for k in missing)

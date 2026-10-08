@@ -13,6 +13,17 @@ from zoneinfo import ZoneInfo
 
 CORE = ("kcal", "protein_g", "carbs_g", "fat_g")
 OPTIONAL = ("fiber_g", "sugar_g", "sodium_mg")
+# Label details under fat and carbs (#63): fat subtypes, cholesterol, added sugars and sugar
+# alcohols. Optional like fiber, sugar and sodium; the unit is in the name.
+DETAILS = (
+    "sat_fat_g",
+    "trans_fat_g",
+    "poly_fat_g",
+    "mono_fat_g",
+    "cholesterol_mg",
+    "added_sugar_g",
+    "sugar_alcohol_g",
+)
 # Vitamins and minerals (#53), in the order US labels list them. The unit is in the name and
 # matches the label: mg or mcg (vitamin A as RAE, folate as DFE).
 MICROS = (
@@ -34,7 +45,7 @@ MICROS = (
     "magnesium_mg",
     "zinc_mg",
 )
-NUTRIENTS = CORE + OPTIONAL + MICROS
+NUTRIENTS = CORE + OPTIONAL + DETAILS + MICROS
 
 # FDA Daily Values for adults and children 4 and over (21 CFR 101.9), in each nutrient's
 # unit. Used to read '% DV' off a label and to show a day's totals as a share of the DV.
@@ -67,6 +78,13 @@ DISPLAY_PLACES = {
     "fiber_g": 1,
     "sugar_g": 1,
     "sodium_mg": 0,
+    "sat_fat_g": 1,
+    "trans_fat_g": 1,
+    "poly_fat_g": 1,
+    "mono_fat_g": 1,
+    "cholesterol_mg": 0,
+    "added_sugar_g": 1,
+    "sugar_alcohol_g": 1,
     "vitamin_d_mcg": 1,
     "calcium_mg": 0,
     "iron_mg": 1,

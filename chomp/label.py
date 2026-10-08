@@ -115,6 +115,13 @@ NAMES = {
     "sugar_g": r"(?<!added\s)(?<!incl\.\s)(?:total\s*)?sugars?(?!\s*alcohol)",
     "protein_g": r"protein",
     "sodium_mg": r"sodium",
+    "sat_fat_g": r"sat(?:urated|\.)?\s*fat",
+    "trans_fat_g": r"trans\s*fat",
+    "poly_fat_g": r"poly\s*unsat(?:urated|\.)?\s*fat",
+    "mono_fat_g": r"mono\s*unsat(?:urated|\.)?\s*fat",
+    "cholesterol_mg": r"chol(?:esterol|\.)?",
+    "added_sugar_g": r"added\s*sugars?",
+    "sugar_alcohol_g": r"sugar\s*alcohols?",
     "vitamin_d_mcg": r"vit(?:amin|\.)?\s*d[23]?",
     "calcium_mg": r"calcium",
     "iron_mg": r"[il1|]ron",  # OCR often reads the I as l
@@ -144,6 +151,8 @@ SERVING = re.compile(r"serv(?:ing|\.)\s*size\s*:?\s*(.*)")
 SERVING_AMOUNT = re.compile(rf"{NUMBER}\s*(g|ml)\b")
 SERVING_SLIP = re.compile(r"\((\d+(?:\.\d+)?)9\)")  # "(55g)" read as "(559)"
 ENERGY_KCAL = re.compile(rf"{NUMBER}\s*kcal\b")
+# US labels put the amount first: "Includes 10g Added Sugars"
+INCLUDES_ADDED = re.compile(rf"incl(?:udes|\.)?\s*{NUMBER}\s*{UNIT}\s*added\s*sugars?")
 
 
 def _fix_ocr(text: str) -> str:
@@ -193,6 +202,10 @@ def parse(text: str) -> LabelRead:
             read.values[key] = round(value, 3)
     if "kcal" not in read.values and (m := ENERGY_KCAL.search(clean)):
         read.values["kcal"] = float(m.group(1))
+    if "added_sugar_g" not in read.values and (m := INCLUDES_ADDED.search(clean)):
+        value = _amount("added_sugar_g", float(m.group(1)), m.group(2))
+        if value is not None:
+            read.values["added_sugar_g"] = round(value, 3)
     return read
 
 

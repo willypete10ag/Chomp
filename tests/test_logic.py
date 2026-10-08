@@ -103,7 +103,7 @@ def test_round_for_display():
         "fiber_g": None,
         "sugar_g": None,
         "sodium_mg": 312,
-        **dict.fromkeys(logic.MICROS),
+        **dict.fromkeys(logic.DETAILS + logic.MICROS),
     }
 
 

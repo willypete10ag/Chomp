@@ -17,3 +17,4 @@ commit when a migration changes the design.
 | `0006_users.sql` | `users`; `user_id` on meals, targets, aliases, templates, undo, sessions, tokens (#46) |
 | `0007_micronutrients.sql` | 17 vitamin and mineral columns on `foods` and `entries` (#53) |
 | `0008_foods_deleted.sql` | `foods.deleted`: foods deleted from the dashboard, kept for past entries |
+| `0009_label_details.sql` | Fat subtypes, cholesterol, added sugars, sugar alcohols on `foods` and `entries` (#63) |
