@@ -350,3 +350,18 @@ button.wide { width: 100%; margin-bottom: .75rem; }
 .vrow .tick input { width: 1.6rem; height: 1.6rem; min-height: 0; accent-color: var(--accent); }
 .newfood .desc { margin-bottom: .3rem; }
 .ocr { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+
+/* Foods: filter chips that scroll sideways on a phone, and cards that fold under their
+   heading */
+.segment.filters { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.segment.filters::-webkit-scrollbar { display: none; }
+.segment.filters a { flex: 0 0 auto; padding: .45rem .85rem; white-space: nowrap; font-size: .9rem; }
+.fold > summary { list-style: none; cursor: pointer; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary h2 { display: flex; align-items: baseline; gap: .5rem; }
+.fold > summary h2::before {
+  content: "\25BE"; color: var(--muted); font-size: .9em; transition: transform .15s;
+}
+.fold:not([open]) > summary h2::before { transform: rotate(-90deg); }
+.fold:not([open]) > summary h2 { margin-bottom: 0; border-bottom: 0; padding-bottom: 0; }
+.fold > summary h2 small { margin-left: auto; }

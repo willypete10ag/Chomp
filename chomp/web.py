@@ -660,9 +660,29 @@ def entry_item(
     )
 
 
-def food_item(row, back: str) -> str:
+# Foods page filters: view -> chip label, and the note beside the food list's heading
+FOOD_VIEWS = {
+    "most": ("Most used", "most logged first"),
+    "recent": ("Recent", "last logged first"),
+    "new": ("Newest", "newest added first"),
+    "unconfirmed": ("Unconfirmed", "not yet checked against a label"),
+    "confirmed": ("Confirmed", "checked against a label or scanned"),
+}
+
+
+def fold(name: str, heading: str, body: str, note: str = "") -> str:
+    """A card whose contents fold away under its heading. The script remembers which ones
+    were folded (data-fold); without it every card opens."""
+    small = f"<small>{note}</small>" if note else ""
+    return (
+        f'<section class="card"><details class="fold" data-fold="{name}" open><summary>'
+        f'<h2 class="section">{heading}{small}</h2></summary>{body}</details></section>'
+    )
+
+
+def food_item(row, back: str, last_logged: str = "") -> str:
     """A saved food: name (two lines at most), kcal and macros per 100 g; tap for details
-    and to give it a shorter name."""
+    and to give it a shorter name. `last_logged` says when it was last logged."""
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
     meta = []
@@ -670,6 +690,8 @@ def food_item(row, back: str) -> str:
         meta.append(e(row["brand"]))
     if row["uses"]:
         meta.append(f"logged {row['uses']}&times;")
+    if last_logged:
+        meta.append(f"last {e(last_logged)}")
     meta.append(
         '<span class="badge ok">Confirmed</span>'
         if row["verified"]
@@ -2354,29 +2376,44 @@ def add_routes(
         if not signed_in(request):
             return to_login(request)
         q = request.query_params.get("q", "").strip()[:100]
-        back = f"{PREFIX}/foods" + (f"?{urlencode({'q': q})}" if q else "")
+        view = request.query_params.get("view", "most")
+        if view not in FOOD_VIEWS:
+            view = "most"
+        query = {k: v for k, v in (("q", q), ("view", view)) if v and v != "most"}
+        back = f"{PREFIX}/foods" + (f"?{urlencode(query)}" if query else "")
+        everything = view == "most"  # a filter narrows the list to foods only
         with connect(request) as conn:
             banner = notice(conn, request.query_params, back)
             if (added := int_param(request.query_params.get("added"))) is not None:
                 banner += added_notice(conn, added)
             if q:
-                rows = store.search_foods(conn, q, FOODS_LIMIT)
-                nicknames = store.search_aliases(conn, q, FOODS_LIMIT)
-                names = set(store.templates_matching(conn, q))
+                rows = store.search_foods(conn, q, FOODS_LIMIT, view)
+                nicknames = store.search_aliases(conn, q, FOODS_LIMIT) if everything else []
+                names = set(store.templates_matching(conn, q)) if everything else set()
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
-                rows = store.list_used_foods(conn, FOODS_LIMIT)
-                nicknames = store.list_aliases(conn)
-                templates = store.list_templates(conn)
+                rows = store.list_used_foods(conn, FOODS_LIMIT, view)
+                nicknames = store.list_aliases(conn) if everything else []
+                templates = store.list_templates(conn) if everything else []
 
-        clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
+        def view_url(v: str) -> str:
+            params = {k: val for k, val in (("q", q), ("view", v)) if val and val != "most"}
+            return f"{PREFIX}/foods" + (f"?{urlencode(params)}" if params else "")
+
+        clear = f'<a class="clear" href="{e(view_url(view))}">Clear</a>' if q else ""
+        keep_view = f'<input type="hidden" name="view" value="{view}">' if view != "most" else ""
+        chips = "".join(
+            f'<a href="{e(view_url(v))}"{" aria-current=page" if v == view else ""}>{label}</a>'
+            for v, (label, _) in FOOD_VIEWS.items()
+        )
         parts = [
             "<h1>Foods</h1>",
             banner,
-            f'<form class="search" method="get" action="{PREFIX}/foods">'
+            f'<form class="search" method="get" action="{PREFIX}/foods">{keep_view}'
             f'<input type="search" name="q" value="{e(q)}" placeholder="Foods, nicknames, meals"'
             ' aria-label="Search foods, nicknames and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
+            f'<nav class="segment filters" aria-label="Show">{chips}</nav>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
         if q and not (rows or nicknames or templates):
@@ -2400,30 +2437,32 @@ def add_routes(
                     f'<ul class="plain">{lis}</ul><div class="small muted">'
                     f"{macros_line(t_totals)}</div></div>"
                 )
-            parts.append(
-                '<section class="card"><h2 class="section">Saved meals</h2>'
-                f"{''.join(cards)}</section>"
-            )
+            parts.append(fold("meals", "Saved meals", "".join(cards)))
         if nicknames:
             lis = "".join(
                 f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted name">'
                 f"{e(a['name'])}{grams_note(a['default_grams'])}</span></li>"
                 for a in nicknames
             )
-            parts.append(
-                '<section class="card"><h2 class="section">Nicknames</h2>'
-                f'<ul class="plain">{lis}</ul></section>'
-            )
+            parts.append(fold("nicknames", "Nicknames", f'<ul class="plain">{lis}</ul>'))
         if rows:
-            heading = "Foods" if q else "Your foods"
-            note = "most logged first, " if not q else ""
+            heading = "Foods" if q or not everything else "Your foods"
+            note = f"{FOOD_VIEWS[view][1]}, " if not q or not everything else ""
+            day = today()
+
+            def last(row) -> str:
+                if view != "recent" or not row["last_used"]:
+                    return ""
+                title = day_title(logic.local_date(row["last_used"], tz), day)
+                return title.lower() if title in ("Today", "Yesterday") else title
+
+            items = "".join(food_item(r, back, last(r)) for r in rows)
             parts.append(
-                f'<section class="card"><h2 class="section">{heading}'
-                f"<small>{note}per 100 g</small></h2>"
-                f'<ul class="entries">{"".join(food_item(r, back) for r in rows)}</ul></section>'
+                fold("foods", heading, f'<ul class="entries">{items}</ul>', f"{note}per 100 g")
             )
         elif not q:
-            parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+            empty = "No saved foods yet." if everything else "No foods here."
+            parts.append(f'<section class="card empty"><p>{empty}</p></section>')
         return render(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
         )

@@ -34,7 +34,9 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 (any day via arrows, a seven-day strip or a date picker; calories logged and remaining, then
 protein/carbs/fat with bars where targets exist, plus fiber/sugar/sodium; meals led by their
 time), History (7/30/90-day averages and inline-SVG charts) and Foods (one search over saved
-meals, nicknames and used foods, most logged first; tap a food for its per-serving values and
+meals, nicknames and used foods, most logged first, with filters for recent, newest,
+unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
+in the browser; tap a food for its per-serving values and
 source, or to give it a shorter name).
 
 It also works without Claude (#54): Add food (search your foods, nicknames and saved meals, or

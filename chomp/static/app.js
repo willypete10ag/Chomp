@@ -186,5 +186,26 @@
     sync();
   });
 
+  // Foods: remember which cards were folded, in this browser only
+  var folded = {};
+  try {
+    folded = JSON.parse(localStorage.getItem("chomp-folded") || "{}") || {};
+  } catch (err) {
+    folded = {};
+  }
+  document.querySelectorAll("details[data-fold]").forEach(function (fold) {
+    var name = fold.dataset.fold;
+    if (folded[name]) fold.open = false;
+    fold.addEventListener("toggle", function () {
+      if (fold.open) delete folded[name];
+      else folded[name] = 1;
+      try {
+        localStorage.setItem("chomp-folded", JSON.stringify(folded));
+      } catch (err) {
+        // private browsing: folding still works, it just isn't remembered
+      }
+    });
+  });
+
   document.querySelectorAll("form").forEach(changed);
 })();

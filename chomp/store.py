@@ -243,20 +243,39 @@ USES = (
     "(SELECT count(*) FROM entries e JOIN meals m ON m.id = e.meal_id"
     " WHERE e.food_id = f.id AND m.user_id = ?) AS uses"
 )
+# When this user last logged the food (UTC), as column `last_used` (one ? for the user id)
+LAST_USED = (
+    "(SELECT max(m.eaten_at) FROM entries e JOIN meals m ON m.id = e.meal_id"
+    " WHERE e.food_id = f.id AND m.user_id = ?) AS last_used"
+)
+MOST_USED = "uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id"
+# Ways to narrow or order the Foods list and its search (#59 follow-up): view -> (extra
+# condition, order). None for the order keeps search results by relevance.
+FOOD_VIEWS = {
+    "most": ("1", None),
+    "recent": ("last_used IS NOT NULL", "last_used DESC, f.id DESC"),
+    "new": ("1", "f.created_at DESC, f.id DESC"),
+    "unconfirmed": ("f.verified = 0", None),
+    "confirmed": ("f.verified = 1", None),
+}
 
 
-def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
+def search_foods(
+    conn: sqlite3.Connection, query: str, limit: int, view: str = "most"
+) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
-    verified first, then by relevance."""
+    verified first, then by relevance. A `view` (FOOD_VIEWS) narrows or reorders them."""
     match = fts_query(query)
     if match is None:
         return []
+    where, order = FOOD_VIEWS[view]
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    user = user_of(conn)
     rows = conn.execute(
-        f"SELECT {cols}, {USES} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
-        f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
-        " ORDER BY f.verified DESC, bm25(foods_fts)",
-        (user_of(conn), match),
+        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods_fts JOIN foods f"
+        f" ON f.id = foods_fts.rowid WHERE foods_fts MATCH ? AND {USED_FOOD} AND {where}"
+        f" ORDER BY {order or 'f.verified DESC, bm25(foods_fts)'}",
+        (user, user, match),
     )
     # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
     found: list[sqlite3.Row] = []
@@ -269,13 +288,16 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
     return found
 
 
-def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Foods the user has used (see USED_FOOD), most logged first, then verified, then by name."""
+def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") -> list[sqlite3.Row]:
+    """Foods the user has used (see USED_FOOD), most logged first, then verified, then by
+    name. A `view` (FOOD_VIEWS) narrows or reorders them."""
+    where, order = FOOD_VIEWS[view]
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    user = user_of(conn)
     return conn.execute(
-        f"SELECT {cols}, {USES} FROM foods f WHERE {USED_FOOD}"
-        " ORDER BY uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
-        (user_of(conn), limit),
+        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods f WHERE {USED_FOOD} AND {where}"
+        f" ORDER BY {order or MOST_USED} LIMIT ?",
+        (user, user, limit),
     ).fetchall()
 
 

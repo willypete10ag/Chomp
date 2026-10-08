@@ -282,3 +282,39 @@ def test_new_food_needs_sign_in_and_same_origin(http, conn):  # noqa: F811
     r = http.post("/app/foods/label", files={"photo": ("x.jpg", b"x", "image/jpeg")})
     assert r.status_code == 403
     assert saved(conn, http.post("/app/foods/new", data=food_form(), headers=ORIGIN))
+
+
+# --- Foods page filters and folding sections -----------------------------------------------
+
+
+def test_foods_filters_narrow_and_reorder(app, conn):
+    from test_tools import add_food
+
+    old = add_food(conn, "Oat bran", 246, 17, 66, 7, verified=1)
+    eaten = add_food(conn, "Oat milk", 48, 1, 7, 2)
+    new = add_food(conn, "Oat cookie", 450, 6, 65, 18)
+    store.log_meal(conn, [(old, 50)], "2026-10-01T12:00:00Z", None)
+    store.log_meal(conn, [(old, 50)], "2026-10-02T12:00:00Z", None)
+    store.log_meal(conn, [(eaten, 200)], "2026-10-03T12:00:00Z", None)
+    store.save_template(conn, "oat breakfast", [(old, 40)])
+
+    def names(view, q=""):
+        rows = store.search_foods(conn, q, 10, view) if q else store.list_used_foods(conn, 10, view)
+        return [r["name"] for r in rows]
+
+    assert names("most") == ["Oat bran", "Oat milk", "Oat cookie"]
+    assert names("recent") == ["Oat milk", "Oat bran"]  # only foods this user logged
+    assert names("new")[0] == "Oat cookie" and new
+    assert names("confirmed") == ["Oat bran"]
+    assert names("unconfirmed", "oat") == ["Oat milk", "Oat cookie"]
+
+    page = app.get("/app/foods").text
+    assert 'data-fold="meals"' in page and 'data-fold="foods"' in page and " open>" in page
+    assert "aria-current=page>Most used<" in page
+    page = app.get("/app/foods?view=recent").text
+    assert "aria-current=page>Recent<" in page and "last logged first" in page
+    assert "last Sat, Oct 3" in page and "Saved meals" not in page  # filters show foods only
+    page = app.get("/app/foods?view=confirmed&q=oat").text
+    assert "Oat bran" in page and "Oat milk" not in page
+    assert '<input type="hidden" name="view" value="confirmed">' in page
+    assert "Oat milk" in app.get("/app/foods?view=bogus").text  # unknown view: everything
