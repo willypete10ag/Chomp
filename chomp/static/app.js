@@ -186,7 +186,8 @@
     sync();
   });
 
-  // Foods: remember which cards were folded, in this browser only
+  // Foods and Breakdown: remember which cards were folded (1) or opened (0), in this
+  // browser only
   var folded = {};
   try {
     folded = JSON.parse(localStorage.getItem("chomp-folded") || "{}") || {};
@@ -195,10 +196,10 @@
   }
   document.querySelectorAll("details[data-fold]").forEach(function (fold) {
     var name = fold.dataset.fold;
-    if (folded[name]) fold.open = false;
+    if (folded[name] === 1) fold.open = false;
+    else if (folded[name] === 0) fold.open = true;
     fold.addEventListener("toggle", function () {
-      if (fold.open) delete folded[name];
-      else folded[name] = 1;
+      folded[name] = fold.open ? 0 : 1;
       try {
         localStorage.setItem("chomp-folded", JSON.stringify(folded));
       } catch (err) {
@@ -206,6 +207,17 @@
       }
     });
   });
+
+  // Breakdown: a link to a section (tapping Protein on Today) opens the card it's in
+  var reveal = function () {
+    var target = location.hash && document.getElementById(location.hash.slice(1));
+    if (!target) return;
+    var fold = target.closest("details[data-fold]");
+    if (fold && !fold.open) fold.open = true;
+    target.scrollIntoView();
+  };
+  reveal();
+  window.addEventListener("hashchange", reveal);
 
   // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
   // another to hide it again. Only one shows at a time. Press and hold a food to open it

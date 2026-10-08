@@ -276,8 +276,8 @@ def progress(totals: Mapping[str, float | None], targets: Mapping[str, float | N
     return out
 
 
-# Atwater factors, kcal per gram. Only used to compare a day's calorie target with its
-# protein, carbs and fat targets; logged calories always come from the food data.
+# Atwater factors, kcal per gram. Only used to split calories between protein, carbs and fat
+# (targets, and a day's breakdown); logged calories always come from the food data.
 KCAL_PER_G = {"protein_g": 4.0, "carbs_g": 4.0, "fat_g": 9.0}
 
 
@@ -290,6 +290,38 @@ def macro_kcal(targets: Mapping[str, float | None]) -> dict[str, float] | None:
         return None
     parts = {k: float(targets[k]) * f for k, f in KCAL_PER_G.items()}
     return {**parts, "total": sum(parts.values())}
+
+
+def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:
+    """Each macro's percent of the calories protein, carbs and fat give together (4/4/9 kcal
+    per g). None when there is none of any."""
+    parts = {k: (totals.get(k) or 0.0) * f for k, f in KCAL_PER_G.items()}
+    total = sum(parts.values())
+    if total <= 0:
+        return None
+    return {k: 100.0 * v / total for k, v in parts.items()}
+
+
+def net_carbs(totals: Mapping[str, float | None]) -> float | None:
+    """Carbs minus fiber and sugar alcohols (never below 0); None unless sugar alcohols are
+    known, since then it's just carbs minus fiber."""
+    if totals.get("sugar_alcohol_g") is None:
+        return None
+    rest = (totals.get("carbs_g") or 0.0) - (totals.get("fiber_g") or 0.0)
+    return max(rest - totals["sugar_alcohol_g"], 0.0)
+
+
+def top_foods(
+    items: Iterable[tuple[int, Mapping[str, float | None]]], key: str, n: int = 3
+) -> list[tuple[int, float]]:
+    """The `n` foods that gave the most of `key`, as (food_id, amount), largest first. Entries
+    of the same food are added together; foods that gave none are left out."""
+    by_food: dict[int, float] = {}
+    for food_id, values in items:
+        if (v := values.get(key)) is not None:
+            by_food[food_id] = by_food.get(food_id, 0.0) + v
+    ranked = sorted(by_food.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [(f, v) for f, v in ranked if v > 0][:n]
 
 
 # --- Time -----------------------------------------------------------------------------------

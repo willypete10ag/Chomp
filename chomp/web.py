@@ -105,6 +105,13 @@ NUTRIENT_LABELS = {
     "fiber_g": "Fiber",
     "sugar_g": "Sugar",
     "sodium_mg": "Sodium",
+    "sat_fat_g": "Saturated fat",
+    "trans_fat_g": "Trans fat",
+    "poly_fat_g": "Polyunsaturated fat",
+    "mono_fat_g": "Monounsaturated fat",
+    "cholesterol_mg": "Cholesterol",
+    "added_sugar_g": "Added sugars",
+    "sugar_alcohol_g": "Sugar alcohols",
     "vitamin_d_mcg": "Vitamin D",
     "calcium_mg": "Calcium",
     "iron_mg": "Iron",
@@ -131,7 +138,7 @@ UNITS = {
     "fiber_g": "g",
     "sugar_g": "g",
     "sodium_mg": "mg",
-    **{k: logic.unit_of(k) for k in logic.MICROS},
+    **{k: logic.unit_of(k) for k in logic.DETAILS + logic.MICROS},
 }
 LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
 NBSP = "\u00a0"  # keeps a number on the same line as its unit
@@ -272,6 +279,44 @@ def micros_table(n: logic.Nutrients, partial: list[str]) -> str:
         '<th scope="col">Amount</th><th scope="col">Daily Value</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody></table>{note}</details>"
     )
+
+
+# The day breakdown's nutrition facts, in label order: (key, indented under the row above)
+FACTS = (
+    ("kcal", False),
+    ("fat_g", False),
+    ("sat_fat_g", True),
+    ("trans_fat_g", True),
+    ("poly_fat_g", True),
+    ("mono_fat_g", True),
+    ("cholesterol_mg", False),
+    ("sodium_mg", False),
+    ("carbs_g", False),
+    ("fiber_g", True),
+    ("sugar_g", True),
+    ("added_sugar_g", True),
+    ("sugar_alcohol_g", True),
+    ("net_carbs", True),
+    ("protein_g", False),
+)
+MACRO_CLASS = {key: cls for key, cls, _ in MACROS}
+
+
+def top_list(top: list[tuple[str, bool, float]], key: str) -> str:
+    """A numbered list of the foods that gave the most of `key`: (name, confirmed, amount).
+    Unconfirmed foods get an amber dot."""
+    items = "".join(
+        '<li><span class="name">'
+        + (
+            ""
+            if confirmed
+            else '<span class="dot unsure" aria-hidden="true"></span>'
+            '<span class="sr">Unconfirmed: </span>'
+        )
+        + f"{e(name)}</span><span>{amount(key, value)}</span></li>"
+        for name, confirmed, value in top
+    )
+    return f'<ol class="top">{items}</ol>'
 
 
 def meter(percent: float | None, kind: str, *, warn_over: bool = False) -> str:
@@ -670,12 +715,13 @@ FOOD_VIEWS = {
 }
 
 
-def fold(name: str, heading: str, body: str, note: str = "") -> str:
+def fold(name: str, heading: str, body: str, note: str = "", *, opened: bool = True) -> str:
     """A card whose contents fold away under its heading. The script remembers which ones
-    were folded (data-fold); without it every card opens."""
+    were folded or opened (data-fold); without it each starts as `opened` says."""
     small = f"<small>{note}</small>" if note else ""
+    state = " open" if opened else ""
     return (
-        f'<section class="card"><details class="fold" data-fold="{name}" open><summary>'
+        f'<section class="card"><details class="fold" data-fold="{name}"{state}><summary>'
         f'<h2 class="section">{heading}{small}</h2></summary>{body}</details></section>'
     )
 
@@ -769,7 +815,35 @@ PROBLEMS = {
 # --- New food (#59): barcode scan, label photo, or typed in; all fill the same form ----------
 
 # The values a new food's form asks for, per serving, in the order labels print them
-FORM_MAIN = ("kcal", "fat_g", "carbs_g", "fiber_g", "sugar_g", "protein_g", "sodium_mg")
+FORM_MAIN = (
+    "kcal",
+    "fat_g",
+    "sat_fat_g",
+    "trans_fat_g",
+    "poly_fat_g",
+    "mono_fat_g",
+    "cholesterol_mg",
+    "sodium_mg",
+    "carbs_g",
+    "fiber_g",
+    "sugar_g",
+    "added_sugar_g",
+    "sugar_alcohol_g",
+    "protein_g",
+)
+# Rows a label indents under the one above them (fat's and carbs' breakdowns)
+FORM_INDENT = frozenset(
+    {
+        "sat_fat_g",
+        "trans_fat_g",
+        "poly_fat_g",
+        "mono_fat_g",
+        "fiber_g",
+        "sugar_g",
+        "added_sugar_g",
+        "sugar_alcohol_g",
+    }
+)
 FORM_KEYS = ("serving_g", *FORM_MAIN, *logic.MICROS)
 FORM_LABELS = {**NUTRIENT_LABELS, "serving_g": "Serving size"}
 FORM_UNITS = {**UNITS, "serving_g": "g"}
@@ -838,7 +912,8 @@ def value_row(key: str, value: str, *, tick: bool | None) -> str:
             + f'><span class="sr">{e(FORM_LABELS[key])} matches the label</span></label>'
         )
     return (
-        f'<div class="vrow"><label for="f-{key}">{e(FORM_LABELS[key])}</label>'
+        f'<div class="vrow{" indent" if key in FORM_INDENT else ""}">'
+        f'<label for="f-{key}">{e(FORM_LABELS[key])}</label>'
         f'<span class="field">{box}<span class="unit">{FORM_UNITS[key]}</span></span>'
         f"{check}</div>"
     )
@@ -1208,6 +1283,10 @@ def add_routes(
     def day_url(day: date) -> str:
         return f"{PREFIX}?date={day.isoformat()}"
 
+    def breakdown_url(day: date, anchor: str = "", back: str = "") -> str:
+        query = {"date": day.isoformat()} | ({"back": back} if back else {})
+        return f"{PREFIX}/breakdown?{urlencode(query)}" + (f"#{anchor}" if anchor else "")
+
     def back_to_day(day: date, anchor: str = "", **params: str | int) -> RedirectResponse:
         return go(with_params(day_url(day), anchor, **params))
 
@@ -1448,8 +1527,10 @@ def add_routes(
         ]
         kcal = progress.get("kcal")
         summary.append(
-            f'<div class="row"><p class="hero"><span class="big kcal">{num(shown["kcal"])}</span>'
-            f' kcal logged</p><a class="small" href="{goals_url}">Edit goals</a></div>'
+            f'<div class="row"><a class="hero" href="{breakdown_url(day)}">'
+            f'<span class="big kcal">{num(shown["kcal"])}</span> kcal logged'
+            f' <span class="more-link small">Breakdown&nbsp;&rsaquo;</span></a>'
+            f'<a class="small" href="{goals_url}">Edit goals</a></div>'
         )
         if kcal:
             left = round(kcal["remaining"])
@@ -1470,16 +1551,18 @@ def add_routes(
                 left = round(p["remaining"], logic.DISPLAY_PLACES[key])
                 note = f"{amount(key, abs(left))} {'left' if left >= 0 else 'over'}"
                 macros.append(
-                    f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                    f'<a class="macro" href="{breakdown_url(day, f"top-{key}")}">'
+                    f'<div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
                     f"<div><strong>{eaten}</strong>"
                     f' <span class="muted target">/ {amount(key, p["target"])}</span></div>'
                     f"{meter(p['percent'], key)}"
-                    f'<div class="muted small">{note}</div></div>'
+                    f'<div class="muted small">{note}</div></a>'
                 )
             else:
                 macros.append(
-                    f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                    f"<div><strong>{eaten}</strong> g</div></div>"
+                    f'<a class="macro" href="{breakdown_url(day, f"top-{key}")}">'
+                    f'<div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                    f"<div><strong>{eaten}</strong> g</div></a>"
                 )
         summary.append(f'<div class="macros">{"".join(macros)}</div>')
         if extras := extras_line(shown):
@@ -1538,6 +1621,168 @@ def add_routes(
         return render(
             day_title(day, now),
             "".join(head) + "".join(summary) + "".join(cards),
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+        )
+
+    # --- Day breakdown (#63) ---
+
+    @server.custom_route(f"{PREFIX}/breakdown", methods=["GET"])
+    async def breakdown(request: Request) -> Response:
+        """A day's nutrients: the macro split, calories by meal, the foods that gave the most
+        of each, and the full nutrition facts. A food with no value for a nutrient counts as
+        none of it (Will's call, #63); a nutrient no food that day reports isn't shown."""
+        if not signed_in(request):
+            return to_login(request)
+        now = today()
+        params = request.query_params
+        try:
+            day = logic.parse_local_date(params.get("date"), tz)
+            if not MIN_YEAR <= day.year <= MAX_YEAR:
+                raise ValueError(day)
+        except ValueError:
+            return message("Unknown date", "Dates look like 2026-10-06.", 400, signed_in=True)
+        back = safe_next(params.get("back") or day_url(day))
+        with connect(request) as conn:
+            meals, totals, _, _ = load_day(conn, day)
+            entries = [x for _, xs in meals for x in xs]
+            foods = store.get_foods(conn, (x.food_id for x in entries))
+        shown = logic.round_for_display(totals)
+        items = [(x.food_id, x.nutrients) for x in entries]
+
+        def top(key: str) -> list[tuple[str, bool, float]]:
+            return [
+                (foods[f]["name"], bool(foods[f]["verified"]), v)
+                for f, v in logic.top_foods(items, key)
+            ]
+
+        title = day_title(day, now)
+        parts = [
+            '<header class="daynav">',
+            f'<a class="step" href="{e(back)}" aria-label="Back">&lsaquo;</a>',
+            '<div class="daytitle"><h1>Breakdown</h1>'
+            f'<p class="muted small">{e(long_date(day, now))}</p></div>',
+            '<span class="step off" aria-hidden="true"></span></header>',
+        ]
+        if not entries:
+            parts.append(
+                '<section class="card empty"><p>Nothing logged on this day.</p>'
+                f'<p class="muted small"><a href="{day_url(day)}">Back to {e(title)}</a></p>'
+                "</section>"
+            )
+            return render(
+                "Breakdown",
+                "".join(parts),
+                "today",
+                signed_in=provider is not None,
+                user=account(request),
+            )
+
+        # Calories and the macro split
+        split = logic.macro_split(totals)
+        rects, tiles, x = [], [], 0.0
+        for key, cls, _ in MACROS:
+            share = split[key] if split else 0.0
+            rects.append(
+                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
+            )
+            x += share
+            tiles.append(
+                f'<a class="macro" href="#top-{key}"><div class="small {cls}">'
+                f"{NUTRIENT_LABELS[key]}</div><div><strong>{round(share)}%</strong></div>"
+                f'<div class="muted small">{amount(key, shown[key])}</div></a>'
+            )
+        parts.append(
+            f'<section class="card summary" aria-label="Totals for {e(title)}">'
+            f'<p class="hero"><span class="big kcal">{num(shown["kcal"])}</span> kcal</p>'
+            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
+            f' aria-hidden="true">{"".join(rects)}</svg>'
+            f'<div class="macros">{"".join(tiles)}</div>'
+            '<p class="muted small">Share of the calories from protein, carbs and fat.</p>'
+            "</section>"
+        )
+
+        # Calories by meal
+        day_kcal = totals["kcal"] or 0.0
+        rows = []
+        for meal, xs in meals:
+            kcal = logic.sum_nutrients(x.nutrients for x in xs)["kcal"] or 0.0
+            pct = 100.0 * kcal / day_kcal if day_kcal > 0 else 0.0
+            rows.append(
+                f'<li><div class="row"><a href="{day_url(day)}#meal-{meal["id"]}">'
+                f'{e(meal_title(meal))}</a><span><span class="kcal">{num(kcal)}</span>'
+                f'{NBSP}kcal <span class="muted small">{round(pct)}%</span></span></div>'
+                f"{meter(pct, 'kcal')}</li>"
+            )
+        parts.append(
+            fold("bd-meals", "Calories by meal", f'<ul class="bymeal">{"".join(rows)}</ul>')
+        )
+
+        # Top foods per macro
+        cards = []
+        for key, cls, _ in MACROS:
+            best = top(key)
+            body = top_list(best, key) if best else '<p class="muted small">None this day.</p>'
+            cards.append(
+                f'<div class="topcard" id="top-{key}"><h3 class="{cls}">'
+                f"{NUTRIENT_LABELS[key]}</h3>{body}</div>"
+            )
+        parts.append(fold("bd-top", "Top foods", "".join(cards)))
+
+        # Nutrition facts: tap a row for the foods that gave the most of it
+        def fact(key: str, label: str, value: str, indent: bool) -> str:
+            cls = "fact indent" if indent else "fact"
+            head = f"<span>{label}</span><span>{value}</span>"
+            best = top(key) if key in logic.NUTRIENTS else []
+            if not best:
+                return f'<li class="{cls}"><div class="row">{head}</div></li>'
+            return (
+                f'<li class="{cls}"><details><summary class="row">{head}</summary>'
+                f"{top_list(best, key)}</details></li>"
+            )
+
+        facts = []
+        for key, indent in FACTS:
+            if key == "net_carbs":
+                if (net := logic.net_carbs(totals)) is not None:
+                    facts.append(fact(key, "Net carbs", amount("carbs_g", net), indent))
+            elif shown[key] is not None:
+                facts.append(fact(key, NUTRIENT_LABELS[key], amount(key, shown[key]), indent))
+        parts.append(
+            fold(
+                "bd-facts",
+                "Nutrition facts",
+                f'<ul class="facts">{"".join(facts)}</ul>'
+                '<p class="muted small hint">Tap a nutrient to see which foods gave the most.'
+                " Foods with no value for one count as none.</p>",
+            )
+        )
+
+        # Vitamins and minerals, folded until opened
+        micros = [
+            fact(
+                k,
+                NUTRIENT_LABELS[k],
+                f'{amount(k, shown[k])} <span class="muted small">'
+                f"{num(logic.percent_dv(k, shown[k]))}%{NBSP}DV</span>",
+                False,
+            )
+            for k in logic.MICROS
+            if shown[k] is not None
+        ]
+        if micros:
+            parts.append(
+                fold(
+                    "bd-micros",
+                    "Vitamins and minerals",
+                    f'<ul class="facts">{"".join(micros)}</ul>',
+                    opened=False,
+                )
+            )
+        return render(
+            "Breakdown",
+            "".join(parts),
             "today",
             signed_in=provider is not None,
             user=account(request),
@@ -2368,11 +2613,14 @@ def add_routes(
                 if n is None:
                     continue
                 shown = logic.round_for_display(n)
+                here = f"{PREFIX}/history?days={span}"
                 rows.append(
                     f'<li><a class="row" href="{PREFIX}?date={d.isoformat()}">'
                     f"<span>{e(day_title(d, last))}</span>"
                     f'<span><span class="kcal">{num(shown["kcal"])}</span>'
-                    f' <span class="small muted">{macros_line(shown)}</span></span></a></li>'
+                    f' <span class="small muted">{macros_line(shown)}</span></span></a>'
+                    f'<a class="small bd" href="{e(breakdown_url(d, back=here))}">'
+                    f"Breakdown&nbsp;&rsaquo;</a></li>"
                 )
             parts.append(
                 f'<section class="card"><h2>Days</h2><ul class="days">{"".join(rows)}'
