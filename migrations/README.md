@@ -15,3 +15,4 @@ commit when a migration changes the design.
 | `0004_web_sessions.sql` | `web_sessions`: hashed browser sign-ins for the dashboard |
 | `0005_undo_actions.sql` | `undo_actions`: before/after rows of dashboard edits, for Undo (#54) |
 | `0006_users.sql` | `users`; `user_id` on meals, targets, aliases, templates, undo, sessions, tokens (#46) |
+| `0007_micronutrients.sql` | 17 vitamin and mineral columns on `foods` and `entries` (#53) |

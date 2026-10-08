@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from conftest import fixture_json
 
+from chomp import logic
 from chomp.sources import SourceError
 from chomp.sources import fdc as fdcmod
 from chomp.sources.fdc import FDCClient
@@ -24,6 +25,7 @@ def test_parse_search_hit_nutrients():
         "fiber_g": 0,
         "sugar_g": 0.71,
         "sodium_mg": 166,
+        **dict.fromkeys(logic.MICROS),
     }
 
 

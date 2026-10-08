@@ -53,6 +53,9 @@ TOTALS_MAX_DAYS = 366
 # --- Output models --------------------------------------------------------------------------
 
 
+MicroName = Literal[logic.MICROS]  # type: ignore[valid-type]
+
+
 class Nutrients(BaseModel):
     """Calories in kcal, macros in grams, sodium in mg. Optional values are null if unknown."""
 
@@ -63,10 +66,26 @@ class Nutrients(BaseModel):
     fiber_g: float | None = None
     sugar_g: float | None = None
     sodium_mg: float | None = None
+    micronutrients: dict[MicroName, float] = Field(
+        default_factory=dict,
+        description="Vitamins and minerals the data reports, unit in the name (vitamin A as "
+        "mcg RAE, folate as mcg DFE); unreported ones are left out",
+    )
+    micronutrients_partial: list[MicroName] = Field(
+        default_factory=list,
+        description="In a total: vitamins and minerals known for only some of the items, so "
+        "their total understates what was eaten",
+    )
 
 
-def _nutrients(values: logic.Nutrients) -> Nutrients:
-    return Nutrients(**logic.round_for_display(values))
+def _nutrients(values: logic.Nutrients, rows=()) -> Nutrients:
+    """Display values; pass the summed rows for a total so partial micronutrients are named."""
+    shown = logic.round_for_display(values)
+    return Nutrients(
+        **{k: shown[k] for k in logic.CORE + logic.OPTIONAL},
+        micronutrients={k: shown[k] for k in logic.MICROS if shown[k] is not None},
+        micronutrients_partial=logic.partial_micros(rows),
+    )
 
 
 class Food(BaseModel):
@@ -300,6 +319,31 @@ def _progress(totals: logic.Nutrients, targets: dict) -> dict[str, TargetProgres
 NutrientArg = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 OptionalNutrientArg = Annotated[float | None, Field(ge=0, allow_inf_nan=False)]
 
+MicrosArg = Annotated[
+    dict[MicroName, NutrientArg] | None,
+    Field(
+        description="Vitamins and minerals as amounts, unit in the name, e.g. "
+        '{"vitamin_d_mcg": 2, "iron_mg": 1.8, "potassium_mg": 240}'
+    ),
+]
+MicrosPercentArg = Annotated[
+    dict[MicroName, NutrientArg] | None,
+    Field(
+        description="Vitamins and minerals the label gives only as % Daily Value, e.g. "
+        '{"thiamin_mg": 25} for "Thiamin 25%"; converted with FDA Daily Values'
+    ),
+]
+
+
+def _micros(amounts: dict | None, percents: dict | None) -> dict[str, float]:
+    """Vitamin and mineral values from a label: amounts as given, % DV converted."""
+    amounts, percents = dict(amounts or {}), dict(percents or {})
+    both = sorted(set(amounts) & set(percents))
+    if both:
+        raise ValueError(f"{', '.join(both)} given both as an amount and as % DV; give one")
+    return {**amounts, **logic.percent_dv_to_amounts(percents)}
+
+
 ASK_FOR_LABEL = (
     "Not found in Chomp, FoodData Central or Open Food Facts. Ask the user for a photo of "
     "the nutrition facts panel, then call save_food_from_label with this barcode as upc."
@@ -348,16 +392,19 @@ def build_server(
             label=meal["label"],
             note=meal["note"],
             entries=[_entry(e) for e in entries],
-            totals=_nutrients(logic.sum_nutrients(e.nutrients for e in entries)),
+            totals=_nutrients(
+                logic.sum_nutrients(e.nutrients for e in entries), [e.nutrients for e in entries]
+            ),
         )
 
     def day_summary(conn, utc: str) -> DaySummary:
         day = logic.local_date(utc, tz)
         start, end = logic.local_day_bounds(day, tz)
-        totals = logic.sum_nutrients(n for _, n in store.entries_between(conn, start, end))
+        rows = [n for _, n in store.entries_between(conn, start, end)]
+        totals = logic.sum_nutrients(rows)
         return DaySummary(
             date=day.isoformat(),
-            totals=_nutrients(totals),
+            totals=_nutrients(totals, rows),
             progress=_progress(totals, store.get_targets(conn)),
         )
 
@@ -617,11 +664,12 @@ def build_server(
             day = logic.parse_local_date(date, tz)
             start, end = logic.local_day_bounds(day, tz)
             meals = [meal_out(conn, m["id"]) for m in store.meals_between(conn, start, end)]
-            totals = logic.sum_nutrients(n for _, n in store.entries_between(conn, start, end))
+            rows = [n for _, n in store.entries_between(conn, start, end)]
+            totals = logic.sum_nutrients(rows)
             return Day(
                 date=day.isoformat(),
                 meals=meals,
-                totals=_nutrients(totals),
+                totals=_nutrients(totals, rows),
                 progress=_progress(totals, store.get_targets(conn)),
             )
 
@@ -710,6 +758,8 @@ def build_server(
         fiber_g: Annotated[OptionalNutrientArg, Field(description="Dietary fiber, g")] = None,
         sugar_g: Annotated[OptionalNutrientArg, Field(description="Total sugars, g")] = None,
         sodium_mg: Annotated[OptionalNutrientArg, Field(description="Sodium, mg")] = None,
+        micronutrients: MicrosArg = None,
+        micronutrients_percent_dv: MicrosPercentArg = None,
         brand: Annotated[str | None, Field(description="Brand name")] = None,
         upc: Annotated[
             str | None, Field(description="Barcode digits, if known, so scans find it")
@@ -723,7 +773,9 @@ def build_server(
         Use after lookup_barcode finds nothing, or when the user wants their package's exact
         label values. If no barcode is known, ask the user for the digits under the barcode
         and pass them as upc so future scans find this food. Enter the per-serving numbers
-        exactly as printed; Chomp converts them to per 100 g. The food is saved as verified
+        exactly as printed; Chomp converts them to per 100 g. Include every vitamin and
+        mineral the label lists: as an amount when printed (e.g. "Vitamin D 2mcg 10%" is
+        vitamin_d_mcg 2), otherwise as % DV. The food is saved as verified
         (it is the user's own label). Returns the saved food with a food_id
         ready for log_entries. Only use numbers read from the label, never estimates.
         """
@@ -737,6 +789,7 @@ def build_server(
                 "fiber_g": fiber_g,
                 "sugar_g": sugar_g,
                 "sodium_mg": sodium_mg,
+                **_micros(micronutrients, micronutrients_percent_dv),
             }
             row, moved_from = store.save_label_food(
                 conn,
@@ -759,6 +812,8 @@ def build_server(
         fiber_g: OptionalNutrientArg = None,
         sugar_g: OptionalNutrientArg = None,
         sodium_mg: OptionalNutrientArg = None,
+        micronutrients: MicrosArg = None,
+        micronutrients_percent_dv: MicrosPercentArg = None,
         per_serving_g: Annotated[
             float | None,
             Field(
@@ -772,7 +827,8 @@ def build_server(
         optionally correcting nutrient values.
 
         Use when the user confirms an unverified food (usually from Open Food Facts) or
-        reports that a value is wrong. Only pass nutrients that need correcting; the rest
+        reports that a value is wrong, or to add vitamins and minerals from the label to a
+        food that lacks them. Only pass nutrients that need correcting or adding; the rest
         are kept. Corrections apply to future logs only; past entries keep their values
         (use update_entry to re-snapshot one). Returns the food and which nutrients changed.
         """
@@ -790,6 +846,7 @@ def build_server(
             if v is not None
         }
         with tool_errors(), connect() as conn:
+            given |= _micros(micronutrients, micronutrients_percent_dv)
             if per_serving_g is not None:
                 if not given:
                     raise ValueError("per_serving_g only applies when correcting values")
@@ -841,15 +898,14 @@ def build_server(
             )
             for i in items
         ]
-        totals = logic.sum_nutrients(
-            logic.snapshot(store.nutrients_of(foods[i["food_id"]]), i["grams"]) for i in items
-        )
+        snaps = [logic.snapshot(store.nutrients_of(foods[i["food_id"]]), i["grams"]) for i in items]
+        totals = logic.sum_nutrients(snaps)
         return TemplateResult(
             template_id=template_id,
             name=name,
             replaced=replaced,
             items=rows,
-            totals=_nutrients(totals),
+            totals=_nutrients(totals, snaps),
         )
 
     @server.tool(annotations=CHANGES)
@@ -923,7 +979,9 @@ def build_server(
                 raise ValueError(f"range is {len(days)} days; the maximum is {TOTALS_MAX_DAYS}")
             lo, _ = logic.local_day_bounds(first, tz)
             _, hi = logic.local_day_bounds(last, tz)
-            day_totals = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
+            entries = store.entries_between(conn, lo, hi)
+            rows = [n for _, n in entries]
+            day_totals = logic.totals_by_day(entries, tz)
             totals = logic.sum_nutrients(day_totals.values())
             per_logged = logic.average(totals, len(day_totals)) if day_totals else None
             targets = store.get_targets(conn)
@@ -932,9 +990,9 @@ def build_server(
                 end=last.isoformat(),
                 days=len(days),
                 days_logged=len(day_totals),
-                totals=_nutrients(totals),
-                average_per_logged_day=_nutrients(per_logged) if per_logged else None,
-                average_per_day=_nutrients(logic.average(totals, len(days))),
+                totals=_nutrients(totals, rows),
+                average_per_logged_day=_nutrients(per_logged, rows) if per_logged else None,
+                average_per_day=_nutrients(logic.average(totals, len(days)), rows),
                 progress=_progress(per_logged, targets) if per_logged else {},
                 per_day=[
                     DayTotals(

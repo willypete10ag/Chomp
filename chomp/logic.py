@@ -13,7 +13,50 @@ from zoneinfo import ZoneInfo
 
 CORE = ("kcal", "protein_g", "carbs_g", "fat_g")
 OPTIONAL = ("fiber_g", "sugar_g", "sodium_mg")
-NUTRIENTS = CORE + OPTIONAL
+# Vitamins and minerals (#53), in the order US labels list them. The unit is in the name and
+# matches the label: mg or mcg (vitamin A as RAE, folate as DFE).
+MICROS = (
+    "vitamin_d_mcg",
+    "calcium_mg",
+    "iron_mg",
+    "potassium_mg",
+    "vitamin_a_mcg",
+    "vitamin_c_mg",
+    "vitamin_e_mg",
+    "vitamin_k_mcg",
+    "thiamin_mg",
+    "riboflavin_mg",
+    "niacin_mg",
+    "vitamin_b6_mg",
+    "folate_mcg",
+    "vitamin_b12_mcg",
+    "phosphorus_mg",
+    "magnesium_mg",
+    "zinc_mg",
+)
+NUTRIENTS = CORE + OPTIONAL + MICROS
+
+# FDA Daily Values for adults and children 4 and over (21 CFR 101.9), in each nutrient's
+# unit. Used to read '% DV' off a label and to show a day's totals as a share of the DV.
+DAILY_VALUES = {
+    "vitamin_d_mcg": 20.0,
+    "calcium_mg": 1300.0,
+    "iron_mg": 18.0,
+    "potassium_mg": 4700.0,
+    "vitamin_a_mcg": 900.0,
+    "vitamin_c_mg": 90.0,
+    "vitamin_e_mg": 15.0,
+    "vitamin_k_mcg": 120.0,
+    "thiamin_mg": 1.2,
+    "riboflavin_mg": 1.3,
+    "niacin_mg": 16.0,
+    "vitamin_b6_mg": 1.7,
+    "folate_mcg": 400.0,
+    "vitamin_b12_mcg": 2.4,
+    "phosphorus_mg": 1250.0,
+    "magnesium_mg": 420.0,
+    "zinc_mg": 11.0,
+}
 
 # Decimal places when showing values to a person (and to Claude).
 DISPLAY_PLACES = {
@@ -24,6 +67,23 @@ DISPLAY_PLACES = {
     "fiber_g": 1,
     "sugar_g": 1,
     "sodium_mg": 0,
+    "vitamin_d_mcg": 1,
+    "calcium_mg": 0,
+    "iron_mg": 1,
+    "potassium_mg": 0,
+    "vitamin_a_mcg": 0,
+    "vitamin_c_mg": 1,
+    "vitamin_e_mg": 1,
+    "vitamin_k_mcg": 1,
+    "thiamin_mg": 2,
+    "riboflavin_mg": 2,
+    "niacin_mg": 1,
+    "vitamin_b6_mg": 2,
+    "folate_mcg": 0,
+    "vitamin_b12_mcg": 2,
+    "phosphorus_mg": 0,
+    "magnesium_mg": 0,
+    "zinc_mg": 1,
 }
 # Stored snapshots keep more precision so summed totals don't drift.
 STORE_PLACES = 3
@@ -131,6 +191,38 @@ def sum_nutrients(rows: Iterable[Mapping[str, float | None]]) -> Nutrients:
         if totals[k] is None:
             totals[k] = 0.0
     return totals
+
+
+def partial_micros(rows: Iterable[Mapping[str, float | None]]) -> list[str]:
+    """Vitamins and minerals that some rows report and others don't, so their sum covers
+    only part of what was eaten (a floor, not the whole amount)."""
+    rows = list(rows)
+    out = []
+    for k in MICROS:
+        known = sum(1 for r in rows if r.get(k) is not None)
+        if 0 < known < len(rows):
+            out.append(k)
+    return out
+
+
+def percent_dv(key: str, value: float | None) -> float | None:
+    """A vitamin or mineral amount as a whole-number percent of its Daily Value."""
+    if value is None or key not in DAILY_VALUES:
+        return None
+    return round(100.0 * value / DAILY_VALUES[key])
+
+
+def percent_dv_to_amounts(percents: Mapping[str, float]) -> dict[str, float]:
+    """Label '% DV' figures for vitamins and minerals as amounts in each nutrient's unit."""
+    out = {}
+    for k, pct in percents.items():
+        if k not in DAILY_VALUES:
+            raise ValueError(f"no Daily Value for {k}; give a vitamin or mineral")
+        pct = float(pct)
+        if not math.isfinite(pct) or pct < 0:
+            raise ValueError(f"{k} percent must be a finite number of at least 0, got {pct}")
+        out[k] = pct * DAILY_VALUES[k] / 100.0
+    return out
 
 
 def round_nutrients(values: Mapping[str, float | None]) -> Nutrients:
@@ -302,6 +394,31 @@ def kj_to_kcal(kj: float) -> float:
 
 def g_to_mg(grams: float) -> float:
     return grams * 1000.0
+
+
+# Mass units as upstream sources spell them, in grams
+_MASS_G = {"g": 1.0, "mg": 1e-3, "ug": 1e-6, "µg": 1e-6, "μg": 1e-6, "mcg": 1e-6}
+_UNIT_OF = {"_mg": "mg", "_mcg": "mcg", "_g": "g"}
+IU_PER_MCG_VITAMIN_D = 40.0
+
+
+def unit_of(key: str) -> str:
+    """The unit a nutrient is stored in, from its name ('iron_mg' -> 'mg')."""
+    for suffix, unit in _UNIT_OF.items():
+        if key.endswith(suffix):
+            return unit
+    return key  # kcal
+
+
+def convert_amount(key: str, value: float, unit: str) -> float | None:
+    """An upstream amount in `unit` converted to the unit `key` is stored in, or None when
+    the unit can't be converted (e.g. vitamin A in IU, which depends on the food)."""
+    unit = unit.strip().lower()
+    if unit == "iu":
+        return value / IU_PER_MCG_VITAMIN_D if key == "vitamin_d_mcg" else None
+    if unit not in _MASS_G or key == "kcal":
+        return None
+    return value * _MASS_G[unit] / _MASS_G[unit_of(key)]
 
 
 def label_mismatch(

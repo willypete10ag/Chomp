@@ -42,6 +42,28 @@ def _num(nutriments: Mapping[str, Any], key: str) -> float | None:
         return None
 
 
+# Our vitamin and mineral names -> OFF nutriment names (#53)
+MICRO_KEYS = {
+    "vitamin_d_mcg": "vitamin-d",
+    "calcium_mg": "calcium",
+    "iron_mg": "iron",
+    "potassium_mg": "potassium",
+    "vitamin_a_mcg": "vitamin-a",
+    "vitamin_c_mg": "vitamin-c",
+    "vitamin_e_mg": "vitamin-e",
+    "vitamin_k_mcg": "vitamin-k",
+    "thiamin_mg": "vitamin-b1",
+    "riboflavin_mg": "vitamin-b2",
+    "niacin_mg": "vitamin-pp",
+    "vitamin_b6_mg": "vitamin-b6",
+    "folate_mcg": "vitamin-b9",
+    "vitamin_b12_mcg": "vitamin-b12",
+    "phosphorus_mg": "phosphorus",
+    "magnesium_mg": "magnesium",
+    "zinc_mg": "zinc",
+}
+
+
 def parse_nutrients(nutriments: Mapping[str, Any]) -> logic.Nutrients | None:
     """Per-100 g nutrients from OFF `nutriments`, or None if a core value is missing."""
     kcal = _num(nutriments, "energy-kcal_100g")
@@ -57,6 +79,9 @@ def parse_nutrients(nutriments: Mapping[str, Any]) -> logic.Nutrients | None:
         "sugar_g": _num(nutriments, "sugars_100g"),
         "sodium_mg": None if sodium_g is None else logic.g_to_mg(sodium_g),
     }
+    for key, theirs in MICRO_KEYS.items():
+        grams = _num(nutriments, f"{theirs}_100g")  # OFF stores these in grams too
+        out[key] = None if grams is None else logic.convert_amount(key, grams, "g")
     if any(out[k] is None for k in logic.CORE):
         return None
     if any(v is not None and v < 0 for v in out.values()):
