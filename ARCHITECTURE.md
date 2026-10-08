@@ -99,6 +99,11 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Foods store macros **per 100 g**. Entries store grams plus a **snapshot** of all computed nutrients (kcal, protein, carbs, fat, fiber, sugar, sodium, and 17 vitamins and minerals), so editing a food never rewrites history.
 - Vitamins and minerals (#53, migration 0007): nullable `foods`/`entries` columns named with their unit (`vitamin_d_mcg`, `iron_mg`, ...; list and FDA Daily Values in `logic.MICROS` / `logic.DAILY_VALUES`). NULL means the source didn't report it. Tool results carry the known ones in `micronutrients`; a total names the ones only some items reported in `micronutrients_partial` (the sum is a floor). FDC and OFF amounts are converted from their reported unit (vitamin D IU → mcg; vitamin A IU is skipped). A cached, unconfirmed upstream food that lacks them gains them the next time the same record comes back; logged entries keep their snapshots.
 - One `foods` row per upstream record (unique `(source, source_id)`).
+- Deleting a food (dashboard, Foods > tap a food > Delete; migration 0008) is for everyone,
+  since foods are shared. Entries still point at it, so the row stays with `deleted = 1`,
+  hidden from search and lists, its barcode released; everyone's nicknames for it go, and it
+  leaves every saved meal (an emptied one goes too). If the same USDA or Open Food Facts
+  record turns up again it comes back, barcode included.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food`, a barcode food saved on the

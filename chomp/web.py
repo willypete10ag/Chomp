@@ -717,6 +717,13 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         f'<label>Name shown in Chomp<input name="name" value="{e(row["name"])}" required'
         f' maxlength="{FOOD_NAME_MAX}"></label>'
         '<button type="submit">Save name</button></form></details>'
+        '<details class="sub confirm"><summary>Delete…</summary>'
+        f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/delete">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
+        " numbers; nicknames for it go, and it leaves any saved meal.</p>"
+        f'<button class="danger" type="submit">Yes, delete {e(row["name"])}</button>'
+        "</form></details>"
     )
     return (
         f"<li{'' if row['verified'] else ' class="unconfirmed"'}><details><summary>"
@@ -2279,6 +2286,21 @@ def add_routes(
         log.info("dashboard: renamed food %d", food_id)
         return go(with_params(back, done=undo_id))
 
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/delete", methods=["POST"])
+    async def delete_food(request: Request) -> Response:
+        if (no := refused(request, "Delete foods")) is not None:
+            return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", f"{PREFIX}/foods")))
+        food_id = request.path_params["food_id"]
+        with connect(request) as conn:
+            try:
+                food, meals = store.delete_food(conn, food_id)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+        log.info("dashboard: deleted food %d", food_id)
+        return go(with_params(back, removed=food["name"][:FOOD_NAME_MAX], meals=meals))
+
     # --- History ---
 
     @server.custom_route(f"{PREFIX}/history", methods=["GET"])
@@ -2386,6 +2408,11 @@ def add_routes(
             banner = notice(conn, request.query_params, back)
             if (added := int_param(request.query_params.get("added"))) is not None:
                 banner += added_notice(conn, added)
+        if removed := request.query_params.get("removed", "")[:FOOD_NAME_MAX]:
+            meals = int_param(request.query_params.get("meals")) or 0
+            left = f" It left {meals} saved meal{'s' if meals != 1 else ''}." if meals else ""
+            banner += toast(f"<span>Deleted {e(removed)}.{e(left)}</span>", "status")
+        with connect(request) as conn:
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT, view)
                 nicknames = store.search_aliases(conn, q, FOODS_LIMIT) if everything else []

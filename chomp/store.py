@@ -89,6 +89,14 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
         n = logic.round_nutrients(rec.nutrients)
         if row is not None:
             same = (row["source"], row["source_id"]) == (rec.source, rec.source_id)
+            if same and _is_deleted(conn, row["id"]):
+                # deleted, then found upstream again: it's wanted after all, barcode too
+                free = rec.gtin and food_by_gtin(conn, rec.gtin) is None
+                conn.execute(
+                    "UPDATE foods SET deleted = 0, gtin = ? WHERE id = ?",
+                    (rec.gtin if free else row["gtin"], row["id"]),
+                )
+                row = get_food(conn, row["id"])
             return (_fill_micros(conn, row, n) if same else row), False
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS},"
@@ -118,6 +126,39 @@ def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients)
     sets = ", ".join(f"{k} = ?" for k in missing)
     conn.execute(f"UPDATE foods SET {sets} WHERE id = ?", (*missing.values(), row["id"]))
     return get_food(conn, row["id"])
+
+
+def _is_deleted(conn: sqlite3.Connection, food_id: int) -> bool:
+    row = conn.execute("SELECT deleted FROM foods WHERE id = ?", (food_id,)).fetchone()
+    return bool(row and row[0])
+
+
+def delete_food(conn: sqlite3.Connection, food_id: int) -> tuple[sqlite3.Row, int]:
+    """Delete a food for everyone (foods are shared). Logged entries keep their snapshots
+    and still point at the row, so it stays, hidden from search and lists, with its barcode
+    released for a fresh scan. Everyone's nicknames for it go, and it leaves every saved
+    meal (a meal left empty goes too). Returns the food and how many saved meals it left."""
+    food = get_food(conn, food_id)
+    with transaction(conn):
+        templates = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT template_id FROM meal_template_items WHERE food_id = ?",
+                (food_id,),
+            )
+        ]
+        conn.execute("DELETE FROM meal_template_items WHERE food_id = ?", (food_id,))
+        conn.execute(
+            "DELETE FROM meal_templates WHERE id NOT IN"
+            " (SELECT template_id FROM meal_template_items)"
+        )
+        conn.execute("DELETE FROM aliases WHERE food_id = ?", (food_id,))
+        conn.execute(
+            "UPDATE foods SET deleted = 1, gtin = NULL, saved = 0, updated_at = datetime('now')"
+            " WHERE id = ?",
+            (food_id,),
+        )
+    return food, len(templates)
 
 
 def mark_saved(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row:
@@ -233,7 +274,7 @@ def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sql
 # a template. FDC search hits are cached in foods too, but only as a lookup cache. Foods are
 # shared, so one person's saved foods are found by everyone.
 USED_FOOD = (
-    "(f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
+    "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
