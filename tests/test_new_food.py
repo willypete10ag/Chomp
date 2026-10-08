@@ -252,7 +252,7 @@ def test_typed_in_food_stays_unconfirmed_and_takes_the_barcode(app, conn):
     assert row["source"] == "manual" and not row["verified"]
     assert row["gtin"] == EGG_WHITES_GTIN and row["brand"] == "Acme"
     page = app.get(f"/app/foods?q=Trail&added={row['id']}")
-    assert "(unconfirmed)" in page.text and 'class="unconfirmed"' in page.text
+    assert "(unconfirmed)" in page.text and 'class="swipe unconfirmed"' in page.text
 
 
 @pytest.mark.parametrize(
@@ -348,6 +348,7 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
 
     page = app.get("/app/foods").text
     assert f'action="/app/foods/{oats}/delete"' in page and "Yes, delete Rolled oats" in page
+    assert 'class="swipe-action js-only"' in page and 'class="sub confirm no-js"' in page
     r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?view=recent"})
     assert r.status_code == 303
     assert r.headers["location"] == "/app/foods?view=recent&removed=Rolled+oats&meals=2"

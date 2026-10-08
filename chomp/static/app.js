@@ -207,5 +207,77 @@
     });
   });
 
+  // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
+  // another to hide it again. Only one shows at a time.
+  var OPEN = 96;
+  var shown = null;
+  function slide(body, x) {
+    body.style.transform = x ? "translateX(" + x + "px)" : "";
+  }
+  function hide() {
+    if (shown) slide(shown, 0);
+    shown = null;
+  }
+  document.addEventListener("pointerdown", function (event) {
+    if (shown && !shown.parentNode.contains(event.target)) hide();
+  });
+  document.querySelectorAll("[data-swipe]").forEach(function (body) {
+    var start = null;
+    var dx = 0;
+    var sliding = false;
+    body.addEventListener("pointerdown", function (event) {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      start = { x: event.clientX, y: event.clientY, base: body === shown ? -OPEN : 0 };
+      dx = 0;
+      sliding = false;
+    });
+    body.addEventListener("pointermove", function (event) {
+      if (!start) return;
+      var mx = event.clientX - start.x;
+      var my = event.clientY - start.y;
+      if (!sliding) {
+        if (Math.abs(mx) < 8 || Math.abs(mx) < Math.abs(my)) {
+          if (Math.abs(my) > 8) start = null; // a scroll, not a swipe
+          return;
+        }
+        sliding = true;
+        if (shown && shown !== body) hide();
+        body.classList.add("dragging");
+        try {
+          body.setPointerCapture(event.pointerId);
+        } catch (err) {
+          // capture is a nicety
+        }
+      }
+      dx = Math.max(-OPEN - 24, Math.min(0, start.base + mx));
+      slide(body, dx);
+    });
+    function end() {
+      if (!start) return;
+      body.classList.remove("dragging");
+      if (sliding) {
+        if (dx < -OPEN / 2) {
+          slide(body, -OPEN);
+          shown = body;
+        } else {
+          slide(body, 0);
+          if (shown === body) shown = null;
+        }
+      }
+      start = null;
+    }
+    body.addEventListener("pointerup", end);
+    body.addEventListener("pointercancel", end);
+    // The tap that ends a swipe, or a tap on a food showing Delete, doesn't open it
+    body.addEventListener("click", function (event) {
+      if (sliding || body === shown) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!sliding) hide();
+        sliding = false;
+      }
+    }, true);
+  });
+
   document.querySelectorAll("form").forEach(changed);
 })();
