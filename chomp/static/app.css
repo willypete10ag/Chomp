@@ -382,3 +382,6 @@ button.wide { width: 100%; margin-bottom: .75rem; }
 .swipe-action button {
   flex: 1; border-radius: 0; background: var(--over); color: #fff; font-weight: 600;
 }
+.js .swipe-body > details > summary { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.swipe-body > details > summary.holding { background: var(--line); transition: background .45s ease; }
+.fold > .hint { margin: .25rem 0 0; }

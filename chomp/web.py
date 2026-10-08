@@ -681,9 +681,9 @@ def fold(name: str, heading: str, body: str, note: str = "") -> str:
 
 
 def food_item(row, back: str, last_logged: str = "") -> str:
-    """A saved food: name (two lines at most), kcal and macros per 100 g; tap for details
-    and to give it a shorter name, swipe left to delete it (the script; without it, Delete…
-    sits in the details). `last_logged` says when it was last logged."""
+    """A saved food: name (two lines at most), kcal and macros per 100 g. With the script,
+    press and hold it for details and to rename it, swipe it left to delete it; without it,
+    a tap opens the details, Delete… included. `last_logged` says when it was last logged."""
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
     meta = []
@@ -2493,8 +2493,14 @@ def add_routes(
                 return title.lower() if title in ("Today", "Yesterday") else title
 
             items = "".join(food_item(r, back, last(r)) for r in rows)
+            hint = (
+                '<p class="small muted js-only hint">'
+                "Press and hold a food to see or rename it. Swipe it left to delete it.</p>"
+            )
             parts.append(
-                fold("foods", heading, f'<ul class="entries">{items}</ul>', f"{note}per 100 g")
+                fold(
+                    "foods", heading, f'{hint}<ul class="entries">{items}</ul>', f"{note}per 100 g"
+                )
             )
         elif not q:
             empty = "No saved foods yet." if everything else "No foods here."

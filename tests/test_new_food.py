@@ -349,6 +349,7 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
     page = app.get("/app/foods").text
     assert f'action="/app/foods/{oats}/delete"' in page and "Yes, delete Rolled oats" in page
     assert 'class="swipe-action js-only"' in page and 'class="sub confirm no-js"' in page
+    assert "Press and hold a food" in page
     r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?view=recent"})
     assert r.status_code == 303
     assert r.headers["location"] == "/app/foods?view=recent&removed=Rolled+oats&meals=2"

@@ -208,8 +208,10 @@
   });
 
   // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
-  // another to hide it again. Only one shows at a time.
+  // another to hide it again. Only one shows at a time. Press and hold a food to open it
+  // (details and Rename); a plain tap only closes an open one.
   var OPEN = 96;
+  var HOLD_MS = 450;
   var shown = null;
   function slide(body, x) {
     body.style.transform = x ? "translateX(" + x + "px)" : "";
@@ -225,16 +227,43 @@
     var start = null;
     var dx = 0;
     var sliding = false;
+    var details = body.querySelector("details");
+    var summary = details.querySelector("summary");
+    var timer = null;
+    var held = false;
+    function unhold() {
+      clearTimeout(timer);
+      timer = null;
+      summary.classList.remove("holding");
+    }
     body.addEventListener("pointerdown", function (event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       start = { x: event.clientX, y: event.clientY, base: body === shown ? -OPEN : 0 };
       dx = 0;
       sliding = false;
+      held = false;
+      unhold();
+      if (body !== shown && !details.open && summary.contains(event.target)) {
+        summary.classList.add("holding");
+        timer = setTimeout(function () {
+          unhold();
+          held = true;
+          details.open = true;
+          var rename = details.querySelector("details.sub:not(.no-js)");
+          if (rename) rename.open = true;
+          if (navigator.vibrate) navigator.vibrate(15);
+        }, HOLD_MS);
+      }
+    });
+    // A long press shouldn't select text or pop up the phone's menu
+    summary.addEventListener("contextmenu", function (event) {
+      if (timer || held) event.preventDefault();
     });
     body.addEventListener("pointermove", function (event) {
       if (!start) return;
       var mx = event.clientX - start.x;
       var my = event.clientY - start.y;
+      if (Math.abs(mx) > 8 || Math.abs(my) > 8) unhold();
       if (!sliding) {
         if (Math.abs(mx) < 8 || Math.abs(mx) < Math.abs(my)) {
           if (Math.abs(my) > 8) start = null; // a scroll, not a swipe
@@ -253,6 +282,7 @@
       slide(body, dx);
     });
     function end() {
+      unhold();
       if (!start) return;
       body.classList.remove("dragging");
       if (sliding) {
@@ -268,15 +298,33 @@
     }
     body.addEventListener("pointerup", end);
     body.addEventListener("pointercancel", end);
-    // The tap that ends a swipe, or a tap on a food showing Delete, doesn't open it
+    // The tap that ends a swipe, or a tap on a food showing Delete, doesn't open it. Nor
+    // does a plain tap (only a long press does), though the keyboard's Enter still does.
     body.addEventListener("click", function (event) {
       if (sliding || body === shown) {
         event.preventDefault();
         event.stopPropagation();
         if (!sliding) hide();
         sliding = false;
+        held = false;
+        return;
       }
+      if (!summary.contains(event.target)) return;
+      if (held || (!details.open && event.detail > 0)) event.preventDefault();
+      held = false;
     }, true);
+    // Tabbing onto Delete slides the food aside so the button is seen before it's pressed
+    var action = body.parentNode.querySelector(".swipe-action");
+    if (action) {
+      action.addEventListener("focusin", function () {
+        if (shown && shown !== body) hide();
+        slide(body, -OPEN);
+        shown = body;
+      });
+      action.addEventListener("focusout", function () {
+        if (shown === body) hide();
+      });
+    }
   });
 
   document.querySelectorAll("form").forEach(changed);
