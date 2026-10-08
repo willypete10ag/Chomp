@@ -49,14 +49,15 @@ def nutrients_of(row: Mapping) -> logic.Nutrients:
 # --- Foods ----------------------------------------------------------------------------------
 
 
-def get_food(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row:
-    row = conn.execute(f"SELECT {FOOD_COLS} FROM foods WHERE id = ?", (food_id,)).fetchone()
-    if row is None:
-        raise NotFound(f"no food with id {food_id}")
-    return row
+def get_food(conn: sqlite3.Connection, food_id: int, *, live: bool = False) -> sqlite3.Row:
+    """A food by id. Deleted foods are still found (past entries point at them) unless
+    `live`, for picking a food to log, swap in, nickname or put in a saved meal."""
+    return get_foods(conn, [food_id], live=live)[food_id]
 
 
-def get_foods(conn: sqlite3.Connection, ids: Iterable[int]) -> dict[int, sqlite3.Row]:
+def get_foods(
+    conn: sqlite3.Connection, ids: Iterable[int], *, live: bool = False
+) -> dict[int, sqlite3.Row]:
     ids = sorted(set(ids))
     if not ids:
         return {}
@@ -66,6 +67,12 @@ def get_foods(conn: sqlite3.Connection, ids: Iterable[int]) -> dict[int, sqlite3
     missing = [i for i in ids if i not in found]
     if missing:
         raise NotFound(f"no food with id {', '.join(map(str, missing))}")
+    if live:
+        gone = conn.execute(
+            f"SELECT id FROM foods WHERE id IN ({marks}) AND deleted = 1", ids
+        ).fetchall()
+        if gone:
+            raise NotFound(f"food {', '.join(str(r[0]) for r in gone)} was deleted; search again")
     return found
 
 
@@ -361,7 +368,7 @@ def rename_food(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Ro
 def save_alias(
     conn: sqlite3.Connection, alias: str, food_id: int, default_grams: float | None
 ) -> None:
-    get_food(conn, food_id)
+    get_food(conn, food_id, live=True)
     with transaction(conn):
         conn.execute(
             "INSERT INTO aliases (user_id, alias, food_id, default_grams) VALUES (?, ?, ?, ?)"
@@ -375,7 +382,7 @@ def save_template(
     conn: sqlite3.Connection, name: str, items: list[tuple[int, float]]
 ) -> tuple[int, bool]:
     """Create or replace a meal template. Returns (template_id, replaced)."""
-    get_foods(conn, (f for f, _ in items))
+    get_foods(conn, (f for f, _ in items), live=True)
     user_id = user_of(conn)
     with transaction(conn):
         row = conn.execute(
@@ -540,7 +547,7 @@ def add_to_meal(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, f
 def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, float]]) -> None:
     if not items:
         raise ValueError("a meal needs at least one item")
-    foods = get_foods(conn, (f for f, _ in items))
+    foods = get_foods(conn, (f for f, _ in items), live=True)
     snaps = [(f, g, logic.snapshot(nutrients_of(foods[f]), g)) for f, g in items]
     conn.executemany(
         f"INSERT INTO entries (meal_id, food_id, grams, {NUTRIENT_COLS})"
@@ -581,7 +588,8 @@ def update_entry(
     current = get_entry(conn, entry_id)
     new_food = food_id if food_id is not None else current.food_id
     new_grams = grams if grams is not None else current.grams
-    snap = logic.snapshot(nutrients_of(get_food(conn, new_food)), new_grams)
+    swapped = food_id is not None and food_id != current.food_id
+    snap = logic.snapshot(nutrients_of(get_food(conn, new_food, live=swapped)), new_grams)
     with transaction(conn):
         conn.execute(
             f"UPDATE entries SET food_id = ?, grams = ?, {SNAPSHOT_SETS} WHERE id = ?",

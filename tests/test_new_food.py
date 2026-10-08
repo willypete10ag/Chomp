@@ -375,3 +375,28 @@ def test_delete_food_needs_same_origin(http, conn):  # noqa: F811
     sign_in(http)
     assert http.post(f"/app/foods/{oats}/delete").status_code == 403
     assert http.post("/app/foods/999/delete", headers=ORIGIN).status_code == 404
+
+
+def test_deleted_food_cannot_be_picked_again(conn):
+    from test_tools import add_food
+
+    oats = add_food(conn, "Rolled oats", 379, 13, 68, 7)
+    milk = add_food(conn, "Oat milk", 48, 1, 7, 2)
+    meal = store.log_meal(conn, [(oats, 50)], "2026-10-02T12:00:00Z", None)
+    entry = store.meal_entries(conn, meal)[0]
+    store.delete_food(conn, oats)
+    for attempt in (
+        lambda: store.log_meal(conn, [(oats, 10)], "2026-10-03T12:00:00Z", None),
+        lambda: store.add_to_meal(conn, meal, [(oats, 10)]),
+        lambda: store.save_alias(conn, "my oats", oats, None),
+        lambda: store.save_template(conn, "oats", [(oats, 10)]),
+    ):
+        with pytest.raises(store.NotFound):
+            attempt()
+    # The old entry still works: new grams re-snapshot from the deleted food
+    assert store.update_entry(conn, entry.id, 100, None).nutrients["kcal"] == 379
+    other = store.meal_entries(
+        conn, store.log_meal(conn, [(milk, 100)], "2026-10-03T12:00:00Z", None)
+    )[0]
+    with pytest.raises(store.NotFound, match="was deleted"):
+        store.update_entry(conn, other.id, None, oats)

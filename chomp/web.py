@@ -1695,7 +1695,7 @@ def add_routes(
         # undo record
         with connect(request) as conn, db.transaction(conn):
             try:
-                food = store.get_food(conn, int_param(str(form.get("food_id", ""))) or 0)
+                food = store.get_food(conn, int_param(str(form.get("food_id", ""))) or 0, live=True)
                 into = meal_id if meal_id is not None else int_param(str(form.get("to", "")))
                 if into is not None:
                     store.get_meal(conn, into)
