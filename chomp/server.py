@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from chomp import __version__, auth, db, logic, store, text, users, web
+from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -365,7 +366,7 @@ def build_server(
         auth.add_consent_route(server, provider)
     fdc = fdc or FDCClient(settings.fdc_api_key)
     off = off or OFFClient(settings.off_user_agent)
-    web.add_routes(server, settings, provider, fdc)
+    web.add_routes(server, settings, provider, fdc, off)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
 
@@ -692,44 +693,22 @@ def build_server(
             code = gtins.normalize(barcode)
         except gtins.InvalidBarcode as e:
             raise ToolError(f"{e}. Ask the user to re-read the barcode digits.") from e
-        warnings: list[str] = []
-
-        def result(row, found_in, flags=()) -> BarcodeResult:
-            food = _food(row)
-            notes = list(flags)
+        with connect() as conn:
+            hit = await barcode_lookup(conn, code, fdc, off)
+        if hit.row is not None:
+            food = _food(hit.row)
+            notes = list(hit.flags)
             if not food.verified and food.source == "off" and not notes:
                 notes.append("unverified: Open Food Facts data; confirm against the label")
             return BarcodeResult(
                 barcode=code,
                 found=True,
-                found_in=found_in,
+                found_in=hit.found_in,
                 food=food,
-                warnings=warnings + notes,
+                warnings=hit.warnings + notes,
                 next_step=None,
             )
-
-        with connect() as conn:
-            row = store.food_by_gtin(conn, code)
-            if row is not None:
-                return result(store.mark_saved(conn, row["id"]), "saved")
-            failures = 0
-            for name, client, enabled in (
-                ("fdc", fdc, fdc.enabled),
-                ("off", off, True),
-            ):
-                if not enabled:
-                    continue
-                try:
-                    rec = await client.lookup_gtin(code)
-                except SourceError as e:
-                    log.warning("lookup_barcode: %s", e)
-                    warnings.append(str(e))
-                    failures += 1
-                    continue
-                if rec is not None:
-                    row, _ = store.cache_record(conn, rec)
-                    return result(store.mark_saved(conn, row["id"]), name, rec.flags)
-        if failures and failures == (2 if fdc.enabled else 1):
+        if hit.unreachable:
             next_step = (
                 "Barcode sources could not be reached. Try again shortly, or ask for a photo "
                 "of the nutrition facts panel and call save_food_from_label."
@@ -741,7 +720,7 @@ def build_server(
             found=False,
             found_in=None,
             food=None,
-            warnings=warnings,
+            warnings=hit.warnings,
             next_step=next_step,
         )
 

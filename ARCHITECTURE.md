@@ -34,7 +34,9 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 (any day via arrows, a seven-day strip or a date picker; calories logged and remaining, then
 protein/carbs/fat with bars where targets exist, plus fiber/sugar/sodium; meals led by their
 time), History (7/30/90-day averages and inline-SVG charts) and Foods (one search over saved
-meals, nicknames and used foods, most logged first; tap a food for its per-serving values and
+meals, nicknames and used foods, most logged first, with filters for recent, newest,
+unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
+in the browser; tap a food for its per-serving values and
 source, or to give it a shorter name).
 
 It also works without Claude (#54): Add food (search your foods, nicknames and saved meals, or
@@ -48,6 +50,18 @@ from Claude). A small same-origin script (`static/app.js`) adds sliders beside t
 boxes, quick picks (a serving, your usual, half/double) and live previews of the calories and
 the day's total; it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
+
+New food (#59, Foods > Add a new food) adds a shared food three ways, all through one form of
+per-serving values: a barcode (scanned with the camera by `static/scan.js` and the vendored
+ZXing reader `static/zxing.min.js`, since the CSP allows only same-origin scripts; or typed),
+looked up through the same chain as `lookup_barcode` (`chomp/barcode.py`); a nutrition label
+photo, read on the server by `tesseract` (installed in the image) and parsed by
+`chomp/label.py`, with a tick box per value; or typed in. Saving a barcode food confirms that
+cached row (only values the person changed are rewritten); a label food is saved
+`source='label'`, confirmed only when every filled-in value was ticked; a typed one is
+`source='manual'`, unconfirmed. A barcode given with a label or typed food moves to it, as
+with `save_food_from_label`. The MCP tools are unchanged: an Open Food Facts hit Claude
+looks up stays unconfirmed until `confirm_food`.
 
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
@@ -86,6 +100,10 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Vitamins and minerals (#53, migration 0007): nullable `foods`/`entries` columns named with their unit (`vitamin_d_mcg`, `iron_mg`, ...; list and FDA Daily Values in `logic.MICROS` / `logic.DAILY_VALUES`). NULL means the source didn't report it. Tool results carry the known ones in `micronutrients`; a total names the ones only some items reported in `micronutrients_partial` (the sum is a floor). FDC and OFF amounts are converted from their reported unit (vitamin D IU → mcg; vitamin A IU is skipped). A cached, unconfirmed upstream food that lacks them gains them the next time the same record comes back; logged entries keep their snapshots.
 - One `foods` row per upstream record (unique `(source, source_id)`).
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
+- Confirmed (`foods.verified`): checked by the person. That is a label food saved through
+  `save_food_from_label`, a food confirmed with `confirm_food`, a barcode food saved on the
+  dashboard's New food page, or a label photo food whose every value was ticked there.
+  Everything else, including typed-in foods, is unconfirmed (amber on the dashboard).
 - Timestamps in UTC; display in America/New_York. Day boundaries are computed in `logic.py` with `zoneinfo` (DST-correct); the `daily_totals` view is an approximate convenience only.
 - Migrations: `SCHEMA.sql` is baseline v1. Later changes are numbered files in `migrations/` (`0002_<name>.sql`, ...), applied in order and tracked with `PRAGMA user_version`.
 
@@ -98,7 +116,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Security
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
-- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
+- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.

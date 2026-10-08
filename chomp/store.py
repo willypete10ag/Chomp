@@ -135,8 +135,12 @@ def save_label_food(
     per_100g: logic.Nutrients,
     serving_g: float,
     serving_desc: str | None,
+    source: str = "label",
+    verified: bool = True,
 ) -> tuple[sqlite3.Row, int | None]:
-    """Insert a food read from a package label (verified: it is the user's own label).
+    """Insert a food read from a package label (verified: it is the user's own label), or,
+    with source 'manual', one typed in by hand. The dashboard (#59) saves label foods
+    unverified unless the person ticked every value, and typed-in foods always unverified.
 
     If another food already holds the barcode, the barcode moves to the new food so future
     scans find the label values; the old food keeps its id for past entries. Returns the
@@ -150,28 +154,47 @@ def save_label_food(
             conn.execute("UPDATE foods SET gtin = NULL WHERE id = ?", (previous,))
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, verified, {NUTRIENT_COLS}, serving_g,"
-            f" serving_desc) VALUES (?, ?, ?, 'label', 1, {NUTRIENT_MARKS}, ?, ?)",
-            (name, brand, gtin, *(n[k] for k in logic.NUTRIENTS), serving_g, serving_desc),
+            f" serving_desc) VALUES (?, ?, ?, ?, ?, {NUTRIENT_MARKS}, ?, ?)",
+            (
+                name,
+                brand,
+                gtin,
+                source,
+                int(verified),
+                *(n[k] for k in logic.NUTRIENTS),
+                serving_g,
+                serving_desc,
+            ),
         )
         return get_food(conn, cur.lastrowid), previous
 
 
+FOOD_DETAILS = ("name", "brand", "serving_g", "serving_desc")
+
+
 def confirm_food(
-    conn: sqlite3.Connection, food_id: int, corrections: logic.Nutrients
+    conn: sqlite3.Connection,
+    food_id: int,
+    corrections: logic.Nutrients,
+    details: Mapping[str, str | float | None] | None = None,
 ) -> tuple[sqlite3.Row, list[str]]:
-    """Mark a food verified, applying per-100 g corrections for the keys given.
+    """Mark a food verified, applying per-100 g corrections for the keys given, and any
+    `details` (name, brand, serving_g, serving_desc) given.
 
     Returns the updated row and the names of nutrients that changed. Past entries keep
     their snapshots.
     """
+    details = dict(details or {})
+    if unknown := set(details) - set(FOOD_DETAILS):
+        raise ValueError(f"unknown food details: {sorted(unknown)}")
     current = nutrients_of(get_food(conn, food_id))
     merged = logic.round_nutrients({**current, **corrections})
     changed = [k for k in logic.NUTRIENTS if merged[k] != current[k]]
-    sets = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
+    sets = ", ".join(f"{k} = ?" for k in (*logic.NUTRIENTS, *details))
     with transaction(conn):
         conn.execute(
             f"UPDATE foods SET verified = 1, updated_at = datetime('now'), {sets} WHERE id = ?",
-            (*(merged[k] for k in logic.NUTRIENTS), food_id),
+            (*(merged[k] for k in logic.NUTRIENTS), *details.values(), food_id),
         )
     return get_food(conn, food_id), changed
 
@@ -220,20 +243,39 @@ USES = (
     "(SELECT count(*) FROM entries e JOIN meals m ON m.id = e.meal_id"
     " WHERE e.food_id = f.id AND m.user_id = ?) AS uses"
 )
+# When this user last logged the food (UTC), as column `last_used` (one ? for the user id)
+LAST_USED = (
+    "(SELECT max(m.eaten_at) FROM entries e JOIN meals m ON m.id = e.meal_id"
+    " WHERE e.food_id = f.id AND m.user_id = ?) AS last_used"
+)
+MOST_USED = "uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id"
+# Ways to narrow or order the Foods list and its search (#59 follow-up): view -> (extra
+# condition, order). None for the order keeps search results by relevance.
+FOOD_VIEWS = {
+    "most": ("1", None),
+    "recent": ("last_used IS NOT NULL", "last_used DESC, f.id DESC"),
+    "new": ("1", "f.created_at DESC, f.id DESC"),
+    "unconfirmed": ("f.verified = 0", None),
+    "confirmed": ("f.verified = 1", None),
+}
 
 
-def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
+def search_foods(
+    conn: sqlite3.Connection, query: str, limit: int, view: str = "most"
+) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
-    verified first, then by relevance."""
+    verified first, then by relevance. A `view` (FOOD_VIEWS) narrows or reorders them."""
     match = fts_query(query)
     if match is None:
         return []
+    where, order = FOOD_VIEWS[view]
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    user = user_of(conn)
     rows = conn.execute(
-        f"SELECT {cols}, {USES} FROM foods_fts JOIN foods f ON f.id = foods_fts.rowid"
-        f" WHERE foods_fts MATCH ? AND {USED_FOOD}"
-        " ORDER BY f.verified DESC, bm25(foods_fts)",
-        (user_of(conn), match),
+        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods_fts JOIN foods f"
+        f" ON f.id = foods_fts.rowid WHERE foods_fts MATCH ? AND {USED_FOOD} AND {where}"
+        f" ORDER BY {order or 'f.verified DESC, bm25(foods_fts)'}",
+        (user, user, match),
     )
     # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
     found: list[sqlite3.Row] = []
@@ -246,13 +288,16 @@ def search_foods(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlit
     return found
 
 
-def list_used_foods(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Foods the user has used (see USED_FOOD), most logged first, then verified, then by name."""
+def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") -> list[sqlite3.Row]:
+    """Foods the user has used (see USED_FOOD), most logged first, then verified, then by
+    name. A `view` (FOOD_VIEWS) narrows or reorders them."""
+    where, order = FOOD_VIEWS[view]
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    user = user_of(conn)
     return conn.execute(
-        f"SELECT {cols}, {USES} FROM foods f WHERE {USED_FOOD}"
-        " ORDER BY uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id LIMIT ?",
-        (user_of(conn), limit),
+        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods f WHERE {USED_FOOD} AND {where}"
+        f" ORDER BY {order or MOST_USED} LIMIT ?",
+        (user, user, limit),
     ).fetchall()
 
 
