@@ -681,8 +681,9 @@ def fold(name: str, heading: str, body: str, note: str = "") -> str:
 
 
 def food_item(row, back: str, last_logged: str = "") -> str:
-    """A saved food: name (two lines at most), kcal and macros per 100 g; tap for details
-    and to give it a shorter name. `last_logged` says when it was last logged."""
+    """A saved food: name (two lines at most), kcal and macros per 100 g. With the script,
+    press and hold it for details and to rename it, swipe it left to delete it; without it,
+    a tap opens the details, Delete… included. `last_logged` says when it was last logged."""
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
     meta = []
@@ -717,7 +718,7 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         f'<label>Name shown in Chomp<input name="name" value="{e(row["name"])}" required'
         f' maxlength="{FOOD_NAME_MAX}"></label>'
         '<button type="submit">Save name</button></form></details>'
-        '<details class="sub confirm"><summary>Delete…</summary>'
+        '<details class="sub confirm no-js"><summary>Delete…</summary>'
         f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/delete">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
@@ -725,13 +726,21 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         f'<button class="danger" type="submit">Yes, delete {e(row["name"])}</button>'
         "</form></details>"
     )
+    swipe = (
+        f'<form class="swipe-action js-only" method="post"'
+        f' action="{PREFIX}/foods/{row["id"]}/delete">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        f'<button type="submit" aria-label="Delete {e(row["name"])} for everyone">Delete</button>'
+        "</form>"
+    )
     return (
-        f"<li{'' if row['verified'] else ' class="unconfirmed"'}><details><summary>"
+        f'<li class="swipe{"" if row["verified"] else " unconfirmed"}">{swipe}'
+        '<div class="swipe-body" data-swipe><details><summary>'
         f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
         f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
         f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
         f"<span>{macros_line(n)}</span></div></summary>"
-        f'<div class="more small">{"".join(more)}</div></details></li>'
+        f'<div class="more small">{"".join(more)}</div></details></div></li>'
     )
 
 
@@ -2484,8 +2493,14 @@ def add_routes(
                 return title.lower() if title in ("Today", "Yesterday") else title
 
             items = "".join(food_item(r, back, last(r)) for r in rows)
+            hint = (
+                '<p class="small muted js-only hint">'
+                "Press and hold a food to see or rename it. Swipe it left to delete it.</p>"
+            )
             parts.append(
-                fold("foods", heading, f'<ul class="entries">{items}</ul>', f"{note}per 100 g")
+                fold(
+                    "foods", heading, f'{hint}<ul class="entries">{items}</ul>', f"{note}per 100 g"
+                )
             )
         elif not q:
             empty = "No saved foods yet." if everything else "No foods here."

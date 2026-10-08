@@ -349,7 +349,7 @@ def test_foods_aliases_and_templates(http, conn, logged):
     assert "“my whites”" in text and "300 g" in text
     assert "<strong>Usual breakfast</strong>" in text and "143 kcal" in text
     assert '<h2 class="section">Saved meals</h2>' in text
-    assert text.count('class="unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
+    assert text.count('class="swipe unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
     assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text

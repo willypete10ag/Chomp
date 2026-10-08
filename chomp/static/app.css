@@ -365,3 +365,23 @@ button.wide { width: 100%; margin-bottom: .75rem; }
 .fold:not([open]) > summary h2::before { transform: rotate(-90deg); }
 .fold:not([open]) > summary h2 { margin-bottom: 0; border-bottom: 0; padding-bottom: 0; }
 .fold > summary h2 small { margin-left: auto; }
+
+/* Foods: swipe a food left to show Delete (the script; .no-js items show without it) */
+.js .no-js { display: none !important; }
+.entries li.swipe { position: relative; overflow: hidden; padding: 0; }
+.swipe-body {
+  position: relative; padding: .6rem 0; background: var(--card); touch-action: pan-y;
+  transition: transform .2s ease;
+}
+.swipe-body.dragging { transition: none; }
+.entries li.swipe.unconfirmed { border-left: 0; }
+.entries li.swipe.unconfirmed .swipe-body { border-left: 3px solid var(--carbs); padding-left: .6rem; }
+.js .swipe-action {
+  position: absolute; inset: 0 0 0 auto; width: 6rem; display: flex !important; margin: 0;
+}
+.swipe-action button {
+  flex: 1; border-radius: 0; background: var(--over); color: #fff; font-weight: 600;
+}
+.js .swipe-body > details > summary { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.swipe-body > details > summary.holding { background: var(--line); transition: background .45s ease; }
+.fold > .hint { margin: .25rem 0 0; }
