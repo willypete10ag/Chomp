@@ -439,6 +439,14 @@ def test_goals_page_calorie_bar(http, conn, logged):
     assert "<b data-g>200</b> g · <span data-pct>37</span>%" in text
 
 
+def test_goals_take_what_the_bar_can_drag(http, conn, logged):
+    # 20,000 kcal with protein dragged to 95%: 4,750 g
+    sign_in(http)
+    data = {"kcal": "20000", "protein_g": "4750", "carbs_g": "250", "fat_g": "112"}
+    r = http.post("/app/targets", data=data, headers=ORIGIN)
+    assert r.status_code == 303 and store.get_targets(conn)["protein_g"] == 4750
+
+
 def test_goals_need_every_number(http, conn, logged):
     sign_in(http)
     r = http.post("/app/targets", data={"kcal": "2000", "protein_g": "150"}, headers=ORIGIN)

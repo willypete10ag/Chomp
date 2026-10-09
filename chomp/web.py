@@ -1006,12 +1006,13 @@ def food_form(f: FoodForm) -> str:
     return "".join(parts)
 
 
-# Daily goals: key, name, unit, most allowed
+# Daily goals: key, name, unit, most allowed. A macro may take all of the most calories
+# (the calorie bar can drag one that far), so its limit is those calories in grams.
 GOALS = (
     ("kcal", "Calories", "kcal", 20_000),
-    ("protein_g", "Protein", "g", 2_000),
-    ("carbs_g", "Carbs", "g", 2_000),
-    ("fat_g", "Fat", "g", 2_000),
+    ("protein_g", "Protein", "g", 5_000),
+    ("carbs_g", "Carbs", "g", 5_000),
+    ("fat_g", "Fat", "g", 2_500),
 )
 
 
