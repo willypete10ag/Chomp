@@ -334,3 +334,15 @@ def test_fit_macros():
     assert abs(logic.macro_kcal(out)["total"] - 2500) <= 4
     # carbs never go below 0
     assert logic.fit_macros(100, {"protein_g": 0.6, "carbs_g": 0, "fat_g": 0.5})["carbs_g"] == 0
+
+
+def test_default_targets_fill_what_isnt_set():
+    assert logic.with_default_targets(dict.fromkeys(("kcal", "protein_g", "carbs_g", "fat_g"))) == {
+        "kcal": 2000.0,
+        "protein_g": 167.0,
+        "carbs_g": 166.0,
+        "fat_g": 74.0,
+    }
+    # a set calorie goal is split in thirds for the macros that aren't set
+    out = logic.with_default_targets({"kcal": 2400, "protein_g": 180, "carbs_g": None})
+    assert out == {"kcal": 2400.0, "protein_g": 180.0, "carbs_g": 200.0, "fat_g": 89.0}

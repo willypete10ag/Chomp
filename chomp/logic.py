@@ -311,6 +311,18 @@ def fit_macros(kcal: float, shares: Mapping[str, float] | None = None) -> dict[s
     return {"protein_g": float(protein), "carbs_g": float(carbs), "fat_g": float(fat)}
 
 
+def with_default_targets(targets: Mapping[str, float | None]) -> dict[str, float]:
+    """The daily goals progress is measured against: a goal that isn't set counts as the
+    default, 2,000 kcal and a third of the calorie goal for each of protein, carbs and fat."""
+    kcal = targets.get("kcal") or DEFAULT_KCAL
+    fitted = fit_macros(kcal)
+    out = {"kcal": float(kcal)}
+    for k in KCAL_PER_G:
+        v = targets.get(k)
+        out[k] = float(v) if v is not None else fitted[k]
+    return out
+
+
 def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:
     """Each macro's percent of the calories protein, carbs and fat give together (4/4/9 kcal
     per g). None when there is none of any."""

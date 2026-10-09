@@ -213,18 +213,35 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     # the meal header leads with the time, then the label
     assert '<span class="label">Breakfast</span></h2>' in text
     # 200 g eggs (286 kcal) + 300 g whites (156 kcal), from the stored snapshots
-    assert '<span class="big kcal">442</span> kcal logged' in text
+    # calories left against the default 2,000 kcal goal (only protein is set)
+    assert '<span class="big kcal">1,558</span> remaining' in text
+    assert "Goal 2,000 kcal" in text and "kcal logged" not in text
     assert "Meal total" in text  # two items: keep the combined row
-    # protein 25.2 + 32.7 = 57.9 g of 180 g; carbs and fat show grams without a target
+    # protein 25.2 + 32.7 = 57.9 g of 180 g; carbs and fat against a third of the calories
     assert '<strong>57.9</strong> <span class="muted target">/ 180 g</span>' in text
     assert "122.1 g left" in text
     assert '<div class="small c">Carbs</div>' in text
+    assert '<span class="muted target">/ 166 g</span>' in text
     assert '<span class="sr">Protein</span>' in text  # full names for screen readers
     assert 'aria-label="Next day"' not in text  # no stepping into the future
     assert 'class="week"' in text and 'aria-current="date"' in text
     assert 'type="date"' in text and "Page loaded at" in text
     assert "Back to today" not in text
     assert f"/app/static/app.css?v={web.CSS_VERSION}" in text  # phones fetch new CSS
+
+
+def test_today_over_the_calorie_goal_turns_amber_then_red(http, conn, logged):
+    sign_in(http)
+    store.set_targets(conn, {"kcal": 400})  # 442 logged: 42 over
+    text = http.get("/app").text
+    assert '<span class="big kcal caution">42</span> over' in text
+    assert 'class="fill kcal caution"' in text and "Goal 400 kcal" in text
+    store.set_targets(conn, {"kcal": 342})  # exactly 100 over is still amber
+    assert '<span class="big kcal caution">100</span> over' in http.get("/app").text
+    store.set_targets(conn, {"kcal": 341})  # 101 over: red
+    text = http.get("/app").text
+    assert '<span class="big kcal over">101</span> over' in text
+    assert 'class="fill kcal over"' in text
 
 
 def test_fiber_sugar_sodium_fold_away(http, conn, logged):
@@ -328,6 +345,7 @@ def test_history_charts_and_averages(http, logged):
     assert 'class="chart"' in r.text
     assert "Over the 1 of 7 days with entries." in r.text
     assert "target 180" in r.text  # protein target line
+    assert "target 2,000" not in r.text  # no calorie goal set: no default line on History
     r = http.get("/app/history?days=30")
     assert "Over the 1 of 30 days" in r.text
     assert http.get("/app/history?days=9999").status_code == 200  # falls back to 7
