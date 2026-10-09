@@ -249,6 +249,55 @@ async def test_confirm_food_errors(server):
         assert "no food with id 42" in await call_error(client, "confirm_food", food_id=42)
 
 
+@pytest.mark.anyio
+async def test_save_food_without_a_label(server):
+    async with Client(server) as client:
+        saved = await call(
+            client,
+            "save_food",
+            name=" Chicken burrito bowl ",
+            brand="Chipotle",
+            serving_g=500,
+            serving_desc="1 bowl",
+            kcal=650,
+            protein_g=50,
+            carbs_g=60,
+            fat_g=22,
+            sodium_mg=1800,
+        )
+        assert saved["source"] == "manual" and saved["verified"] is False
+        assert saved["name"] == "Chicken burrito bowl" and saved["serving_g"] == 500
+        assert saved["per_100g"]["kcal"] == 130 and saved["per_100g"]["sodium_mg"] == 360
+
+        approved = await call(client, "confirm_food", food_id=saved["food_id"])
+        assert approved["food"]["verified"] is True and approved["changed"] == []
+
+        home = await call(
+            client,
+            "save_food",
+            name="Mom's chili",
+            serving_g=250,
+            kcal=300,
+            protein_g=20,
+            carbs_g=25,
+            fat_g=12,
+            confirmed=True,
+        )
+        assert home["verified"] is True and home["brand"] is None
+        found = await call(client, "search_food", query="chili")
+    assert found["results"][0]["food_id"] == home["food_id"]
+
+
+@pytest.mark.anyio
+async def test_save_food_needs_the_serving_weight(server):
+    async with Client(server) as client:
+        bad = await client.call_tool(
+            "save_food",
+            {"name": "Pad thai", "kcal": 900, "protein_g": 30, "carbs_g": 120, "fat_g": 30},
+        )
+    assert bad.is_error
+
+
 def test_off_parse_kj_only_and_missing_core():
     n = offmod.parse_nutrients(
         {

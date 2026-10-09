@@ -490,9 +490,10 @@ async def test_get_day_rejects_bad_date(server):
 async def test_tool_annotations(server):
     async with Client(server) as client:
         tools = {t.name: t.annotations for t in (await client.list_tools()).tools}
-    assert len(tools) == 15 and all(a is not None for a in tools.values())
+    assert len(tools) == 16 and all(a is not None for a in tools.values())
     assert tools["get_day"].read_only_hint is True
     assert tools["get_totals"].read_only_hint is True
     assert tools["search_food"].destructive_hint is False
     assert tools["delete_entry"].destructive_hint is True
     assert tools["save_food_from_label"].destructive_hint is True
+    assert tools["save_food"].destructive_hint is False

@@ -26,6 +26,11 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 2. `lookup_barcode(barcode)` → cache → FDC Branded (gtinUpc) → Open Food Facts.
 3. Miss → Claude asks for a label photo, reads the panel, calls `save_food_from_label`. Cached forever after.
 
+### Food with no label
+Restaurant dish or home cooking: Claude asks for the nutrition numbers (the restaurant's
+published info, or my own) and the serving weight in grams, then `save_food`. It is saved
+unconfirmed unless I approve the numbers; `confirm_food` approves it later.
+
 ### Review
 `get_day(date)` and `get_totals(start, end)` for daily/weekly summaries and protein-target checks.
 
@@ -88,13 +93,14 @@ local-only mode everything is the owner's.
 | `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): aliases → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, aliased or templated; verified first) → FDC (ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
+| `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
 | `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams}]`, `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
 | `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?` |
 | `update_meal` | Move a meal to a different time, or change its label or note | `meal_id`, `eaten_at?`, `meal_label?`, `note?` |
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
 | `get_totals` | Aggregates, per-day totals and daily averages over a range (inclusive local dates), with progress against targets | `start`, `end?` |
-| `confirm_food` | Mark a food verified (e.g. an OFF hit), optionally correcting its macros | `food_id`, macros?, `micronutrients?`, `micronutrients_percent_dv?`, `per_serving_g?` |
+| `confirm_food` | Mark a food verified once the user approves it (an OFF hit, a restaurant or home-cooked food, anything), optionally correcting its macros | `food_id`, macros?, `micronutrients?`, `micronutrients_percent_dv?`, `per_serving_g?` |
 | `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
 | `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
@@ -113,7 +119,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   record turns up again it comes back, barcode included.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
-  `save_food_from_label`, a food confirmed with `confirm_food`, a barcode food saved on the
+  `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
+  a `save_food` food saved with `confirmed`, a barcode food saved on the
   dashboard's New food page, or a label photo food whose every value was ticked there.
   Everything else, including typed-in foods, is unconfirmed (amber on the dashboard).
 - Timestamps in UTC; display in America/New_York. Day boundaries are computed in `logic.py` with `zoneinfo` (DST-correct); the `daily_totals` view is an approximate convenience only.
