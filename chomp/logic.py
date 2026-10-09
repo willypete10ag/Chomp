@@ -292,6 +292,25 @@ def macro_kcal(targets: Mapping[str, float | None]) -> dict[str, float] | None:
     return {**parts, "total": sum(parts.values())}
 
 
+# Daily goals: calories when none is set yet, and the smallest share of them a macro can have
+# on the goals page's calorie bar
+DEFAULT_KCAL = 2000.0
+MIN_SHARE = 0.05
+
+
+def fit_macros(kcal: float, shares: Mapping[str, float] | None = None) -> dict[str, float]:
+    """Whole grams of protein, carbs and fat that split `kcal` by `shares` (each macro's
+    fraction of the calories; even thirds when None). Protein and fat round to the gram and
+    carbs take what's left, so the three come to `kcal` within a couple of kcal."""
+    if shares is None:
+        shares = dict.fromkeys(KCAL_PER_G, 1 / 3)
+    protein = round(kcal * shares["protein_g"] / KCAL_PER_G["protein_g"])
+    fat = round(kcal * shares["fat_g"] / KCAL_PER_G["fat_g"])
+    rest = kcal - protein * KCAL_PER_G["protein_g"] - fat * KCAL_PER_G["fat_g"]
+    carbs = max(round(rest / KCAL_PER_G["carbs_g"]), 0)
+    return {"protein_g": float(protein), "carbs_g": float(carbs), "fat_g": float(fat)}
+
+
 def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:
     """Each macro's percent of the calories protein, carbs and fat give together (4/4/9 kcal
     per g). None when there is none of any."""

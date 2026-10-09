@@ -15,6 +15,9 @@
   --track: #e9ecea;
   --on-accent: #ffffff;
   --flash: #e3f2ea;
+  --on-slice: #ffffff;
+  --on-carbs: #1c211e;
+  --handle: #ffffff;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -34,6 +37,9 @@
     --track: #2b322e;
     --on-accent: #0e1a13;
     --flash: #173326;
+    --on-slice: #0e1a13;
+    --on-carbs: #0e1a13;
+    --handle: #e8ece9;
   }
 }
 * { box-sizing: border-box; }
@@ -236,15 +242,38 @@ input[type=range]::-moz-range-thumb {
   width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
   border: 3px solid var(--card); box-shadow: 0 1px 4px rgb(0 0 0 / .3);
 }
-.goal.p input[type=range]::-webkit-slider-thumb { background: var(--protein); }
-.goal.c input[type=range]::-webkit-slider-thumb { background: var(--carbs); }
-.goal.f input[type=range]::-webkit-slider-thumb { background: var(--fat); }
-.goal.p input[type=range]::-moz-range-thumb { background: var(--protein); }
-.goal.c input[type=range]::-moz-range-thumb { background: var(--carbs); }
-.goal.f input[type=range]::-moz-range-thumb { background: var(--fat); }
 .goal label { font-weight: 600; font-size: .95rem; color: var(--text); }
 .goal.kcal label { color: var(--kcal); } .goal.p label { color: var(--protein); }
 .goal.c label { color: var(--carbs-text); } .goal.f label { color: var(--fat); }
+/* Goals: the calorie bar. Slices are the SVG rects; the script lays the grams and percent
+   over them and puts a handle on each border. A label too wide for its slice drops under
+   the bar in its macro's color. */
+.calbar { position: relative; margin: .25rem 0; touch-action: pan-y; }
+.calbar .splitbar { height: 2.75rem; border-radius: 10px; }
+.calbar.has-out { margin-bottom: 1.75rem; }
+.goals > p { margin: 0; }
+.calbar .lab {
+  position: absolute; top: 0; height: 2.75rem; display: flex; align-items: center;
+  justify-content: center; white-space: nowrap; font-size: .85rem;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.calbar .lab.p, .calbar .lab.f { color: var(--on-slice); }
+.calbar .lab.c { color: var(--on-carbs); }
+.calbar .lab.out { top: 3.2rem; height: auto; overflow: visible; }
+.calbar .lab.out.p { color: var(--protein); justify-content: flex-start; }
+.calbar .lab.out.c { color: var(--carbs-text); }
+.calbar .lab.out.f { color: var(--fat); justify-content: flex-end; }
+.calbar .handle {
+  position: absolute; top: -.3rem; width: 2.75rem; height: 3.35rem; margin-left: -1.375rem;
+  padding: 0; border: 0; background: transparent; min-height: 0; cursor: ew-resize;
+  touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+.calbar .handle::after {
+  content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 8px; margin-left: -4px;
+  border-radius: 4px; background: var(--handle); box-shadow: 0 1px 4px rgb(0 0 0 / .35);
+}
+.calbar .handle.drag::after, .calbar .handle:focus-visible::after { width: 12px; margin-left: -6px; }
+.calbar .handle:focus { outline: none; }
 .goal + .goal { border-top: 1px solid var(--line); padding-top: .75rem; }
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; }
 .chip {

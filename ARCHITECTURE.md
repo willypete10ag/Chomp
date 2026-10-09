@@ -52,8 +52,9 @@ tools, so macros still come only from the database. Each edit records the rows i
 before and after (`undo_actions`, migration 0005); the next page shows a confirmation with
 Undo, which applies only while those rows are unchanged (so it never overwrites a newer edit
 from Claude). A small same-origin script (`static/app.js`) adds sliders beside the number
-boxes, quick picks (a serving, your usual, half/double) and live previews of the calories and
-the day's total; it repeats `logic.scale` only for the preview, and every page works without
+boxes, quick picks (a serving, your usual, half/double), live previews of the calories and
+the day's total, and the goals page's calorie bar (drag the borders between protein, carbs
+and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
 New food (#59, Foods > Add a new food) adds a shared food three ways, all through one form of

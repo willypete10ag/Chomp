@@ -323,3 +323,14 @@ def test_top_foods_adds_up_same_food_and_skips_none():
     assert logic.top_foods(items, "protein_g") == [(1, 20.0), (2, 15.0), (6, 2.0)]
     assert logic.top_foods(items, "protein_g", n=1) == [(1, 20.0)]
     assert logic.top_foods(items, "fat_g") == []
+
+
+def test_fit_macros():
+    # even thirds of 2,000 kcal; carbs take the rounding
+    assert logic.fit_macros(2000) == {"protein_g": 167.0, "carbs_g": 166.0, "fat_g": 74.0}
+    shares = {"protein_g": 0.3, "carbs_g": 0.4, "fat_g": 0.3}
+    out = logic.fit_macros(2500, shares)
+    assert out == {"protein_g": 188.0, "carbs_g": 250.0, "fat_g": 83.0}
+    assert abs(logic.macro_kcal(out)["total"] - 2500) <= 4
+    # carbs never go below 0
+    assert logic.fit_macros(100, {"protein_g": 0.6, "carbs_g": 0, "fat_g": 0.5})["carbs_g"] == 0

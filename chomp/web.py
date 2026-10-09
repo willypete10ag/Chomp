@@ -1006,14 +1006,14 @@ def food_form(f: FoodForm) -> str:
     return "".join(parts)
 
 
-# Daily goals: key, name, unit, slider start, slider end, slider step, most allowed
+# Daily goals: key, name, unit, most allowed. A macro may take all of the most calories
+# (the calorie bar can drag one that far), so its limit is those calories in grams.
 GOALS = (
-    ("kcal", "Calories", "kcal", 800, 5000, 25, 20_000),
-    ("protein_g", "Protein", "g", 0, 400, 5, 2_000),
-    ("carbs_g", "Carbs", "g", 0, 600, 5, 2_000),
-    ("fat_g", "Fat", "g", 0, 250, 1, 2_000),
+    ("kcal", "Calories", "kcal", 20_000),
+    ("protein_g", "Protein", "g", 5_000),
+    ("carbs_g", "Carbs", "g", 5_000),
+    ("fat_g", "Fat", "g", 2_500),
 )
-GOAL_CLASS = {"kcal": "kcal", "protein_g": "p", "carbs_g": "c", "fat_g": "f"}
 
 
 def toast(body: str, role: str, kind: str = "") -> str:
@@ -1025,74 +1025,94 @@ def toast(body: str, role: str, kind: str = "") -> str:
     return f'<div class="flash toast{kind}" role="{role}">{body}{close}</div>'
 
 
-def macro_split(values: dict[str, float | None]) -> str:
-    """How protein, carbs and fat goals split the calories (4/4/9 kcal per g), as a bar."""
-    mk = logic.macro_kcal(values)
+def goal_start(values: dict[str, str]) -> tuple[dict[str, float], float | None]:
+    """The calories and macro grams the goals page starts from. No calorie goal yet means
+    2,000 kcal; macros missing, or saved ones that don't add up to the calories, are fitted to
+    them (even thirds, or keeping their shares). Also returns what saved macros came to when
+    they were refitted, else None."""
+    parsed: dict[str, float | None] = {}
+    for key, *_ in GOALS:
+        try:
+            value = float(values[key].replace(",", "")) if values[key] else None
+        except ValueError:
+            value = None
+        parsed[key] = value if value is not None and math.isfinite(value) and value > 0 else None
+    kcal = parsed["kcal"] or logic.DEFAULT_KCAL
+    mk = logic.macro_kcal(parsed)
+    if not mk:
+        return {"kcal": kcal, **logic.fit_macros(kcal)}, None
+    if abs(mk["total"] - kcal) < 25:
+        return {"kcal": kcal, **{k: parsed[k] for k in logic.KCAL_PER_G}}, None
+    shares = {k: mk[k] / mk["total"] for k in logic.KCAL_PER_G}
+    return {"kcal": kcal, **logic.fit_macros(kcal, shares)}, mk["total"]
+
+
+def calorie_bar(start: dict[str, float]) -> str:
+    """The calorie bar: one slice per macro, sized by its share of the calories (4/4/9 kcal
+    per g). The script adds the draggable borders and the grams and percent in each slice;
+    without it the macro boxes under the bar are typed instead."""
+    mk = logic.macro_kcal(start)
     total = mk["total"] if mk else 0
-    hidden = "" if total > 0 else " hidden"
-    rects, shares, x = [], [], 0.0
-    for key, cls, _ in MACROS:
-        share = 100 * mk[key] / total if total > 0 else 0
+    rects, labels, handles, x = [], [], [], 0.0
+    for i, (key, cls, _) in enumerate(MACROS):
+        share = 100 * mk[key] / total if total > 0 else 100 / 3
         rects.append(
-            f'<rect data-k="{key}" class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}"'
+            f'<rect data-k="{key}" class="fill {key}" x="{x:.2f}" y="0" width="{share:.2f}"'
             ' height="10"/>'
         )
-        shares.append(
-            f'<span class="{cls}">{NUTRIENT_LABELS[key].lower()}{NBSP}'
-            f'<span data-pct="{key}">{round(share)}%</span></span>'
+        labels.append(
+            f'<span class="lab {cls}" data-lab="{key}"><span class="txt">'
+            f"<b data-g>{num(start[key])}</b>{NBSP}g · <span data-pct>{round(share)}</span>%"
+            "</span></span>"
         )
         x += share
-    diff = ""
-    if total > 0 and values.get("kcal"):
-        gap = round(total - values["kcal"])
-        if abs(gap) >= 25:
-            diff = f" ({num(abs(gap))} {'over' if gap > 0 else 'under'} your calorie goal)"
+        if i < 2:
+            between = f"{NUTRIENT_LABELS[key]} and {NUTRIENT_LABELS[MACROS[i + 1][0]]}".lower()
+            handles.append(
+                f'<button type="button" class="handle" data-handle="{i}" role="slider"'
+                f' aria-label="Border between {between}"></button>'
+            )
     return (
-        f'<div class="split"{hidden}><svg class="splitbar" viewBox="0 0 100 10"'
+        '<div class="calbar" data-calbar><svg class="splitbar" viewBox="0 0 100 10"'
         f' preserveAspectRatio="none" aria-hidden="true">{"".join(rects)}</svg>'
-        f'<p class="small muted">Protein, carbs and fat goals add up to about'
-        f" <b data-macro-kcal>{num(total)}</b>{NBSP}kcal<span data-kcal-diff>{diff}</span>:"
-        f" {', '.join(shares)}.</p></div>"
+        f'<div class="labs js-only" aria-hidden="true">{"".join(labels)}</div>'
+        f'<div class="js-only">{"".join(handles)}</div></div>'
     )
 
 
 def goals_form(values: dict[str, str], back: str, error: str = "") -> str:
-    # Sets calories to what the macro goals add up to; the script keeps it current
-    match = (
-        '<div class="chips js-only"><button type="button" class="chip" data-match hidden>'
-        "Match protein, carbs and fat</button></div>"
+    start, saved_total = goal_start(values)
+    # A rejected post shows what was typed; otherwise the numbers the bar starts from
+    shown = values if error else {k: num(v, 1).replace(",", "") for k, v in start.items()}
+    kcal = (
+        '<div class="goal kcal amount"><label>Calories<span class="field"><input name="kcal"'
+        f' data-kcal inputmode="numeric" autocomplete="off" required value="{e(shown["kcal"])}">'
+        '<span class="unit">kcal</span></span></label></div>'
     )
-    fields = []
-    for key, label, unit, low, top, step, _ in GOALS:
-        fields.append(
-            f'<div class="goal {GOAL_CLASS[key]}">'
-            + amount_field(
-                key,
-                values[key],
-                label=label,
-                unit=unit,
-                top=top,
-                low=low,
-                step=step,
-                required=False,
-                placeholder="No goal",
-            )
-            + (match if key == "kcal" else "")
-            + "</div>"
+    boxes = "".join(
+        f'<div class="goal {cls} amount"><label>{NUTRIENT_LABELS[key]}<span class="field">'
+        f'<input name="{key}" inputmode="decimal" autocomplete="off" required'
+        f' value="{e(shown[key])}"><span class="unit">g</span></span></label></div>'
+        for key, cls, _ in MACROS
+    )
+    refit = ""
+    if saved_total is not None and not error:
+        refit = (
+            '<p class="small muted" data-refit>Your saved protein, carbs and fat added up to'
+            f" {num(saved_total)}{NBSP}kcal, so the bar fits them to your calorie goal."
+            " Save to keep it.</p>"
         )
-    parsed = {}
-    for key, *_ in GOALS:
-        try:
-            parsed[key] = float(values[key].replace(",", "")) if values[key] else None
-        except ValueError:
-            parsed[key] = None
     problem = f'<p class="error" role="alert">{e(error)}</p>' if error else ""
     return (
         f'<form class="card goals stack" method="post" action="{PREFIX}/targets">{problem}'
-        f'<input type="hidden" name="back" value="{e(back)}">{"".join(fields)}'
-        + macro_split(parsed)
-        + '<p class="muted small">Leave a box empty for no goal. Progress bars on Today follow'
-        " these, and Claude sees the same goals.</p>"
+        f'<input type="hidden" name="back" value="{e(back)}">{kcal}'
+        + calorie_bar(start)
+        + '<p class="small muted js-only">Drag the borders to split your calories between'
+        " protein, carbs and fat. A new calorie number starts them at even thirds.</p>"
+        + refit
+        + f'<div class="no-js stack">{boxes}</div>'
+        + '<p class="muted small">Progress bars on Today follow these, and Claude sees the same'
+        " goals.</p>"
         '<button type="submit">Save goals</button></form>'
     )
 
@@ -2190,11 +2210,8 @@ def add_routes(
         back = safe_next(str(form.get("back", PREFIX)))
         values = {k: str(form.get(k, "")).replace(",", "").strip()[:12] for k, *_ in GOALS}
         changes: dict[str, float | None] = {}
-        for key, label, unit, *_, most in GOALS:
+        for key, label, unit, most in GOALS:
             raw = values[key]
-            if not raw:
-                changes[key] = None
-                continue
             try:
                 value = float(raw)
                 if not math.isfinite(value) or value <= 0 or value > most:
