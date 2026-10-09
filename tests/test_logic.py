@@ -103,7 +103,7 @@ def test_round_for_display():
         "fiber_g": None,
         "sugar_g": None,
         "sodium_mg": 312,
-        **dict.fromkeys(logic.MICROS),
+        **dict.fromkeys(logic.DETAILS + logic.MICROS),
     }
 
 
@@ -290,3 +290,36 @@ def test_tidy_upstream_zeroes_small_negatives_and_rejects_bad_values():
     assert logic.tidy_upstream({**base, "carbs_g": -5}) is None
     assert logic.tidy_upstream({**base, "fat_g": float("nan")}) is None
     assert logic.tidy_upstream({**base, "carbs_g": 1, "fat_g": -0.5}) is None
+
+
+# --- Day breakdown (#63) ---
+
+
+def test_macro_split_is_share_of_macro_calories():
+    split = logic.macro_split({"protein_g": 100, "carbs_g": 100, "fat_g": 0})
+    assert split == {"protein_g": 50.0, "carbs_g": 50.0, "fat_g": 0.0}
+    split = logic.macro_split({"protein_g": 25, "carbs_g": 50, "fat_g": 20})
+    assert split == pytest.approx({"protein_g": 100 / 4.8, "carbs_g": 200 / 4.8, "fat_g": 37.5})
+    assert logic.macro_split({"protein_g": 0, "carbs_g": None, "fat_g": 0}) is None
+
+
+def test_net_carbs_needs_sugar_alcohols():
+    assert logic.net_carbs({"carbs_g": 30, "fiber_g": 5}) is None
+    assert logic.net_carbs({"carbs_g": 30, "fiber_g": 5, "sugar_alcohol_g": 10}) == 15
+    assert logic.net_carbs({"carbs_g": 30, "fiber_g": None, "sugar_alcohol_g": 10}) == 20
+    assert logic.net_carbs({"carbs_g": 10, "fiber_g": 8, "sugar_alcohol_g": 5}) == 0
+
+
+def test_top_foods_adds_up_same_food_and_skips_none():
+    items = [
+        (1, {"protein_g": 10.0}),
+        (2, {"protein_g": 15.0}),
+        (1, {"protein_g": 10.0}),
+        (3, {"protein_g": 0.0}),
+        (4, {"protein_g": None}),
+        (5, {"protein_g": 1.0}),
+        (6, {"protein_g": 2.0}),
+    ]
+    assert logic.top_foods(items, "protein_g") == [(1, 20.0), (2, 15.0), (6, 2.0)]
+    assert logic.top_foods(items, "protein_g", n=1) == [(1, 20.0)]
+    assert logic.top_foods(items, "fat_g") == []

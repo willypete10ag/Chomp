@@ -35,6 +35,14 @@ NUTRIENT_IDS: dict[str, tuple[int, ...]] = {
     "fiber_g": (1079,),
     "sugar_g": (2000, 1063),
     "sodium_mg": (1093,),
+    # Label details (#63)
+    "sat_fat_g": (1258,),
+    "trans_fat_g": (1257,),
+    "poly_fat_g": (1293,),
+    "mono_fat_g": (1292,),
+    "cholesterol_mg": (1253,),
+    "added_sugar_g": (1235,),
+    "sugar_alcohol_g": (1086,),
     # Vitamins and minerals (#53). Amounts are converted from the unit FDC reports.
     "vitamin_d_mcg": (1114, 1110),  # D2 + D3 in µg, else IU
     "calcium_mg": (1087,),
@@ -65,6 +73,10 @@ LABEL_KEYS = {
     "fiber": "fiber_g",
     "sugars": "sugar_g",
     "sodium": "sodium_mg",
+    "saturatedFat": "sat_fat_g",
+    "transFat": "trans_fat_g",
+    "cholesterol": "cholesterol_mg",
+    "addedSugar": "added_sugar_g",
     "calcium": "calcium_mg",
     "iron": "iron_mg",
     "potassium": "potassium_mg",
@@ -100,7 +112,7 @@ def parse_nutrients(food_nutrients: Iterable[Mapping[str, Any]]) -> logic.Nutrie
                 v, unit = amounts[nid]
                 if key == "kcal" and unit == "kj":
                     v = logic.kj_to_kcal(v)
-                elif key in logic.MICROS:
+                elif key in logic.DETAILS or key in logic.MICROS:
                     v = logic.convert_amount(key, v, unit)
                     if v is None:
                         continue

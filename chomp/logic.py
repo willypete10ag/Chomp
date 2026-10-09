@@ -13,6 +13,17 @@ from zoneinfo import ZoneInfo
 
 CORE = ("kcal", "protein_g", "carbs_g", "fat_g")
 OPTIONAL = ("fiber_g", "sugar_g", "sodium_mg")
+# Label details under fat and carbs (#63): fat subtypes, cholesterol, added sugars and sugar
+# alcohols. Optional like fiber, sugar and sodium; the unit is in the name.
+DETAILS = (
+    "sat_fat_g",
+    "trans_fat_g",
+    "poly_fat_g",
+    "mono_fat_g",
+    "cholesterol_mg",
+    "added_sugar_g",
+    "sugar_alcohol_g",
+)
 # Vitamins and minerals (#53), in the order US labels list them. The unit is in the name and
 # matches the label: mg or mcg (vitamin A as RAE, folate as DFE).
 MICROS = (
@@ -34,7 +45,7 @@ MICROS = (
     "magnesium_mg",
     "zinc_mg",
 )
-NUTRIENTS = CORE + OPTIONAL + MICROS
+NUTRIENTS = CORE + OPTIONAL + DETAILS + MICROS
 
 # FDA Daily Values for adults and children 4 and over (21 CFR 101.9), in each nutrient's
 # unit. Used to read '% DV' off a label and to show a day's totals as a share of the DV.
@@ -67,6 +78,13 @@ DISPLAY_PLACES = {
     "fiber_g": 1,
     "sugar_g": 1,
     "sodium_mg": 0,
+    "sat_fat_g": 1,
+    "trans_fat_g": 1,
+    "poly_fat_g": 1,
+    "mono_fat_g": 1,
+    "cholesterol_mg": 0,
+    "added_sugar_g": 1,
+    "sugar_alcohol_g": 1,
     "vitamin_d_mcg": 1,
     "calcium_mg": 0,
     "iron_mg": 1,
@@ -258,8 +276,8 @@ def progress(totals: Mapping[str, float | None], targets: Mapping[str, float | N
     return out
 
 
-# Atwater factors, kcal per gram. Only used to compare a day's calorie target with its
-# protein, carbs and fat targets; logged calories always come from the food data.
+# Atwater factors, kcal per gram. Only used to split calories between protein, carbs and fat
+# (targets, and a day's breakdown); logged calories always come from the food data.
 KCAL_PER_G = {"protein_g": 4.0, "carbs_g": 4.0, "fat_g": 9.0}
 
 
@@ -272,6 +290,38 @@ def macro_kcal(targets: Mapping[str, float | None]) -> dict[str, float] | None:
         return None
     parts = {k: float(targets[k]) * f for k, f in KCAL_PER_G.items()}
     return {**parts, "total": sum(parts.values())}
+
+
+def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:
+    """Each macro's percent of the calories protein, carbs and fat give together (4/4/9 kcal
+    per g). None when there is none of any."""
+    parts = {k: (totals.get(k) or 0.0) * f for k, f in KCAL_PER_G.items()}
+    total = sum(parts.values())
+    if total <= 0:
+        return None
+    return {k: 100.0 * v / total for k, v in parts.items()}
+
+
+def net_carbs(totals: Mapping[str, float | None]) -> float | None:
+    """Carbs minus fiber and sugar alcohols (never below 0); None unless sugar alcohols are
+    known, since then it's just carbs minus fiber."""
+    if totals.get("sugar_alcohol_g") is None:
+        return None
+    rest = (totals.get("carbs_g") or 0.0) - (totals.get("fiber_g") or 0.0)
+    return max(rest - totals["sugar_alcohol_g"], 0.0)
+
+
+def top_foods(
+    items: Iterable[tuple[int, Mapping[str, float | None]]], key: str, n: int = 3
+) -> list[tuple[int, float]]:
+    """The `n` foods that gave the most of `key`, as (food_id, amount), largest first. Entries
+    of the same food are added together; foods that gave none are left out."""
+    by_food: dict[int, float] = {}
+    for food_id, values in items:
+        if (v := values.get(key)) is not None:
+            by_food[food_id] = by_food.get(food_id, 0.0) + v
+    ranked = sorted(by_food.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [(f, v) for f, v in ranked if v > 0][:n]
 
 
 # --- Time -----------------------------------------------------------------------------------

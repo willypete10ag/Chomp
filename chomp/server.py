@@ -58,7 +58,8 @@ MicroName = Literal[logic.MICROS]  # type: ignore[valid-type]
 
 
 class Nutrients(BaseModel):
-    """Calories in kcal, macros in grams, sodium in mg. Optional values are null if unknown."""
+    """Calories in kcal, macros in grams, sodium and cholesterol in mg. Optional values are
+    null if unknown."""
 
     kcal: float
     protein_g: float
@@ -67,6 +68,13 @@ class Nutrients(BaseModel):
     fiber_g: float | None = None
     sugar_g: float | None = None
     sodium_mg: float | None = None
+    sat_fat_g: float | None = None
+    trans_fat_g: float | None = None
+    poly_fat_g: float | None = None
+    mono_fat_g: float | None = None
+    cholesterol_mg: float | None = None
+    added_sugar_g: float | None = None
+    sugar_alcohol_g: float | None = None
     micronutrients: dict[MicroName, float] = Field(
         default_factory=dict,
         description="Vitamins and minerals the data reports, unit in the name (vitamin A as "
@@ -83,7 +91,7 @@ def _nutrients(values: logic.Nutrients, rows=()) -> Nutrients:
     """Display values; pass the summed rows for a total so partial micronutrients are named."""
     shown = logic.round_for_display(values)
     return Nutrients(
-        **{k: shown[k] for k in logic.CORE + logic.OPTIONAL},
+        **{k: shown[k] for k in logic.CORE + logic.OPTIONAL + logic.DETAILS},
         micronutrients={k: shown[k] for k in logic.MICROS if shown[k] is not None},
         micronutrients_partial=logic.partial_micros(rows),
     )
@@ -737,6 +745,21 @@ def build_server(
         fiber_g: Annotated[OptionalNutrientArg, Field(description="Dietary fiber, g")] = None,
         sugar_g: Annotated[OptionalNutrientArg, Field(description="Total sugars, g")] = None,
         sodium_mg: Annotated[OptionalNutrientArg, Field(description="Sodium, mg")] = None,
+        sat_fat_g: Annotated[OptionalNutrientArg, Field(description="Saturated fat, g")] = None,
+        trans_fat_g: Annotated[OptionalNutrientArg, Field(description="Trans fat, g")] = None,
+        poly_fat_g: Annotated[
+            OptionalNutrientArg, Field(description="Polyunsaturated fat, g")
+        ] = None,
+        mono_fat_g: Annotated[
+            OptionalNutrientArg, Field(description="Monounsaturated fat, g")
+        ] = None,
+        cholesterol_mg: Annotated[OptionalNutrientArg, Field(description="Cholesterol, mg")] = None,
+        added_sugar_g: Annotated[
+            OptionalNutrientArg, Field(description="Added sugars ('Includes Xg Added Sugars'), g")
+        ] = None,
+        sugar_alcohol_g: Annotated[
+            OptionalNutrientArg, Field(description="Sugar alcohols, g")
+        ] = None,
         micronutrients: MicrosArg = None,
         micronutrients_percent_dv: MicrosPercentArg = None,
         brand: Annotated[str | None, Field(description="Brand name")] = None,
@@ -752,7 +775,8 @@ def build_server(
         Use after lookup_barcode finds nothing, or when the user wants their package's exact
         label values. If no barcode is known, ask the user for the digits under the barcode
         and pass them as upc so future scans find this food. Enter the per-serving numbers
-        exactly as printed; Chomp converts them to per 100 g. Include every vitamin and
+        exactly as printed, including the fat breakdown, cholesterol, added sugars and sugar
+        alcohols when listed; Chomp converts them to per 100 g. Include every vitamin and
         mineral the label lists: as an amount when printed (e.g. "Vitamin D 2mcg 10%" is
         vitamin_d_mcg 2), otherwise as % DV. The food is saved as verified
         (it is the user's own label). Returns the saved food with a food_id
@@ -768,6 +792,13 @@ def build_server(
                 "fiber_g": fiber_g,
                 "sugar_g": sugar_g,
                 "sodium_mg": sodium_mg,
+                "sat_fat_g": sat_fat_g,
+                "trans_fat_g": trans_fat_g,
+                "poly_fat_g": poly_fat_g,
+                "mono_fat_g": mono_fat_g,
+                "cholesterol_mg": cholesterol_mg,
+                "added_sugar_g": added_sugar_g,
+                "sugar_alcohol_g": sugar_alcohol_g,
                 **_micros(micronutrients, micronutrients_percent_dv),
             }
             row, moved_from = store.save_label_food(
@@ -791,6 +822,13 @@ def build_server(
         fiber_g: OptionalNutrientArg = None,
         sugar_g: OptionalNutrientArg = None,
         sodium_mg: OptionalNutrientArg = None,
+        sat_fat_g: OptionalNutrientArg = None,
+        trans_fat_g: OptionalNutrientArg = None,
+        poly_fat_g: OptionalNutrientArg = None,
+        mono_fat_g: OptionalNutrientArg = None,
+        cholesterol_mg: OptionalNutrientArg = None,
+        added_sugar_g: OptionalNutrientArg = None,
+        sugar_alcohol_g: OptionalNutrientArg = None,
         micronutrients: MicrosArg = None,
         micronutrients_percent_dv: MicrosPercentArg = None,
         per_serving_g: Annotated[
@@ -822,6 +860,13 @@ def build_server(
                 "fiber_g": fiber_g,
                 "sugar_g": sugar_g,
                 "sodium_mg": sodium_mg,
+                "sat_fat_g": sat_fat_g,
+                "trans_fat_g": trans_fat_g,
+                "poly_fat_g": poly_fat_g,
+                "mono_fat_g": mono_fat_g,
+                "cholesterol_mg": cholesterol_mg,
+                "added_sugar_g": added_sugar_g,
+                "sugar_alcohol_g": sugar_alcohol_g,
             }.items()
             if v is not None
         }

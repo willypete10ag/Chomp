@@ -42,6 +42,16 @@ def _num(nutriments: Mapping[str, Any], key: str) -> float | None:
         return None
 
 
+# Label details (#63) -> OFF nutriment names; sugar alcohols are "polyols" there
+DETAIL_KEYS = {
+    "sat_fat_g": "saturated-fat",
+    "trans_fat_g": "trans-fat",
+    "poly_fat_g": "polyunsaturated-fat",
+    "mono_fat_g": "monounsaturated-fat",
+    "cholesterol_mg": "cholesterol",
+    "added_sugar_g": "added-sugars",
+    "sugar_alcohol_g": "polyols",
+}
 # Our vitamin and mineral names -> OFF nutriment names (#53)
 MICRO_KEYS = {
     "vitamin_d_mcg": "vitamin-d",
@@ -79,7 +89,7 @@ def parse_nutrients(nutriments: Mapping[str, Any]) -> logic.Nutrients | None:
         "sugar_g": _num(nutriments, "sugars_100g"),
         "sodium_mg": None if sodium_g is None else logic.g_to_mg(sodium_g),
     }
-    for key, theirs in MICRO_KEYS.items():
+    for key, theirs in (DETAIL_KEYS | MICRO_KEYS).items():
         grams = _num(nutriments, f"{theirs}_100g")  # OFF stores these in grams too
         out[key] = None if grams is None else logic.convert_amount(key, grams, "g")
     if any(out[k] is None for k in logic.CORE):
