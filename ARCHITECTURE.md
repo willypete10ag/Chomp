@@ -48,7 +48,10 @@ and Foods (one search over saved
 meals and used foods, most logged first, with filters for recent, newest,
 unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
 in the browser; tap a food for its per-serving values and
-source, or to give it a shorter name).
+source, or to give it a shorter name, and for your portions of it (#75): swipe one left to
+delete it, press and hold it to change its name or grams, or + Add portion). An entry whose
+grams were estimated shows a muted "~" before them until new grams are saved, and Add food
+offers your portions as chips ("1 handful · 30 g") next to the gram chips.
 
 It also works without Claude (#54): Add food (search your foods, portions and saved meals, or
 USDA when `FDC_API_KEY` is set; log to a new meal at a time or into an existing one), change an

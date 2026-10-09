@@ -460,3 +460,15 @@ a.macro:active, a.hero:active { background: var(--track); }
 .days a.bd { color: var(--accent); display: flex; justify-content: flex-end; align-items: center; min-height: 2.25rem; }
 .summary > .row > a.small { white-space: nowrap; }
 .vrow.indent > label:first-child { padding-left: 1rem; color: var(--muted); }
+
+/* Portions (#75): an estimated amount's "~", and the portion list in a food's details */
+.approx { color: var(--muted); margin-right: .05em; }
+.portions-block { margin: .5rem 0; }
+.entries.portions { margin: .25rem 0; border: 1px solid var(--line); border-radius: .5rem; }
+.entries.portions .swipe-body { padding: 0 .6rem; }
+.entries.portions summary { min-height: 2.5rem; display: flex; align-items: center; }
+.entries.portions summary > .row { flex: 1; }
+.entries.portions form.stack { padding: .25rem 0 .6rem; }
+.entries.portions details { margin-top: 0; }
+.entries li.swipe:target { margin: 0; padding: 0; background: none; border-radius: 0; }
+.swipe-body { display: flow-root; } /* keep inner margins from exposing the Delete behind it */
