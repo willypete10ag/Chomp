@@ -271,6 +271,8 @@ async def test_save_food_without_a_label(server):
 
         approved = await call(client, "confirm_food", food_id=saved["food_id"])
         assert approved["food"]["verified"] is True and approved["changed"] == []
+        undone = await call(client, "confirm_food", food_id=saved["food_id"], confirmed=False)
+        assert undone["food"]["verified"] is False
 
         home = await call(
             client,

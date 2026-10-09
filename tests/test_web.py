@@ -387,4 +387,4 @@ def test_food_details_show_serving_and_extra_nutrients(http, conn, logged):
     # 52 kcal per 100 g -> 23.92 kcal in a 46 g serving
     assert "<b>Per serving</b> (3 tbsp): 24 kcal" in text
     assert "Sodium 166 mg" in text
-    assert "Confirmed by you" in text and "Not confirmed yet" in text
+    assert "Mark unconfirmed" in text and "Not confirmed yet" in text

@@ -198,7 +198,7 @@ def test_unknown_barcode_offers_label_and_typing_with_the_barcode(app, chain):  
     assert f'name="barcode" value="{UNKNOWN}"' in r.text
     assert f"how=type&amp;barcode={UNKNOWN}" in r.text
     r = app.get(f"/app/foods/new?how=type&barcode={UNKNOWN}")
-    assert f'value="{UNKNOWN}"' in r.text and "stay unconfirmed" in r.text
+    assert f'value="{UNKNOWN}"' in r.text and "Tick Verified" in r.text
 
 
 def test_bad_barcode_and_unreachable_sources(app, upstream):
@@ -257,6 +257,33 @@ def test_typed_in_food_stays_unconfirmed_and_takes_the_barcode(app, conn):
     assert row["gtin"] == EGG_WHITES_GTIN and row["brand"] == "Acme"
     page = app.get(f"/app/foods?q=Trail&added={row['id']}")
     assert "(unconfirmed)" in page.text and 'class="swipe unconfirmed"' in page.text
+
+
+def test_typed_in_food_ticked_verified_is_confirmed(app, conn):
+    assert 'name="verified"' in app.get("/app/foods/new?how=type").text
+    row = saved(conn, app.post("/app/foods/new", data=food_form(verified="1")))
+    assert row["source"] == "manual" and row["verified"]
+    # an error keeps the tick
+    r = app.post("/app/foods/new", data=food_form(verified="1", name=" "))
+    assert r.status_code == 400 and 'name="verified" value="1" checked' in r.text
+    # only typed foods take it: a label photo still needs every value ticked
+    row = saved(conn, app.post("/app/foods/new", data=food_form(mode="label", verified="1")))
+    assert row["source"] == "label" and not row["verified"]
+
+
+def test_confirm_a_food_by_hand_and_take_it_back(app, conn):
+    row = saved(conn, app.post("/app/foods/new", data=food_form(name="Mom's chili")))
+    page = app.get("/app/foods").text
+    assert f'action="/app/foods/{row["id"]}/confirm"' in page and ">Confirm</button>" in page
+    r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "1", "back": "/app/foods"})
+    assert r.status_code == 303 and store.get_food(conn, row["id"])["verified"]
+    page = app.get(r.headers["location"]).text
+    assert "Marked Mom&#x27;s chili as confirmed." in page and "Mark unconfirmed" in page
+    assert 'class="swipe unconfirmed"' not in page
+    r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "0", "back": "/app/foods"})
+    assert not store.get_food(conn, row["id"])["verified"]
+    assert "as unconfirmed." in app.get(r.headers["location"]).text
+    assert app.post("/app/foods/999/confirm", data={"confirmed": "1"}).status_code == 404
 
 
 @pytest.mark.parametrize(

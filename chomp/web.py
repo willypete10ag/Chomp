@@ -753,10 +753,20 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         )
     if extras := " · ".join(filter(None, (extras_line(n), micros_line(n)))):
         more.append(f"<p><b>Per 100 g:</b> {extras}</p>")
-    checked = (
-        "Confirmed by you" if row["verified"] else "Not confirmed yet; check it against the label"
-    )
+    checked = "Confirmed" if row["verified"] else "Not confirmed yet"
     more.append(f"<p><b>Source:</b> {SOURCES[row['source']]} · {checked}</p>")
+    more.append(
+        f'<form class="confirm-food" method="post" action="{PREFIX}/foods/{row["id"]}/confirm">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        + (
+            '<input type="hidden" name="confirmed" value="0">'
+            '<button class="button ghost" type="submit">Mark unconfirmed</button>'
+            if row["verified"]
+            else '<input type="hidden" name="confirmed" value="1">'
+            '<button type="submit">Confirm</button>'
+        )
+        + "</form>"
+    )
     more.append(
         '<details class="sub"><summary>Rename…</summary>'
         f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/rename">'
@@ -791,12 +801,12 @@ def food_item(row, back: str, last_logged: str = "") -> str:
 
 
 def with_params(url: str, anchor: str = "", **params: str | int) -> str:
-    """A dashboard URL with its one-shot notices (done, undone, problem) replaced."""
+    """A dashboard URL with its one-shot notices (done, undone, problem, checked) replaced."""
     parts = urlsplit(url)
     query = [
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in ("done", "undone", "problem")
+        if k not in ("done", "undone", "problem", "checked", "ok")
     ]
     query += [(k, str(v)) for k, v in params.items()]
     return parts.path + (f"?{urlencode(query)}" if query else "") + (f"#{anchor}" if anchor else "")
@@ -932,6 +942,7 @@ class FoodForm:
     barcode: str = ""
     serving_desc: str = ""
     food_id: int | None = None
+    verified: bool = False  # typed in: the person ticked "Verified"
     heading: str = ""
     note: str = ""  # shown above the values (e.g. what to check)
     error: str = ""
@@ -943,8 +954,8 @@ MODE_HELP = {
     " food counts as confirmed.",
     "label": "Fix any value Chomp misread, then tick each one once it matches the label."
     " Only a food with every value ticked counts as confirmed.",
-    "manual": "Enter the values for one serving. Foods typed in by hand stay unconfirmed"
-    " (shown in amber) until checked against a label.",
+    "manual": "Enter the values for one serving. Tick Verified if you trust the numbers;"
+    " otherwise the food stays unconfirmed (shown in amber) until you confirm it.",
 }
 
 
@@ -995,6 +1006,12 @@ def food_form(f: FoodForm) -> str:
     ]
     if ticking:
         parts.append('<p class="small muted js-only" data-tick-count></p>')
+    if f.mode == "manual":
+        parts.append(
+            '<label class="checkline"><input type="checkbox" name="verified" value="1"'
+            + (" checked" if f.verified else "")
+            + "> Verified <small>(count it as confirmed)</small></label>"
+        )
     label = "Save as confirmed" if f.mode == "barcode" else "Save food"
     parts.append(f'<button type="submit" data-save>{label}</button>')
     if f.ocr_text:
@@ -2329,8 +2346,9 @@ def add_routes(
 
     def type_card(code: str = "") -> str:
         return (
-            '<section class="card"><h2>Type it in</h2><p class="small muted">Foods typed in by'
-            " hand stay unconfirmed.</p>"
+            '<section class="card"><h2>Type it in</h2><p class="small muted">For a restaurant'
+            " dish, home cooking or anything without a label. Tick Verified to count it as"
+            " confirmed.</p>"
             f'<a class="button ghost wide" href="{e(new_food_url(how="type", barcode=code))}">'
             "Type in a food</a></section>"
         )
@@ -2452,6 +2470,7 @@ def add_routes(
             barcode=str(form.get("barcode", "")).strip()[:40],
             serving_desc=" ".join(str(form.get("serving_desc", "")).split())[:SERVING_DESC_MAX],
             food_id=int_param(str(form.get("food_id", ""))) if mode == "barcode" else None,
+            verified=mode == "manual" and form.get("verified") == "1",
         )
 
         def again(error: str) -> Response:
@@ -2504,7 +2523,7 @@ def add_routes(
                 row, _ = store.confirm_food(conn, row["id"], corrections, details)
                 confirmed = True
             else:
-                confirmed = (
+                confirmed = f.verified or (
                     mode == "label"
                     and {
                         "serving_g",
@@ -2556,6 +2575,24 @@ def add_routes(
             undo_id = store.record_undo(conn, f"Renamed {old['name']} to {name}", before)
         log.info("dashboard: renamed food %d", food_id)
         return go(with_params(back, done=undo_id))
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/confirm", methods=["POST"])
+    async def confirm_food(request: Request) -> Response:
+        """Confirm a food by hand (restaurant, home cooked, anything the person vouches
+        for), or mark it unconfirmed again."""
+        if (no := refused(request, "Confirm foods")) is not None:
+            return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", f"{PREFIX}/foods")))
+        confirmed = form.get("confirmed") == "1"
+        food_id = request.path_params["food_id"]
+        with connect(request) as conn:
+            try:
+                row = store.set_food_confirmed(conn, food_id, confirmed)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+        log.info("dashboard: food %d confirmed=%s", food_id, confirmed)
+        return go(with_params(back, checked=row["name"][:FOOD_NAME_MAX], ok=int(confirmed)))
 
     @server.custom_route(PREFIX + "/foods/{food_id:int}/delete", methods=["POST"])
     async def delete_food(request: Request) -> Response:
@@ -2682,6 +2719,9 @@ def add_routes(
             banner = notice(conn, request.query_params, back)
             if (added := int_param(request.query_params.get("added"))) is not None:
                 banner += added_notice(conn, added)
+        if checked := request.query_params.get("checked", "")[:FOOD_NAME_MAX]:
+            state = "confirmed" if request.query_params.get("ok") == "1" else "unconfirmed"
+            banner += toast(f"<span>Marked {e(checked)} as {state}.</span>", "status")
         if removed := request.query_params.get("removed", "")[:FOOD_NAME_MAX]:
             meals = int_param(request.query_params.get("meals")) or 0
             left = f" It left {meals} saved meal{'s' if meals != 1 else ''}." if meals else ""
@@ -2759,8 +2799,8 @@ def add_routes(
 
             items = "".join(food_item(r, back, last(r)) for r in rows)
             hint = (
-                '<p class="small muted js-only hint">'
-                "Press and hold a food to see or rename it. Swipe it left to delete it.</p>"
+                '<p class="small muted js-only hint">Press and hold a food to see, confirm or'
+                " rename it. Swipe it left to delete it.</p>"
             )
             parts.append(
                 fold(

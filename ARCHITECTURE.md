@@ -70,9 +70,10 @@ photo, read on the server by `tesseract` (installed in the image) and parsed by
 `chomp/label.py`, with a tick box per value; or typed in. Saving a barcode food confirms that
 cached row (only values the person changed are rewritten); a label food is saved
 `source='label'`, confirmed only when every filled-in value was ticked; a typed one is
-`source='manual'`, unconfirmed. A barcode given with a label or typed food moves to it, as
-with `save_food_from_label`. The MCP tools are unchanged: an Open Food Facts hit Claude
-looks up stays unconfirmed until `confirm_food`.
+`source='manual'`, confirmed only when its Verified box is ticked (#68). Any food can be
+confirmed by hand, or marked unconfirmed again, from its details on Foods (press and hold). A barcode given with a label or typed food moves to it, as
+with `save_food_from_label`. An Open Food Facts hit Claude looks up stays unconfirmed
+until `confirm_food`.
 
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
@@ -100,7 +101,7 @@ local-only mode everything is the owner's.
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
 | `get_totals` | Aggregates, per-day totals and daily averages over a range (inclusive local dates), with progress against targets | `start`, `end?` |
-| `confirm_food` | Mark a food verified once the user approves it (an OFF hit, a restaurant or home-cooked food, anything), optionally correcting its macros | `food_id`, macros?, `micronutrients?`, `micronutrients_percent_dv?`, `per_serving_g?` |
+| `confirm_food` | Mark a food verified once the user approves it (an OFF hit, a restaurant or home-cooked food, anything), optionally correcting its macros | `food_id`, `confirmed?` (false to unconfirm), macros?, `micronutrients?`, `micronutrients_percent_dv?`, `per_serving_g?` |
 | `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
 | `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
@@ -120,9 +121,11 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
-  a `save_food` food saved with `confirmed`, a barcode food saved on the
+  a `save_food` food saved with `confirmed`, a food confirmed by hand on the dashboard (Foods,
+  press and hold, Confirm), a typed-in food saved with Verified ticked, a barcode food saved on the
   dashboard's New food page, or a label photo food whose every value was ticked there.
-  Everything else, including typed-in foods, is unconfirmed (amber on the dashboard).
+  Everything else is unconfirmed (amber on the dashboard). `confirm_food(confirmed=False)` or
+  Mark unconfirmed on the dashboard takes an approval back.
 - Timestamps in UTC; display in America/New_York. Day boundaries are computed in `logic.py` with `zoneinfo` (DST-correct); the `daily_totals` view is an approximate convenience only.
 - Migrations: `SCHEMA.sql` is baseline v1. Later changes are numbered files in `migrations/` (`0002_<name>.sql`, ...), applied in order and tracked with `PRAGMA user_version`.
 

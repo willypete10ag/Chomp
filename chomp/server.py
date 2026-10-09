@@ -888,6 +888,13 @@ def build_server(
     @server.tool(annotations=CHANGES)
     def confirm_food(
         food_id: Annotated[int, Field(description="The food to confirm")],
+        confirmed: Annotated[
+            bool,
+            Field(
+                description="False marks the food unconfirmed again (the user takes back "
+                "their approval)"
+            ),
+        ] = True,
         kcal: OptionalNutrientArg = None,
         protein_g: OptionalNutrientArg = None,
         carbs_g: OptionalNutrientArg = None,
@@ -920,9 +927,9 @@ def build_server(
         hit checked against the package, a restaurant dish, a home-cooked food or anything
         else they vouch for. Also use when they report that a value is wrong, or to add
         vitamins and minerals from the label to a food that lacks them (% DV figures need
-        per_serving_g). Only pass nutrients that
-        need correcting or adding; the rest are kept. Corrections apply to future logs
-        only; past entries keep their values (use update_entry to re-snapshot one).
+        per_serving_g). Only pass nutrients that need correcting or adding; the rest are
+        kept. Corrections apply to future logs only; past entries keep their values (use
+        update_entry to re-snapshot one). To take back an approval, pass confirmed=False.
         Returns the food and which nutrients changed.
         """
         given = {
@@ -957,7 +964,7 @@ def build_server(
                 if not given:
                     raise ValueError("per_serving_g only applies when correcting values")
                 given = logic.partial_per_serving_to_per_100g(given, per_serving_g)
-            row, changed = store.confirm_food(conn, food_id, given)
+            row, changed = store.confirm_food(conn, food_id, given, confirmed=confirmed)
             return ConfirmResult(food=_food(row), changed=changed)
 
     @server.tool(annotations=CHANGES)
