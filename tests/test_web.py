@@ -345,6 +345,7 @@ def test_history_charts_and_averages(http, logged):
     assert 'class="chart"' in r.text
     assert "Over the 1 of 7 days with entries." in r.text
     assert "target 180" in r.text  # protein target line
+    assert "target 2,000" not in r.text  # no calorie goal set: no default line on History
     r = http.get("/app/history?days=30")
     assert "Over the 1 of 30 days" in r.text
     assert http.get("/app/history?days=9999").status_code == 200  # falls back to 7

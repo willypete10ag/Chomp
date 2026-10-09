@@ -1342,7 +1342,7 @@ def add_routes(
         meals = [
             (m, store.meal_entries(conn, m["id"])) for m in store.meals_between(conn, start, end)
         ]
-        targets = logic.with_default_targets(store.get_targets(conn))
+        targets = store.get_targets(conn)
         totals = logic.sum_nutrients(x.nutrients for _, entries in meals for x in entries)
         ctx = DayContext(
             day=day,
@@ -1526,7 +1526,8 @@ def add_routes(
             rows = [x.nutrients for _, entries in meals for x in entries]
             foods = store.get_foods(conn, (x.food_id for _, entries in meals for x in entries))
             banner = notice(conn, params, page_url)
-        progress = logic.progress(totals, targets)
+        # Goals not set count as the defaults here (the sliders and History keep the stored ones)
+        progress = logic.progress(totals, logic.with_default_targets(targets))
         shown = logic.round_for_display(totals)
 
         # After a rejected grams edit: the typed value back on its entry, with the reason
@@ -2626,7 +2627,7 @@ def add_routes(
         _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
             by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
-            targets = logic.with_default_targets(store.get_targets(conn))
+            targets = store.get_targets(conn)
         totals = logic.sum_nutrients(by_day.values())
         average = logic.round_for_display(logic.average(totals, len(by_day))) if by_day else None
 
