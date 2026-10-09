@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,7 @@ from tests.conftest import MIGRATIONS, SCHEMA
 
 TABLES = {
     "foods",
-    "aliases",
+    "portions",
     "meals",
     "entries",
     "meal_templates",
@@ -30,7 +32,7 @@ def add_food(conn, name="Egg, whole, raw", brand=None, source="fdc", source_id="
 def test_baseline_and_migrations_create_schema(conn):
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert names >= TABLES | {"foods_fts"}
-    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 9
+    assert db.schema_version(conn) == db.latest_version(MIGRATIONS) == 10
     cols = {r[1] for r in conn.execute("PRAGMA table_info(foods)")}
     assert "saved" in cols
 
@@ -41,8 +43,8 @@ def test_connection_pragmas(conn):
 
 
 def test_migrate_is_idempotent(conn):
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 9
-    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 9
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 10
+    assert db.migrate(conn, SCHEMA, MIGRATIONS) == 10
 
 
 def test_applies_numbered_migrations_in_order(tmp_path: Path):
@@ -143,7 +145,7 @@ def test_entries_snapshot_all_nutrients(conn):
 
 def test_foreign_keys_enforced(conn):
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO aliases (user_id, alias, food_id) VALUES (1, 'ghost', 999)")
+        conn.execute("INSERT INTO portions (user_id, food_id, name, grams) VALUES (1, 999, 'x', 1)")
 
 
 def test_nested_transactions_join_the_outer_one(conn):
@@ -152,3 +154,30 @@ def test_nested_transactions_join_the_outer_one(conn):
             conn.execute("INSERT INTO targets (user_id, kcal) VALUES (1, 2000)")
         raise RuntimeError
     assert conn.execute("SELECT count(*) FROM targets").fetchone()[0] == 0
+
+
+def test_nicknames_with_grams_become_portions(tmp_path: Path):
+    old = tmp_path / "migrations"
+    old.mkdir()
+    for p in MIGRATIONS.glob("000[2-9]_*.sql"):
+        shutil.copy(p, old)
+    path = tmp_path / "chomp.db"
+    with closing(db.open_db(path, SCHEMA, old)) as conn:
+        assert db.schema_version(conn) == 9
+        taco = add_food(conn, "Birria Taco Kit", source_id="1")
+        eggs = add_food(conn, "Egg", source_id="2")
+        conn.executemany(
+            "INSERT INTO aliases (user_id, alias, food_id, default_grams) VALUES (1, ?, ?, ?)",
+            [("1 Birria taco", taco, 88), ("my eggs", eggs, 100), ("eggies", eggs, None)],
+        )
+    with closing(db.open_db(path, SCHEMA, MIGRATIONS)) as conn:
+        rows = conn.execute(
+            "SELECT user_id, food_id, name, grams, estimated FROM portions ORDER BY name"
+        ).fetchall()
+        assert [tuple(r) for r in rows] == [
+            (1, taco, "Birria taco", 88, 0),
+            (1, eggs, "my eggs", 100, 0),
+        ]
+        assert "aliases" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(entries)")}
+        assert "estimated" in cols

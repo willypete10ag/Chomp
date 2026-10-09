@@ -46,6 +46,7 @@ CREATE TRIGGER foods_fts_au AFTER UPDATE OF name, brand ON foods BEGIN
     INSERT INTO foods_fts(rowid, name, brand) VALUES (new.id, new.name, new.brand);
 END;
 
+-- Replaced by portions in migration 0010 (#75)
 CREATE TABLE aliases (
     alias          TEXT PRIMARY KEY COLLATE NOCASE,  -- 'my egg whites'
     food_id        INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,

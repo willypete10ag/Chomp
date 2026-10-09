@@ -34,10 +34,17 @@ Chomp is the user's meal log. Use its tools to look up foods, log what they ate,
 Every calorie and macro number you show must come from a Chomp tool result. Never estimate or
 invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo,
 or, for a restaurant dish or home cooking, the nutrition numbers and serving weight (save_food).
-Typical flow: search_food for each item, pick the best match (prefer alias and saved matches),
-log_entries with food_ids, grams and the time they ate (ask if they haven't said; don't
-label meals breakfast/lunch/dinner unless they do), then show the user the per-item breakdown
-so they can correct it with update_entry.\
+Typical flow: search_food for each item, pick the best match (prefer portion and saved
+matches), log_entries with food_ids, amounts and the time they ate (ask if they haven't said;
+don't label meals breakfast/lunch/dinner unless they do), then show the user the per-item
+breakdown so they can correct it with update_entry.
+Amounts: when the user gives a count or household measure ("3 handfuls", "a taco") rather
+than grams, use the food's matching portion from search_food if it has one. If it has none,
+ask once: "Do you want to give an exact weight, or should I estimate?" To estimate, grams =
+the food's serving_g x how many servings you judge it was; log with estimated=true and
+save_portion(estimated=true) so you don't ask again for that food. Only the amount is ever
+estimated: calories and macros always come from Chomp. When the user gives a real weight,
+correct the entry (update_entry) and the portion (save_portion).\
 """
 
 SEARCH_LIMIT_MAX = 25
@@ -122,10 +129,25 @@ def _food(row) -> Food:
     )
 
 
+class Portion(BaseModel):
+    name: str = Field(description="e.g. 'handful'; log it as portion='handful', count=3")
+    grams: float = Field(description="Weight of one portion")
+    estimated: bool = Field(
+        description="True if this weight was estimated, not weighed; entries logged with it "
+        "are marked estimated"
+    )
+
+
+def _portion(row) -> Portion:
+    return Portion(name=row["name"], grams=row["grams"], estimated=bool(row["estimated"]))
+
+
 class SearchHit(Food):
-    match: Literal["alias", "saved", "fdc"]
-    alias: str | None = None
-    default_grams: float | None = None
+    match: Literal["portion", "saved", "fdc"]
+    portion: str | None = Field(None, description="The user's portion this phrase named")
+    portions: list[Portion] = Field(
+        default_factory=list, description="The user's remembered portions of this food"
+    )
     fdc_data_type: str | None = None
 
 
@@ -145,6 +167,7 @@ class Entry(BaseModel):
     name: str
     brand: str | None
     grams: float
+    estimated: bool = Field(description="The grams were estimated from a count, not weighed")
     nutrients: Nutrients
 
 
@@ -156,6 +179,7 @@ def _entry(e: store.EntryRow) -> Entry:
         name=e.name,
         brand=e.brand,
         grams=e.grams,
+        estimated=e.estimated,
         nutrients=_nutrients(e.nutrients),
     )
 
@@ -235,11 +259,11 @@ class ConfirmResult(BaseModel):
     changed: list[str] = Field(description="Nutrients whose per-100 g value changed")
 
 
-class AliasResult(BaseModel):
-    alias: str
+class PortionResult(BaseModel):
     food: Food
-    default_grams: float | None
-    replaced: bool = Field(description="True if the alias already existed and now points here")
+    portion: Portion
+    portions: list[Portion] = Field(description="All of the user's portions of this food")
+    replaced: bool = Field(description="True if a portion by that name was updated")
 
 
 class TemplateItem(BaseModel):
@@ -295,7 +319,18 @@ class ServerInfo(TypedDict):
 
 class LogItem(BaseModel):
     food_id: int = Field(description="food_id from search_food or lookup_barcode")
-    grams: float = Field(gt=0, description="Weight eaten in grams")
+    grams: float | None = Field(
+        None, gt=0, description="Weight eaten in grams; give this or portion"
+    )
+    portion: str | None = Field(
+        None, description="One of the food's portions from search_food, e.g. 'handful'"
+    )
+    count: float = Field(1, gt=0, description="How many of the portion, e.g. 3 (with portion)")
+    estimated: bool = Field(
+        False,
+        description="True when grams is your estimate (servings x serving_g), not a weight "
+        "the user gave",
+    )
 
 
 # --- Helpers --------------------------------------------------------------------------------
@@ -308,6 +343,22 @@ def tool_errors() -> Iterator[None]:
         yield
     except (store.NotFound, ValueError, SourceError) as e:
         raise ToolError(str(e)) from e
+
+
+def _amounts(conn, items: list[LogItem]) -> list[tuple[int, float, bool]]:
+    """(food_id, grams, estimated) per item, a portion times its count turned into grams."""
+    out = []
+    for i in items:
+        if (i.grams is None) == (i.portion is None):
+            raise ValueError(f"food {i.food_id}: give grams or a portion, not both or neither")
+        if i.portion is None:
+            if i.count != 1:
+                raise ValueError(f"food {i.food_id}: count only applies with a portion")
+            out.append((i.food_id, i.grams, i.estimated))
+        else:
+            p = store.get_portion(conn, i.food_id, i.portion)
+            out.append((i.food_id, p["grams"] * i.count, i.estimated or bool(p["estimated"])))
+    return out
 
 
 def _progress(totals: logic.Nutrients, targets: dict) -> dict[str, TargetProgress]:
@@ -463,15 +514,16 @@ def build_server(
     ) -> SearchResult:
         """Find foods to log. Call once per item the user mentions, before log_entries.
 
-        Results are ranked: the user's aliases first (with default_grams), then foods the
-        user has used before (logged, saved from a label or barcode, verified first), then
-        USDA FoodData Central (closest name match first, generic Foundation and SR Legacy
-        foods before Branded products). Every result has a food_id and per-100 g
-        nutrients from the database. Prefer alias and saved matches; prefer generic FDC
-        foods unless the user named a brand. If `templates` names a saved meal template,
-        the user means that meal: log it with log_meal_template. Show the user which food
-        you picked. If nothing fits, say so and ask for a barcode or label photo
-        rather than guessing.
+        Results are ranked: foods with one of the user's portions named by the phrase first
+        ("birria taco"), then foods the user has used before (logged, saved from a label or
+        barcode, verified first), then USDA FoodData Central (closest name match first,
+        generic Foundation and SR Legacy foods before Branded products). Every result has a
+        food_id, per-100 g nutrients from the database, serving_g, and the user's remembered
+        `portions` (e.g. handful = 30 g) for turning counts into grams. Prefer portion and
+        saved matches; prefer generic FDC foods unless the user named a brand. If
+        `templates` names a saved meal template, the user means that meal: log it with
+        log_meal_template. Show the user which food you picked. If nothing fits, say so and
+        ask for a barcode or label photo rather than guessing.
         """
         notes: list[str] = []
         hits: list[SearchHit] = []
@@ -496,13 +548,8 @@ def build_server(
                     f"Several saved meal templates match ({names}); ask the user which one "
                     "they mean, then log it with log_meal_template."
                 )
-            for row in store.search_aliases(conn, query, limit):
-                add(
-                    row,
-                    match="alias",
-                    alias=row["alias"],
-                    default_grams=row["default_grams"],
-                )
+            for row in store.search_portions(conn, query, limit):
+                add(row, match="portion", portion=row["portion"])
             for row in store.search_foods(conn, query, limit):
                 add(row, match="saved")
             if len(hits) < limit:
@@ -522,6 +569,9 @@ def build_server(
                             log.warning("search_food: skipped FDC %s: %s", rec.source_id, e)
                             continue
                         add(row, match="fdc", fdc_data_type=rec.data_type)
+            portions = store.portions_of(conn, (h.food_id for h in hits))
+            for h in hits:
+                h.portions = [_portion(p) for p in portions[h.food_id]]
         if not hits and not templates:
             notes.append(
                 "No match. Try a simpler or more generic name, or ask for a barcode or label photo."
@@ -556,9 +606,12 @@ def build_server(
     ) -> LogResult:
         """Log one meal: one or more foods with the grams eaten.
 
-        Use food_ids from search_food or lookup_barcode; convert counts and household
-        measures to grams first (use the food's serving_g or an alias's default_grams when
-        they apply, and ask the user when unsure). Every new meal needs eaten_at: if the
+        Use food_ids from search_food or lookup_barcode. Give each item's grams, or one of
+        the food's portions with a count (3 handfuls: portion='handful', count=3). For a
+        count with no portion, ask whether the user will give an exact weight or wants an
+        estimate; an estimate is the food's serving_g x your count of servings, logged with
+        estimated=true (then save_portion so you needn't ask next time). Every new meal
+        needs eaten_at: if the
         user hasn't said when they ate, ask before logging; pass 'now' only when they say
         they are eating it now. Leave meal_label empty unless the user names the meal.
         To add something to a meal already logged ("add the cereal to breakfast"), pass
@@ -567,8 +620,8 @@ def build_server(
         totals, plus the day's running totals and progress against targets. Show the user
         the per-item breakdown so they can correct it.
         """
-        pairs = [(i.food_id, i.grams) for i in items]
         with tool_errors(), connect() as conn:
+            pairs = _amounts(conn, items)
             if meal_id is not None:
                 if eaten_at is not None or meal_label is not None or note is not None:
                     raise ValueError(
@@ -589,17 +642,23 @@ def build_server(
         food_id: Annotated[
             int | None, Field(description="Swap to this food (from search_food)")
         ] = None,
+        estimated: Annotated[
+            bool, Field(description="True if the new grams are still your estimate")
+        ] = False,
     ) -> UpdateResult:
         """Correct a logged item: change its grams, swap it to a different food, or both.
 
         Use when the user corrects something ("the eggs were 220 g", "that was whole milk").
+        New grams count as exact, clearing the entry's estimated mark, unless estimated=true.
+        If the corrected entry was a counted portion ("those 3 handfuls were 90 g"), also
+        save_portion with the weight and count so the portion is right next time.
         Nutrients are recomputed from the food's current values. Returns the updated entry,
         its meal's new totals, and the day's totals.
         """
         if grams is None and food_id is None:
             raise ToolError("give grams, food_id, or both")
         with tool_errors(), connect() as conn:
-            entry = store.update_entry(conn, entry_id, grams, food_id)
+            entry = store.update_entry(conn, entry_id, grams, food_id, estimated)
             meal = meal_out(conn, entry.meal_id)
             day = day_summary(conn, store.get_meal(conn, entry.meal_id)["eaten_at"])
             return UpdateResult(entry=_entry(entry), meal=meal, day=day)
@@ -970,34 +1029,61 @@ def build_server(
             return ConfirmResult(food=_food(row), changed=changed)
 
     @server.tool(annotations=CHANGES)
-    def save_alias(
-        alias: Annotated[
-            str, Field(min_length=1, description="The user's phrase, e.g. 'my usual eggs'")
+    def save_portion(
+        food_id: Annotated[int, Field(description="The food, from search_food")],
+        name: Annotated[
+            str, Field(min_length=1, description="The portion, e.g. 'handful', 'slice', 'taco'")
         ],
-        food_id: Annotated[int, Field(description="The food the phrase means")],
-        default_grams: Annotated[
-            float | None, Field(gt=0, description="Usual amount in grams, if there is one")
-        ] = None,
-    ) -> AliasResult:
-        """Remember a personal name for a food, optionally with the usual amount.
+        grams: Annotated[
+            float, Field(gt=0, description="Total weight of `count` portions, in grams")
+        ],
+        count: Annotated[
+            float, Field(gt=0, description="How many portions `grams` covers, e.g. 3")
+        ] = 1,
+        estimated: Annotated[
+            bool,
+            Field(
+                description="True when grams is your estimate rather than a weight the user gave"
+            ),
+        ] = False,
+    ) -> PortionResult:
+        """Remember what one of the user's portions of a food weighs ("my handful of
+        Cheez-Its is 30 g"), so counts turn into grams without asking next time.
 
-        Use when the user says something like "call this my egg whites" or "my usual is
-        300 g". Afterwards search_food returns this food first for that phrase, with
-        default_grams to use when they don't give an amount. Saving an existing alias
-        repoints it. Matching ignores case.
+        Use when the user gives a real weight for a count ("those 3 handfuls were 90 g":
+        grams=90, count=3), states a portion ("a scoop is 32 g"), or after you log an
+        estimate (estimated=true) so you don't ask again. A real weight replaces an
+        estimate. Portions belong to this user and show up in search_food results; log one
+        with log_entries(portion=..., count=...). Returns the portion and all the user's
+        portions of the food.
         """
-        alias = alias.strip()
         with tool_errors(), connect() as conn:
-            existed = (
-                conn.execute("SELECT 1 FROM aliases WHERE alias = ?", (alias,)).fetchone()
-                is not None
-            )
-            store.save_alias(conn, alias, food_id, default_grams)
-            return AliasResult(
-                alias=alias,
+            row, replaced = store.save_portion(conn, food_id, name, grams / count, estimated)
+            portions = store.portions_of(conn, [food_id])[food_id]
+            return PortionResult(
                 food=_food(store.get_food(conn, food_id)),
-                default_grams=default_grams,
-                replaced=existed,
+                portion=_portion(row),
+                portions=[_portion(p) for p in portions],
+                replaced=replaced,
+            )
+
+    @server.tool(annotations=CHANGES)
+    def forget_portion(
+        food_id: Annotated[int, Field(description="The food, from search_food")],
+        name: Annotated[str, Field(min_length=1, description="The portion's name")],
+    ) -> PortionResult:
+        """Forget one of the user's portions of a food, when they say it's wrong or unwanted.
+
+        Past entries keep their grams. Returns the forgotten portion and the ones left.
+        """
+        with tool_errors(), connect() as conn:
+            row = store.delete_portion(conn, food_id, name)
+            portions = store.portions_of(conn, [food_id])[food_id]
+            return PortionResult(
+                food=_food(store.get_food(conn, food_id)),
+                portion=_portion(row),
+                portions=[_portion(p) for p in portions],
+                replaced=False,
             )
 
     def template_out(conn, template_id: int, name: str, replaced: bool, items) -> TemplateResult:
@@ -1036,7 +1122,7 @@ def build_server(
         """
         name = name.strip()
         with tool_errors(), connect() as conn:
-            pairs = [(i.food_id, i.grams) for i in items]
+            pairs = [(f, g) for f, g, _ in _amounts(conn, items)]
             template_id, replaced = store.save_template(conn, name, pairs)
             row, rows = store.get_template(conn, name)
             return template_out(conn, template_id, row["name"], replaced, rows)

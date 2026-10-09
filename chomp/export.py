@@ -1,7 +1,7 @@
 """CSV and JSON export of the meal log (#34).
 
 CSV is one row per logged entry, for spreadsheets. JSON is everything a person would want to
-keep: foods, meals with their entries, aliases, meal templates and targets. Times are local
+keep: foods, meals with their entries, portions, meal templates and targets. Times are local
 ISO 8601 with offset; nutrient values are the stored snapshots, unrounded. An export covers
 the user the connection was opened for (#46); foods are shared and always exported in full.
 """
@@ -29,6 +29,7 @@ CSV_COLUMNS = (
     "food",
     "brand",
     "grams",
+    "estimated",
     *NUTRIENTS,
 )
 
@@ -42,7 +43,7 @@ def _bounds(start: date | None, end: date | None, tz: str) -> tuple[str, str]:
 def _entries(conn: sqlite3.Connection, lo: str, hi: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT m.id AS meal_id, m.eaten_at, m.label AS meal_label, m.note AS meal_note,"
-        " e.id AS entry_id, e.food_id, f.name AS food, f.brand, e.grams,"
+        " e.id AS entry_id, e.food_id, f.name AS food, f.brand, e.grams, e.estimated,"
         f" {', '.join(f'e.{k}' for k in NUTRIENTS)}"
         " FROM entries e JOIN meals m ON m.id = e.meal_id JOIN foods f ON f.id = e.food_id"
         " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?"
@@ -75,6 +76,7 @@ def write_csv(
                 r["food"],
                 r["brand"] or "",
                 r["grams"],
+                r["estimated"],
                 *("" if r[k] is None else r[k] for k in NUTRIENTS),
             ]
         )
@@ -89,7 +91,7 @@ def to_json(
     conn: sqlite3.Connection, tz: str, start: date | None = None, end: date | None = None
 ) -> dict:
     """Everything in the log as plain data. A date range limits meals only; foods,
-    aliases, templates and targets are always included in full."""
+    portions, templates and targets are always included in full."""
     lo, hi = _bounds(start, end, tz)
     meals: dict[int, dict] = {}
     for r in _entries(conn, lo, hi):
@@ -110,6 +112,7 @@ def to_json(
                 "food": r["food"],
                 "brand": r["brand"],
                 "grams": r["grams"],
+                "estimated": bool(r["estimated"]),
                 **{k: r[k] for k in NUTRIENTS},
             }
         )
@@ -144,11 +147,15 @@ def to_json(
             " FROM foods ORDER BY id",
         ),
         "meals": list(meals.values()),
-        "aliases": _dicts(
-            conn,
-            "SELECT alias, food_id, default_grams FROM aliases WHERE user_id = ? ORDER BY alias",
-            (user_id,),
-        ),
+        "portions": [
+            {**p, "estimated": bool(p["estimated"])}
+            for p in _dicts(
+                conn,
+                "SELECT food_id, name, grams, estimated FROM portions WHERE user_id = ?"
+                " ORDER BY food_id, name",
+                (user_id,),
+            )
+        ],
         "meal_templates": templates,
         "targets": dict(targets) if targets else None,
     }

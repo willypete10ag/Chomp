@@ -166,7 +166,7 @@ def test_add_page_lists_foods_saved_meals_and_sliders(http, logged):
     assert "1 serving" not in text  # no serving size known for these foods
     assert '<option value="new">A new meal</option>' in text
     assert "8:" in text or "AM" in text or "PM" in text  # existing meal offered in Add to
-    # searching finds a nickname with its usual grams first
+    # searching finds a portion with its usual grams first
     text = http.get("/app/add", params={"date": today(), "q": "my whites"}).text
     text = text.replace("\xa0", " ")
     assert "“my whites”" in text and 'value="300"' in text and "Your usual · 300 g" in text

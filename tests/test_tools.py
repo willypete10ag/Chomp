@@ -108,16 +108,19 @@ async def test_logged_fdc_food_ranks_as_saved(server, conn, fdc_eggs):
 
 
 @pytest.mark.anyio
-async def test_search_ranks_alias_then_verified_saved_then_fdc(server, conn, fdc_eggs):
+async def test_search_ranks_portion_then_verified_saved_then_fdc(server, conn, fdc_eggs):
     plain = add_food(conn, "Egg white omelette", 50, 10, 1, 0)
     verified = add_food(conn, "Egg white bites", 70, 8, 4, 2, verified=1)
-    conn.execute("INSERT INTO aliases VALUES (1, 'my egg whites', ?, 300)", (plain,))
+    conn.execute(
+        "INSERT INTO portions (user_id, food_id, name, grams) VALUES (1, ?, 'egg white', 300)",
+        (plain,),
+    )
     async with Client(server) as client:
         out = await call(client, "search_food", query="egg white", limit=4)
     r = out["results"]
-    assert [x["match"] for x in r] == ["alias", "saved", "fdc", "fdc"]
-    assert r[0]["food_id"] == plain and r[0]["default_grams"] == 300
-    assert r[1]["food_id"] == verified  # the plain one already appeared as the alias
+    assert [x["match"] for x in r] == ["portion", "saved", "fdc", "fdc"]
+    assert r[0]["food_id"] == plain and r[0]["portions"][0]["grams"] == 300
+    assert r[1]["food_id"] == verified  # the plain one already appeared for its portion
 
 
 @pytest.mark.anyio
@@ -499,7 +502,7 @@ async def test_get_day_rejects_bad_date(server):
 async def test_tool_annotations(server):
     async with Client(server) as client:
         tools = {t.name: t.annotations for t in (await client.list_tools()).tools}
-    assert len(tools) == 16 and all(a is not None for a in tools.values())
+    assert len(tools) == 17 and all(a is not None for a in tools.values())
     assert tools["get_day"].read_only_hint is True
     assert tools["get_totals"].read_only_hint is True
     assert tools["search_food"].destructive_hint is False

@@ -474,10 +474,6 @@ def safe_next(value: str) -> str:
     return value
 
 
-def grams_note(grams: float | None) -> str:
-    return f" · {num(grams, 1)}{NBSP}g" if grams else ""
-
-
 def parse_grams(value: str) -> float:
     try:
         grams = float(value)
@@ -575,13 +571,13 @@ def chips(options: list[tuple[str, float]]) -> str:
     return f'<div class="chips js-only">{"".join(buttons)}</div>'
 
 
-def grams_chips(food, alias_grams: float | None = None, current: float | None = None) -> str:
+def grams_chips(food, usual_grams: float | None = None, current: float | None = None) -> str:
     options = []
     if current:
         options += [(f"½ · {num(current / 2, 1)}{NBSP}g", current / 2)]
         options += [(f"2&times; · {num(current * 2, 1)}{NBSP}g", current * 2)]
-    if alias_grams:
-        options.append((f"Your usual · {num(alias_grams, 1)}{NBSP}g", alias_grams))
+    if usual_grams:
+        options.append((f"Your usual · {num(usual_grams, 1)}{NBSP}g", usual_grams))
     if food["serving_g"]:
         options.append((f"1 serving · {num(food['serving_g'], 1)}{NBSP}g", food["serving_g"]))
     if not current:
@@ -780,7 +776,7 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/delete">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
-        " numbers; nicknames for it go, and it leaves any saved meal.</p>"
+        " numbers; portions of it go, and it leaves any saved meal.</p>"
         f'<button class="danger" type="submit">Yes, delete {e(row["name"])}</button>'
         "</form></details>"
     )
@@ -1142,11 +1138,11 @@ def pick_item(row, ctx: DayContext, meal_id: int | None, q: str, default_time: s
     keys = row.keys()
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
-    usual = row["default_grams"] if "default_grams" in keys else None
+    usual = row["portion_grams"] if "portion_grams" in keys else None
     grams = usual or row["serving_g"] or 100.0
     meta = []
-    if "alias" in keys and row["alias"]:
-        meta.append(f"“{e(row['alias'])}”")
+    if "portion" in keys and row["portion"]:
+        meta.append(f"“{e(row['portion'])}”")
     if row["brand"]:
         meta.append(e(row["brand"]))
     if not row["verified"]:
@@ -1853,15 +1849,15 @@ def add_routes(
             if meal is None:  # gone, or on another day: log a new meal instead
                 meal_id = None
             if q:
-                aliases = store.search_aliases(conn, q, ADD_LIMIT)
+                portioned = store.search_portions(conn, q, ADD_LIMIT)
                 rows = store.search_foods(conn, q, ADD_LIMIT)
                 names = set(store.templates_matching(conn, q))
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
-                aliases = []
+                portioned = []
                 rows = store.list_used_foods(conn, ADD_LIMIT)
                 templates = store.list_templates(conn)
-            seen = {r["id"] for r in rows} | {a["id"] for a in aliases}
+            seen = {r["id"] for r in rows} | {a["id"] for a in portioned}
             if want_usda:
                 try:
                     records = await fdc.search_ranked(q, USDA_LIMIT)
@@ -1897,7 +1893,7 @@ def add_routes(
             banner,
             f'<form class="search" method="get" action="{PREFIX}/add">{hidden}'
             f'<input type="search" name="q" value="{e(q)}" placeholder="Search your foods"'
-            ' aria-label="Search foods, nicknames and saved meals">'
+            ' aria-label="Search foods and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
         ]
         if templates:
@@ -1908,11 +1904,11 @@ def add_routes(
                 '<section class="card"><h2 class="section">Saved meals</h2>'
                 f'<ul class="entries">{lis}</ul></section>'
             )
-        picks = [pick_item(a, ctx, meal_id, q, default_time) for a in aliases]
+        picks = [pick_item(a, ctx, meal_id, q, default_time) for a in portioned]
         picks += [
             pick_item(r, ctx, meal_id, q, default_time)
             for r in rows
-            if r["id"] not in {a["id"] for a in aliases}
+            if r["id"] not in {a["id"] for a in portioned}
         ]
         if picks:
             heading = "Your matches" if q else "Your foods"
@@ -2687,7 +2683,7 @@ def add_routes(
             user=account(request),
         )
 
-    # --- Foods, nicknames and templates ---
+    # --- Foods and templates ---
 
     def added_notice(conn, food_id: int) -> str:
         """The banner after New food saves one, with a link to log it."""
@@ -2728,12 +2724,10 @@ def add_routes(
         with connect(request) as conn:
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT, view)
-                nicknames = store.search_aliases(conn, q, FOODS_LIMIT) if everything else []
                 names = set(store.templates_matching(conn, q)) if everything else set()
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, view)
-                nicknames = store.list_aliases(conn) if everything else []
                 templates = store.list_templates(conn) if everything else []
 
         def view_url(v: str) -> str:
@@ -2750,16 +2744,16 @@ def add_routes(
             "<h1>Foods</h1>",
             banner,
             f'<form class="search" method="get" action="{PREFIX}/foods">{keep_view}'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods, nicknames, meals"'
-            ' aria-label="Search foods, nicknames and saved meals">'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods and meals"'
+            ' aria-label="Search foods and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
             f'<nav class="segment filters" aria-label="Show">{chips}</nav>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
-        if q and not (rows or nicknames or templates):
+        if q and not (rows or templates):
             parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')
 
-        # Reusable meals and nicknames first, so they're reachable without scrolling every food
+        # Reusable meals first, so they're reachable without scrolling every food
         if templates:
             cards = []
             for t, t_items in templates:
@@ -2778,13 +2772,6 @@ def add_routes(
                     f"{macros_line(t_totals)}</div></div>"
                 )
             parts.append(fold("meals", "Saved meals", "".join(cards)))
-        if nicknames:
-            lis = "".join(
-                f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted name">'
-                f"{e(a['name'])}{grams_note(a['default_grams'])}</span></li>"
-                for a in nicknames
-            )
-            parts.append(fold("nicknames", "Nicknames", f'<ul class="plain">{lis}</ul>'))
         if rows:
             heading = "Foods" if q or not everything else "Your foods"
             note = f"{FOOD_VIEWS[view][1]}, " if not q or not everything else ""

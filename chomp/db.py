@@ -22,7 +22,7 @@ class MigrationError(RuntimeError):
 
 class Connection(sqlite3.Connection):
     """A connection that may be opened for one user (#46): store.py then reads and writes
-    only that user's meals, targets, aliases, templates and undo history."""
+    only that user's meals, targets, portions, templates and undo history."""
 
     user_id: int | None = None
 

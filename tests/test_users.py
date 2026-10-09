@@ -88,12 +88,14 @@ def test_migration_gives_existing_data_to_the_owner(tmp_path):
             " VALUES ('x', '{}', '{}', 1)"
         )
     with closing(db.open_db(path, SCHEMA, MIGRATIONS, users.OWNER_ID)) as conn:
-        assert db.schema_version(conn) == 9
+        assert db.schema_version(conn) == 10
         # Rebuilding meals and meal_templates must not cascade into their children
         assert [e.grams for e in store.meal_entries(conn, 7)] == [100]
         assert store.get_template(conn, "usual")[1][0]["grams"] == 50
         assert store.get_meal(conn, 7)["label"] == "lunch"
-        assert [a["alias"] for a in store.list_aliases(conn)] == ["my eggs"]
+        assert [(p["name"], p["grams"]) for p in store.portions_of(conn, [food])[food]] == [
+            ("my eggs", 100)
+        ]
         assert store.get_targets(conn)["kcal"] == 2100
         for table in ("oauth_tokens", "web_sessions"):
             assert [r[0] for r in conn.execute(f"SELECT user_id FROM {table}")] == [1]
@@ -192,16 +194,16 @@ def test_each_user_sees_only_their_own_log(settings, conn):
     eggs = add_food(conn, "Egg", *EGGS)
     whites = add_food(conn, "Egg white", *WHITES)
     mine = store.log_meal(conn, [(eggs, 100)], WHEN, None)
-    store.save_alias(conn, "eggs", eggs, 100)
+    store.save_portion(conn, eggs, "egg", 50)
     store.save_template(conn, "usual", [(eggs, 100)])
     store.set_targets(conn, {"kcal": 2500})
     with as_user(settings, her) as hers:
         theirs = store.log_meal(hers, [(whites, 200)], WHEN, None)
-        store.save_alias(hers, "eggs", whites, 200)  # same alias, her own food
+        store.save_portion(hers, eggs, "egg", 60)  # same portion, her own weight
         store.save_template(hers, "usual", [(whites, 50)])  # same template name
         store.set_targets(hers, {"kcal": 1800})
         assert [m["id"] for m in store.meals_between(hers, "2026", "2027")] == [theirs]
-        assert store.search_aliases(hers, "eggs", 5)[0]["id"] == whites
+        assert store.get_portion(hers, eggs, "egg")["grams"] == 60
         assert store.get_template(hers, "usual")[1][0]["grams"] == 50
         assert store.get_targets(hers)["kcal"] == 1800
         # My meal and entry don't exist for her
@@ -218,7 +220,7 @@ def test_each_user_sees_only_their_own_log(settings, conn):
         uses = {r["id"]: r["uses"] for r in store.list_used_foods(hers, 10)}
         assert uses == {whites: 1, eggs: 0}
     assert [m["id"] for m in store.meals_between(conn, "2026", "2027")] == [mine]
-    assert store.search_aliases(conn, "eggs", 5)[0]["id"] == eggs
+    assert store.get_portion(conn, eggs, "egg")["grams"] == 50
     assert store.get_targets(conn)["kcal"] == 2500
     assert store.get_meal(conn, mine)["label"] is None
 

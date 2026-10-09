@@ -2,7 +2,7 @@
 
 Macro math is delegated to logic.py; this module only moves rows around.
 
-Users (#46): foods are shared, but meals, entries, targets, aliases, meal templates and undo
+Users (#46): foods are shared, but meals, entries, targets, portions, meal templates and undo
 history belong to one user. Functions that touch those need a connection opened for a user
 (db.connect(path, user_id)) and only ever see that user's rows; another user's meal or entry
 is NotFound.
@@ -51,7 +51,7 @@ def nutrients_of(row: Mapping) -> logic.Nutrients:
 
 def get_food(conn: sqlite3.Connection, food_id: int, *, live: bool = False) -> sqlite3.Row:
     """A food by id. Deleted foods are still found (past entries point at them) unless
-    `live`, for picking a food to log, swap in, nickname or put in a saved meal."""
+    `live`, for picking a food to log, swap in, give a portion or put in a saved meal."""
     return get_foods(conn, [food_id], live=live)[food_id]
 
 
@@ -145,7 +145,7 @@ def _is_deleted(conn: sqlite3.Connection, food_id: int) -> bool:
 def delete_food(conn: sqlite3.Connection, food_id: int) -> tuple[sqlite3.Row, int]:
     """Delete a food for everyone (foods are shared). Logged entries keep their snapshots
     and still point at the row, so it stays, hidden from search and lists, with its barcode
-    released for a fresh scan. Everyone's nicknames for it go, and it leaves every saved
+    released for a fresh scan. Everyone's portions of it go, and it leaves every saved
     meal (a meal left empty goes too). Returns the food and how many saved meals it left."""
     food = get_food(conn, food_id)
     with transaction(conn):
@@ -161,7 +161,7 @@ def delete_food(conn: sqlite3.Connection, food_id: int) -> tuple[sqlite3.Row, in
             "DELETE FROM meal_templates WHERE id NOT IN"
             " (SELECT template_id FROM meal_template_items)"
         )
-        conn.execute("DELETE FROM aliases WHERE food_id = ?", (food_id,))
+        conn.execute("DELETE FROM portions WHERE food_id = ?", (food_id,))
         conn.execute(
             "UPDATE foods SET deleted = 1, gtin = NULL, saved = 0, updated_at = datetime('now')"
             " WHERE id = ?",
@@ -268,27 +268,31 @@ def fts_query(query: str) -> str | None:
     return " ".join(f'"{p}"*' for p in prefixes) if words else None
 
 
-def search_aliases(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
-    """Aliases matching the query, exact match first, then aliases containing every word."""
+def search_portions(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
+    """The user's foods with a portion whose name contains every word of the query ("birria
+    taco"), exact name first. Each row is the food plus its matched `portion`, `portion_grams`
+    and `portion_estimated`."""
     words = tokens(query)
     if not words:
         return []
-    where = " AND ".join("a.alias LIKE ?" for _ in words)
+    where = " AND ".join("p.name LIKE ?" for _ in words)
     return conn.execute(
-        f"SELECT a.alias, a.default_grams, {', '.join('f.' + c for c in FOOD_COLS.split(', '))}"
-        f" FROM aliases a JOIN foods f ON f.id = a.food_id WHERE a.user_id = ? AND {where}"
-        " ORDER BY (a.alias = ? COLLATE NOCASE) DESC, length(a.alias) LIMIT ?",
+        "SELECT p.name AS portion, p.grams AS portion_grams, p.estimated AS portion_estimated,"
+        f" {', '.join('f.' + c for c in FOOD_COLS.split(', '))}"
+        " FROM portions p JOIN foods f ON f.id = p.food_id"
+        f" WHERE p.user_id = ? AND f.deleted = 0 AND {where}"
+        " ORDER BY (p.name = ? COLLATE NOCASE) DESC, length(p.name) LIMIT ?",
         (user_of(conn), *(f"%{w}%" for w in words), query.strip(), limit),
     ).fetchall()
 
 
-# Foods someone has chosen: verified, added from a label or barcode, logged, aliased, or in
+# Foods someone has chosen: verified, added from a label or barcode, logged, with a portion, or in
 # a template. FDC search hits are cached in foods too, but only as a lookup cache. Foods are
 # shared, so one person's saved foods are found by everyone.
 USED_FOOD = (
     "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
-    " OR EXISTS (SELECT 1 FROM aliases a WHERE a.food_id = f.id)"
+    " OR EXISTS (SELECT 1 FROM portions p WHERE p.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
 )
 # How many of this user's entries log the food, as column `uses` (one ? for the user id)
@@ -379,20 +383,83 @@ def rename_food(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Ro
     return get_food(conn, food_id)
 
 
-# --- Aliases and templates ------------------------------------------------------------------
+# --- Portions (#75) ------------------------------------------------------------------------
 
 
-def save_alias(
-    conn: sqlite3.Connection, alias: str, food_id: int, default_grams: float | None
-) -> None:
-    get_food(conn, food_id, live=True)
-    with transaction(conn):
-        conn.execute(
-            "INSERT INTO aliases (user_id, alias, food_id, default_grams) VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(user_id, alias) DO UPDATE SET food_id = excluded.food_id,"
-            " default_grams = excluded.default_grams",
-            (user_of(conn), alias, food_id, default_grams),
+def portion_name(name: str) -> str:
+    """A portion's name as stored: single-spaced, without a leading count ("1 handful")."""
+    name = " ".join(name.split())
+    name = re.sub(r"^(1|one|a|an)\s+(?=\S)", "", name, flags=re.IGNORECASE)
+    if not name:
+        raise ValueError("a portion needs a name, e.g. 'handful' or 'slice'")
+    return name
+
+
+def portions_of(conn: sqlite3.Connection, food_ids: Iterable[int]) -> dict[int, list[sqlite3.Row]]:
+    """This user's portions of each food, by name."""
+    ids = sorted(set(food_ids))
+    out: dict[int, list[sqlite3.Row]] = {i: [] for i in ids}
+    if not ids:
+        return out
+    rows = conn.execute(
+        "SELECT id, food_id, name, grams, estimated FROM portions"
+        f" WHERE user_id = ? AND food_id IN ({','.join('?' * len(ids))})"
+        " ORDER BY name COLLATE NOCASE",
+        (user_of(conn), *ids),
+    )
+    for r in rows:
+        out[r["food_id"]].append(r)
+    return out
+
+
+def get_portion(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Row:
+    """This user's portion of a food by name (any case, a leading "1 " ignored)."""
+    row = conn.execute(
+        "SELECT id, food_id, name, grams, estimated FROM portions"
+        " WHERE user_id = ? AND food_id = ? AND name = ?",
+        (user_of(conn), food_id, portion_name(name)),
+    ).fetchone()
+    if row is None:
+        known = ", ".join(repr(p["name"]) for p in portions_of(conn, [food_id])[food_id])
+        raise NotFound(
+            f"no portion named {name!r} for food {food_id} (portions: {known or 'none yet'})"
         )
+    return row
+
+
+def save_portion(
+    conn: sqlite3.Connection, food_id: int, name: str, grams: float, estimated: bool = False
+) -> tuple[sqlite3.Row, bool]:
+    """Create or replace this user's portion of a food. Returns (portion, replaced)."""
+    if not grams > 0:
+        raise ValueError("a portion weighs more than 0 g")
+    name = portion_name(name)
+    get_food(conn, food_id, live=True)
+    user_id = user_of(conn)
+    with transaction(conn):
+        existed = conn.execute(
+            "SELECT 1 FROM portions WHERE user_id = ? AND food_id = ? AND name = ?",
+            (user_id, food_id, name),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO portions (user_id, food_id, name, grams, estimated) VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(user_id, food_id, name) DO UPDATE SET name = excluded.name,"
+            " grams = excluded.grams, estimated = excluded.estimated,"
+            " updated_at = datetime('now')",
+            (user_id, food_id, name, grams, int(estimated)),
+        )
+    return get_portion(conn, food_id, name), existed is not None
+
+
+def delete_portion(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Row:
+    """Forget one of this user's portions. Returns it as it was."""
+    row = get_portion(conn, food_id, name)
+    with transaction(conn):
+        conn.execute("DELETE FROM portions WHERE id = ?", (row["id"],))
+    return row
+
+
+# --- Templates ------------------------------------------------------------------------------
 
 
 def save_template(
@@ -479,14 +546,6 @@ def templates_matching(conn: sqlite3.Connection, query: str) -> list[str]:
     ]
 
 
-def list_aliases(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT a.alias, a.default_grams, a.food_id, f.name, f.brand"
-        " FROM aliases a JOIN foods f ON f.id = a.food_id WHERE a.user_id = ? ORDER BY a.alias",
-        (user_of(conn),),
-    ).fetchall()
-
-
 def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sqlite3.Row]]]:
     """Every meal template with its items (food name, grams and per-100 g nutrients)."""
     templates = _templates(conn)
@@ -514,12 +573,13 @@ class EntryRow:
     brand: str | None
     grams: float
     nutrients: logic.Nutrients
+    estimated: bool = False  # grams estimated from a count, not weighed (#75)
 
 
 # Callers add "AND ..." conditions and pass the user id first
 ENTRY_NUTRIENTS = ", ".join(f"e.{k}" for k in logic.NUTRIENTS)
 ENTRY_SELECT = (
-    f"SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, {ENTRY_NUTRIENTS}"
+    f"SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.estimated, {ENTRY_NUTRIENTS}"
     " FROM entries e JOIN foods f ON f.id = e.food_id JOIN meals m ON m.id = e.meal_id"
     " WHERE m.user_id = ?"
 )
@@ -534,17 +594,22 @@ def _entry(row: sqlite3.Row) -> EntryRow:
         brand=row["brand"],
         grams=row["grams"],
         nutrients=nutrients_of(row),
+        estimated=bool(row["estimated"]),
     )
+
+
+# (food_id, grams) or (food_id, grams, estimated)
+Item = tuple[int, float] | tuple[int, float, bool]
 
 
 def log_meal(
     conn: sqlite3.Connection,
-    items: list[tuple[int, float]],
+    items: list[Item],
     eaten_at: str,
     label: str | None,
     note: str | None = None,
 ) -> int:
-    """Create a meal with one entry per (food_id, grams), snapshotting nutrients."""
+    """Create a meal with one entry per item, snapshotting nutrients."""
     with transaction(conn):
         meal_id = conn.execute(
             "INSERT INTO meals (user_id, eaten_at, label, note) VALUES (?, ?, ?, ?)",
@@ -554,22 +619,25 @@ def log_meal(
     return meal_id
 
 
-def add_to_meal(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, float]]) -> None:
+def add_to_meal(conn: sqlite3.Connection, meal_id: int, items: list[Item]) -> None:
     """Add entries to an existing meal, snapshotting nutrients."""
     get_meal(conn, meal_id)
     with transaction(conn):
         _insert_entries(conn, meal_id, items)
 
 
-def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[tuple[int, float]]) -> None:
+def _insert_entries(conn: sqlite3.Connection, meal_id: int, items: list[Item]) -> None:
     if not items:
         raise ValueError("a meal needs at least one item")
-    foods = get_foods(conn, (f for f, _ in items), live=True)
-    snaps = [(f, g, logic.snapshot(nutrients_of(foods[f]), g)) for f, g in items]
+    foods = get_foods(conn, (i[0] for i in items), live=True)
+    rows = []
+    for f, g, *estimated in items:
+        snap = logic.snapshot(nutrients_of(foods[f]), g)
+        rows.append((meal_id, f, g, int(any(estimated)), *(snap[k] for k in logic.NUTRIENTS)))
     conn.executemany(
-        f"INSERT INTO entries (meal_id, food_id, grams, {NUTRIENT_COLS})"
-        f" VALUES (?, ?, ?, {NUTRIENT_MARKS})",
-        [(meal_id, f, g, *(s[k] for k in logic.NUTRIENTS)) for f, g, s in snaps],
+        f"INSERT INTO entries (meal_id, food_id, grams, estimated, {NUTRIENT_COLS})"
+        f" VALUES (?, ?, ?, ?, {NUTRIENT_MARKS})",
+        rows,
     )
 
 
@@ -599,18 +667,31 @@ SNAPSHOT_SETS = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
 
 
 def update_entry(
-    conn: sqlite3.Connection, entry_id: int, grams: float | None, food_id: int | None
+    conn: sqlite3.Connection,
+    entry_id: int,
+    grams: float | None,
+    food_id: int | None,
+    estimated: bool = False,
 ) -> EntryRow:
-    """Change grams and/or food, re-snapshotting from the food's current per-100 g values."""
+    """Change grams and/or food, re-snapshotting from the food's current per-100 g values.
+    New grams are taken as exact unless `estimated`; a food swap alone keeps the flag."""
     current = get_entry(conn, entry_id)
     new_food = food_id if food_id is not None else current.food_id
     new_grams = grams if grams is not None else current.grams
+    new_estimated = estimated if grams is not None else current.estimated
     swapped = food_id is not None and food_id != current.food_id
     snap = logic.snapshot(nutrients_of(get_food(conn, new_food, live=swapped)), new_grams)
     with transaction(conn):
         conn.execute(
-            f"UPDATE entries SET food_id = ?, grams = ?, {SNAPSHOT_SETS} WHERE id = ?",
-            (new_food, new_grams, *(snap[k] for k in logic.NUTRIENTS), entry_id),
+            f"UPDATE entries SET food_id = ?, grams = ?, estimated = ?, {SNAPSHOT_SETS}"
+            " WHERE id = ?",
+            (
+                new_food,
+                new_grams,
+                int(new_estimated),
+                *(snap[k] for k in logic.NUTRIENTS),
+                entry_id,
+            ),
         )
     return get_entry(conn, entry_id)
 
@@ -753,7 +834,7 @@ def _write_targets(conn: sqlite3.Connection, values: Mapping[str, float | None])
 # The columns an undo restores, per table. Foods only ever change name from the dashboard.
 UNDO_COLUMNS = {
     "meals": ("id", "user_id", "eaten_at", "label", "note", "created_at"),
-    "entries": ("id", "meal_id", "food_id", "grams", *logic.NUTRIENTS, "created_at"),
+    "entries": ("id", "meal_id", "food_id", "grams", "estimated", *logic.NUTRIENTS, "created_at"),
     "foods": ("id", "name"),
 }
 UNDO_KEEP_S = 86400  # undo records older than a day are pruned

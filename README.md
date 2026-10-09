@@ -141,7 +141,7 @@ This enables OAuth authentication; ChatGPT voice-mode tool support is not verifi
 
 Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
 meals against your targets (the arrows, the row of days and the date box move between days),
-7/30/90-day history charts, and your saved meals, nicknames and foods. It works without
+7/30/90-day history charts, and your saved meals and foods. It works without
 Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
 set), tapping an item gives a grams slider, a move to another meal and delete, **Edit meal…**
 changes a meal's name, time or date or combines it with another, **Edit goals** sets your
@@ -183,7 +183,7 @@ and the connector would stop working.
 
 ### 8. Add another person
 
-Each person gets their own meal log, targets, nicknames and saved meals; the food list is
+Each person gets their own meal log, targets, portions and saved meals; the food list is
 shared. You are the owner (everything logged before this existed is yours) and keep signing
 in with `AUTH_PASSWORD`. Add someone else on the server, then type their password twice:
 
@@ -232,7 +232,7 @@ docker compose up -d
 ## Export
 
 CSV is one row per logged entry (for spreadsheets); JSON is everything (foods, meals and
-entries, aliases, templates, targets). `--start` and `--end` are inclusive local dates. An
+entries, portions, templates, targets). `--start` and `--end` are inclusive local dates. An
 export is the owner's log unless you add `--user NAME`.
 
 ```bash

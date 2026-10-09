@@ -57,7 +57,7 @@ def sign_in(http) -> None:
 
 @pytest.fixture
 def logged(conn):
-    """Breakfast an hour ago (today, local time), an alias, a template and a protein target."""
+    """Breakfast an hour ago (today, local time), a portion, a template and a protein target."""
     eggs = add_food(conn, "Egg, whole", *EGGS)
     whites = add_food(conn, "Egg white", *WHITES, brand="Kirkland", verified=1)
     when = logic.format_utc(datetime.now(UTC) - timedelta(hours=1))
@@ -66,7 +66,7 @@ def logged(conn):
     ):  # just after local midnight: keep the meal on today
         when = logic.format_utc(datetime.now(UTC))
     meal = store.log_meal(conn, [(eggs, 200), (whites, 300)], when, "breakfast")
-    store.save_alias(conn, "my whites", whites, 300)
+    store.save_portion(conn, whites, "my whites", 300)
     store.save_template(conn, "usual breakfast", [(eggs, 100)])
     store.set_targets(conn, {"protein_g": 180})
     entries = store.meal_entries(conn, meal)
@@ -356,7 +356,7 @@ def test_history_when_empty(http):
     assert "Nothing logged in this period" in http.get("/app/history").text
 
 
-def test_foods_aliases_and_templates(http, conn, logged):
+def test_foods_and_templates(http, conn, logged):
     add_food(conn, "Cached FDC hit", 100, 1, 1, 1, source="fdc")  # never used: hidden
     sign_in(http)
     r = http.get("/app/foods")
@@ -364,14 +364,13 @@ def test_foods_aliases_and_templates(http, conn, logged):
     assert "Egg white" in text and "Confirmed" in text
     assert "logged 1&times;" in text
     assert "Cached FDC hit" not in text
-    assert "“my whites”" in text and "300 g" in text
     assert "<strong>Usual breakfast</strong>" in text and "143 kcal" in text
     assert '<h2 class="section">Saved meals</h2>' in text
     assert text.count('class="swipe unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
     assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text
-    assert "Nicknames" in r.text and "Saved meals" not in r.text
+    assert "Nicknames" not in r.text and "Saved meals" not in r.text
     assert "Clear" in r.text
     r = http.get("/app/foods", params={"q": "breakfast"})
     assert "Saved meals" in r.text and "Usual breakfast" in r.text
