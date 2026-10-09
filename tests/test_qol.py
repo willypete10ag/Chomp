@@ -77,6 +77,25 @@ async def test_estimated_amounts_are_marked_until_weighed(server, conn, foods):
 
 
 @pytest.mark.anyio
+async def test_saved_meal_keeps_estimated_amounts(server, foods):
+    eggs, whites = foods
+    async with Client(server) as client:
+        await call(client, "save_portion", food_id=eggs, name="egg", grams=50, estimated=True)
+        saved = await call(
+            client,
+            "save_meal_template",
+            name="eggs and whites",
+            items=[
+                {"food_id": eggs, "portion": "egg", "count": 2},
+                {"food_id": whites, "grams": 100},
+            ],
+        )
+        assert [i["grams"] for i in saved["items"]] == [100, 100]
+        logged = await call(client, "log_meal_template", name="eggs and whites", eaten_at="now")
+    assert [e["estimated"] for e in logged["meal"]["entries"]] == [True, False]
+
+
+@pytest.mark.anyio
 async def test_log_items_need_grams_or_a_known_portion(server, foods):
     eggs, _ = foods
     async with Client(server) as client:

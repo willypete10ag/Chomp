@@ -26,6 +26,8 @@ INSERT INTO portions (user_id, food_id, name, grams)
 DROP TABLE aliases;
 
 ALTER TABLE entries ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0;
+-- A saved meal keeps an item's estimate, so logging it again marks that entry too
+ALTER TABLE meal_template_items ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0;
 
 -- Undo records hold whole entry rows; ones saved before this column existed would never
 -- match the current rows again, so they go (they only last a day anyway).

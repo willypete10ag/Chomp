@@ -1122,8 +1122,7 @@ def build_server(
         """
         name = name.strip()
         with tool_errors(), connect() as conn:
-            pairs = [(f, g) for f, g, _ in _amounts(conn, items)]
-            template_id, replaced = store.save_template(conn, name, pairs)
+            template_id, replaced = store.save_template(conn, name, _amounts(conn, items))
             row, rows = store.get_template(conn, name)
             return template_out(conn, template_id, row["name"], replaced, rows)
 
@@ -1152,7 +1151,7 @@ def build_server(
             when = logic.parse_eaten_at(eaten_at, tz)
             meal_id = store.log_meal(
                 conn,
-                [(i["food_id"], i["grams"]) for i in items],
+                [(i["food_id"], i["grams"], bool(i["estimated"])) for i in items],
                 when,
                 meal_label or template["name"],
             )

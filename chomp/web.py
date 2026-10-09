@@ -558,17 +558,21 @@ def amount_field(
     )
 
 
-def chips(options: list[tuple[str, float]]) -> str:
-    """Quick picks that fill in the grams box (script only)."""
+def chips(options: list[tuple[str, float] | tuple[str, float, bool]]) -> str:
+    """Quick picks that fill in the grams box (script only). A pick marked estimated (an
+    estimated portion, #75) logs its entry as estimated."""
     if not options:
         return ""
     seen, buttons = set(), []
-    for label, grams in options:
+    for label, grams, *estimated in options:
         value = num(grams, 1).replace(",", "")
         if value in seen:
             continue
         seen.add(value)
-        buttons.append(f'<button type="button" class="chip" data-set="{value}">{label}</button>')
+        flag = ' data-estimated="1"' if any(estimated) else ""
+        buttons.append(
+            f'<button type="button" class="chip" data-set="{value}"{flag}>{label}</button>'
+        )
     return f'<div class="chips js-only">{"".join(buttons)}</div>'
 
 
@@ -590,7 +594,7 @@ def grams_chips(food, portions=(), current: float | None = None) -> str:
     for p in portions:
         approx = "~" if p["estimated"] else ""
         label = f"1 {e(p['name'])} · {approx}{num(p['grams'], 1)}{NBSP}g"
-        options.append((label, p["grams"]))
+        options.append((label, p["grams"], bool(p["estimated"])))
     if food["serving_g"]:
         options.append((f"1 serving · {num(food['serving_g'], 1)}{NBSP}g", food["serving_g"]))
     if not current:
@@ -1213,6 +1217,7 @@ def pick_item(
     n = logic.round_for_display(per_100g)
     usual = row["portion_grams"] if "portion_grams" in keys else None
     grams = usual or row["serving_g"] or 100.0
+    estimated = bool(usual and row["portion_estimated"])
     meta = []
     if "portion" in keys and row["portion"]:
         meta.append(f"“{e(row['portion'])}”")
@@ -1235,6 +1240,7 @@ def pick_item(
         f'<form class="stack edit" method="post" action="{PREFIX}/log"'
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
         f'<input type="hidden" name="food_id" value="{row["id"]}">'
+        f'<input type="hidden" name="estimated" value="{int(estimated)}">'
         f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         f'<input type="hidden" name="q" value="{e(q)}">'
         + (f'<p class="muted small">{e(row["name"])}</p>' if len(row["name"]) > LONG_NAME else "")
@@ -2061,7 +2067,7 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            items = [(food["id"], grams)]
+            items = [(food["id"], grams, form.get("estimated") == "1")]
             if into is not None:
                 before = store.capture(conn, meals=[into])
                 store.add_to_meal(conn, into, items)
@@ -2104,7 +2110,7 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            items = [(r["food_id"], r["grams"]) for r in rows]
+            items = [(r["food_id"], r["grams"], bool(r["estimated"])) for r in rows]
             if into is not None:
                 before = store.capture(conn, meals=[into])
                 store.add_to_meal(conn, into, items)

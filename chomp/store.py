@@ -462,11 +462,9 @@ def delete_portion(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3
 # --- Templates ------------------------------------------------------------------------------
 
 
-def save_template(
-    conn: sqlite3.Connection, name: str, items: list[tuple[int, float]]
-) -> tuple[int, bool]:
+def save_template(conn: sqlite3.Connection, name: str, items: list[Item]) -> tuple[int, bool]:
     """Create or replace a meal template. Returns (template_id, replaced)."""
-    get_foods(conn, (f for f, _ in items), live=True)
+    get_foods(conn, (i[0] for i in items), live=True)
     user_id = user_of(conn)
     with transaction(conn):
         row = conn.execute(
@@ -481,8 +479,9 @@ def save_template(
                 "INSERT INTO meal_templates (user_id, name) VALUES (?, ?)", (user_id, name)
             ).lastrowid
         conn.executemany(
-            "INSERT INTO meal_template_items (template_id, food_id, grams) VALUES (?, ?, ?)",
-            [(template_id, f, g) for f, g in items],
+            "INSERT INTO meal_template_items (template_id, food_id, grams, estimated)"
+            " VALUES (?, ?, ?, ?)",
+            [(template_id, f, g, int(any(est))) for f, g, *est in items],
         )
     return template_id, row is not None
 
@@ -497,7 +496,8 @@ def get_template_by_id(
     if row is None:
         raise NotFound(f"no meal template with id {template_id}")
     items = conn.execute(
-        "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
+        "SELECT food_id, grams, estimated FROM meal_template_items WHERE template_id = ?"
+        " ORDER BY id",
         (template_id,),
     ).fetchall()
     return row, items
@@ -524,7 +524,8 @@ def get_template(conn: sqlite3.Connection, name: str) -> tuple[sqlite3.Row, list
         known = ", ".join(repr(n) for n in names) if names else "none saved yet"
         raise NotFound(f"no meal template named {name!r} (templates: {known})")
     items = conn.execute(
-        "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
+        "SELECT food_id, grams, estimated FROM meal_template_items WHERE template_id = ?"
+        " ORDER BY id",
         (row["id"],),
     ).fetchall()
     return row, items
@@ -553,8 +554,8 @@ def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sql
     out = []
     for t in templates:
         items = conn.execute(
-            f"SELECT i.grams, {cols} FROM meal_template_items i JOIN foods f ON f.id = i.food_id"
-            " WHERE i.template_id = ? ORDER BY i.id",
+            f"SELECT i.grams, i.estimated, {cols} FROM meal_template_items i"
+            " JOIN foods f ON f.id = i.food_id WHERE i.template_id = ? ORDER BY i.id",
             (t["id"],),
         ).fetchall()
         out.append((t, items))

@@ -556,7 +556,16 @@ def test_add_food_offers_portion_chips(http, conn, logged):
     sign_in(http)
     text = http.get("/app/add", params={"date": today(), "q": "egg"}).text.replace("\xa0", " ")
     assert 'data-set="50">1 egg · 50 g</button>' in text
-    assert 'data-set="30">1 handful · ~30 g</button>' in text
+    assert 'data-set="30" data-estimated="1">1 handful · ~30 g</button>' in text
+    # A search naming an estimated portion starts at it, marked estimated; so does its entry
+    text = http.get("/app/add", params={"date": today(), "q": "handful"}).text
+    assert 'name="estimated" value="1"' in text and 'value="30"' in text
+    r = http.post(
+        "/app/log",
+        data={"food_id": eggs, "grams": "30", "estimated": "1", "date": today(), "time": "09:00"},
+        headers=ORIGIN,
+    )
+    assert "~</span>30 g" in follow(http, r)
 
 
 # --- Guards ---------------------------------------------------------------------------------

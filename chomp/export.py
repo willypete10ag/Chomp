@@ -123,7 +123,8 @@ def to_json(
     ):
         items = _dicts(
             conn,
-            "SELECT food_id, grams FROM meal_template_items WHERE template_id = ? ORDER BY id",
+            "SELECT food_id, grams, estimated FROM meal_template_items WHERE template_id = ?"
+            " ORDER BY id",
             (t["id"],),
         )
         templates.append({"name": t["name"], "items": items})

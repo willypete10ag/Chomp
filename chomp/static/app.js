@@ -194,11 +194,15 @@
     var range = box.querySelector("input[type=range]");
     var field = box.querySelector("[data-amount]");
     if (!range || !field) return;
+    // Grams chosen by hand are exact; an estimated portion chip marks them again (#75)
+    var estimated = field.form && field.form.querySelector("input[name=estimated]");
     range.addEventListener("input", function () {
       field.value = range.value;
+      if (estimated) estimated.value = "0";
       changed(field.form);
     });
     field.addEventListener("input", function () {
+      if (estimated) estimated.value = "0";
       var n = parse(field.value);
       if (n !== null) {
         if (n > parse(range.max)) range.max = String(Math.ceil(n));
@@ -208,7 +212,7 @@
     });
   });
 
-  // Quick picks: "1 serving · 46 g", "Your usual · 300 g", "100 g"
+  // Quick picks: "1 serving · 46 g", "1 handful · ~30 g", "100 g"
   document.addEventListener("click", function (event) {
     var chip = event.target.closest("[data-set]");
     if (!chip) return;
@@ -216,6 +220,8 @@
     var field = box.querySelector("[data-amount]");
     field.value = chip.dataset.set;
     field.dispatchEvent(new Event("input"));
+    var estimated = field.form && field.form.querySelector("input[name=estimated]");
+    if (estimated && chip.dataset.estimated) estimated.value = "1";
   });
 
   // Time nudges on meal times: -15 min, +15 min, now
