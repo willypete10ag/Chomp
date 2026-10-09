@@ -509,6 +509,7 @@ def test_new_routes_need_sign_in_and_same_origin(http, conn, logged):
         (f"/app/meals/{meal}/delete", {}),
         ("/app/targets", {"kcal": "100"}),
         (f"/app/foods/{eggs}/rename", {"name": "x"}),
+        (f"/app/foods/{eggs}/confirm", {"confirmed": "1"}),
         ("/app/undo/1", {}),
     ]
     for path, data in posts:
@@ -521,6 +522,7 @@ def test_new_routes_need_sign_in_and_same_origin(http, conn, logged):
     for path, data in posts:
         assert http.post(path, data=data, headers=evil).status_code == 403, path
     assert meal_count(conn) == 1 and store.get_targets(conn)["kcal"] is None
+    assert not store.get_food(conn, eggs)["verified"]
 
 
 def test_script_is_served_and_versioned(http):

@@ -227,9 +227,12 @@ def confirm_food(
     food_id: int,
     corrections: logic.Nutrients,
     details: Mapping[str, str | float | None] | None = None,
+    *,
+    confirmed: bool = True,
 ) -> tuple[sqlite3.Row, list[str]]:
-    """Mark a food verified, applying per-100 g corrections for the keys given, and any
-    `details` (name, brand, serving_g, serving_desc) given.
+    """Mark a food verified (or, with confirmed=False, back to unconfirmed), applying
+    per-100 g corrections for the keys given, and any `details` (name, brand, serving_g,
+    serving_desc) given.
 
     Returns the updated row and the names of nutrients that changed. Past entries keep
     their snapshots.
@@ -243,8 +246,8 @@ def confirm_food(
     sets = ", ".join(f"{k} = ?" for k in (*logic.NUTRIENTS, *details))
     with transaction(conn):
         conn.execute(
-            f"UPDATE foods SET verified = 1, updated_at = datetime('now'), {sets} WHERE id = ?",
-            (*(merged[k] for k in logic.NUTRIENTS), *details.values(), food_id),
+            f"UPDATE foods SET verified = ?, updated_at = datetime('now'), {sets} WHERE id = ?",
+            (int(confirmed), *(merged[k] for k in logic.NUTRIENTS), *details.values(), food_id),
         )
     return get_food(conn, food_id), changed
 
@@ -349,6 +352,18 @@ def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") ->
         f" ORDER BY {order or MOST_USED} LIMIT ?",
         (user, user, limit),
     ).fetchall()
+
+
+def set_food_confirmed(conn: sqlite3.Connection, food_id: int, confirmed: bool) -> sqlite3.Row:
+    """Mark a food confirmed (the person vouches for its numbers) or back to unconfirmed,
+    leaving its values alone."""
+    get_food(conn, food_id, live=True)
+    with transaction(conn):
+        conn.execute(
+            "UPDATE foods SET verified = ?, updated_at = datetime('now') WHERE id = ?",
+            (int(confirmed), food_id),
+        )
+    return get_food(conn, food_id)
 
 
 def rename_food(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Row:

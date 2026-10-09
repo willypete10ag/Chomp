@@ -32,7 +32,8 @@ log = logging.getLogger("chomp")
 INSTRUCTIONS = """\
 Chomp is the user's meal log. Use its tools to look up foods, log what they ate, and review totals.
 Every calorie and macro number you show must come from a Chomp tool result. Never estimate or
-invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo.
+invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo,
+or, for a restaurant dish or home cooking, the nutrition numbers and serving weight (save_food).
 Typical flow: search_food for each item, pick the best match (prefer alias and saved matches),
 log_entries with food_ids, grams and the time they ate (ask if they haven't said; don't
 label meals breakfast/lunch/dinner unless they do), then show the user the per-item breakdown
@@ -812,9 +813,90 @@ def build_server(
             )
             return LabelResult(food=_food(row), barcode_moved_from_food_id=moved_from)
 
+    @server.tool(annotations=ADDS)
+    def save_food(
+        name: Annotated[
+            str, Field(min_length=1, description="What the food is, e.g. 'Chipotle chicken bowl'")
+        ],
+        serving_g: Annotated[
+            float,
+            Field(gt=0, description="Weight of one serving in grams, as published or weighed"),
+        ],
+        kcal: Annotated[NutrientArg, Field(description="Calories per serving")],
+        protein_g: Annotated[NutrientArg, Field(description="Protein per serving, g")],
+        carbs_g: Annotated[NutrientArg, Field(description="Total carbohydrate per serving, g")],
+        fat_g: Annotated[NutrientArg, Field(description="Total fat per serving, g")],
+        confirmed: Annotated[
+            bool,
+            Field(
+                description="True when the user approves these numbers as right; otherwise "
+                "the food is saved unconfirmed (amber on the dashboard)"
+            ),
+        ] = False,
+        fiber_g: Annotated[OptionalNutrientArg, Field(description="Dietary fiber, g")] = None,
+        sugar_g: Annotated[OptionalNutrientArg, Field(description="Total sugars, g")] = None,
+        sodium_mg: Annotated[OptionalNutrientArg, Field(description="Sodium, mg")] = None,
+        sat_fat_g: Annotated[OptionalNutrientArg, Field(description="Saturated fat, g")] = None,
+        trans_fat_g: Annotated[OptionalNutrientArg, Field(description="Trans fat, g")] = None,
+        cholesterol_mg: Annotated[OptionalNutrientArg, Field(description="Cholesterol, mg")] = None,
+        added_sugar_g: Annotated[OptionalNutrientArg, Field(description="Added sugars, g")] = None,
+        brand: Annotated[
+            str | None, Field(description="Restaurant or maker, if any (e.g. 'Chipotle')")
+        ] = None,
+        serving_desc: Annotated[
+            str | None, Field(description="The serving in words, e.g. '1 bowl' or '1 cup'")
+        ] = None,
+    ) -> Food:
+        """Save a food that has no package label or barcode: a restaurant dish from the
+        restaurant's published nutrition information, or a home-cooked dish or recipe from
+        numbers the user gives (for a whole recipe, its totals divided into servings by the
+        user, with the weight of one serving).
+
+        Use when search_food and lookup_barcode don't have the food. Every number must come
+        from the user or from nutrition information they point you to, never estimates; if
+        the serving weight in grams isn't published, ask the user for it. Pass confirmed=True
+        only when the user says the numbers are right. Returns the saved food with a food_id
+        ready for log_entries; to approve it later, use confirm_food.
+        """
+        with tool_errors(), connect() as conn:
+            if not name.strip():
+                raise ValueError("a food needs a name")
+            per_serving = {
+                "kcal": kcal,
+                "protein_g": protein_g,
+                "carbs_g": carbs_g,
+                "fat_g": fat_g,
+                "fiber_g": fiber_g,
+                "sugar_g": sugar_g,
+                "sodium_mg": sodium_mg,
+                "sat_fat_g": sat_fat_g,
+                "trans_fat_g": trans_fat_g,
+                "cholesterol_mg": cholesterol_mg,
+                "added_sugar_g": added_sugar_g,
+            }
+            row, _ = store.save_label_food(
+                conn,
+                name=name.strip(),
+                brand=(brand or "").strip() or None,
+                gtin=None,
+                per_100g=logic.per_serving_to_per_100g(per_serving, serving_g),
+                serving_g=serving_g,
+                serving_desc=(serving_desc or "").strip() or None,
+                source="manual",
+                verified=confirmed,
+            )
+            return _food(row)
+
     @server.tool(annotations=CHANGES)
     def confirm_food(
         food_id: Annotated[int, Field(description="The food to confirm")],
+        confirmed: Annotated[
+            bool,
+            Field(
+                description="False marks the food unconfirmed again (the user takes back "
+                "their approval)"
+            ),
+        ] = True,
         kcal: OptionalNutrientArg = None,
         protein_g: OptionalNutrientArg = None,
         carbs_g: OptionalNutrientArg = None,
@@ -840,14 +922,16 @@ def build_server(
             ),
         ] = None,
     ) -> ConfirmResult:
-        """Mark a food as verified after the user checks it against the package label,
-        optionally correcting nutrient values.
+        """Mark a food as confirmed (verified) once the user approves its numbers, optionally
+        correcting nutrient values.
 
-        Use when the user confirms an unverified food (usually from Open Food Facts) or
-        reports that a value is wrong, or to add vitamins and minerals from the label to a
-        food that lacks them (% DV figures need per_serving_g). Only pass nutrients that
-        need correcting or adding; the rest are kept. Corrections apply to future logs
-        only; past entries keep their values (use update_entry to re-snapshot one).
+        Use when the user approves or confirms a food, whatever it is: an Open Food Facts
+        hit checked against the package, a restaurant dish, a home-cooked food or anything
+        else they vouch for. Also use when they report that a value is wrong, or to add
+        vitamins and minerals from the label to a food that lacks them (% DV figures need
+        per_serving_g). Only pass nutrients that need correcting or adding; the rest are
+        kept. Corrections apply to future logs only; past entries keep their values (use
+        update_entry to re-snapshot one). To take back an approval, pass confirmed=False.
         Returns the food and which nutrients changed.
         """
         given = {
@@ -882,7 +966,7 @@ def build_server(
                 if not given:
                     raise ValueError("per_serving_g only applies when correcting values")
                 given = logic.partial_per_serving_to_per_100g(given, per_serving_g)
-            row, changed = store.confirm_food(conn, food_id, given)
+            row, changed = store.confirm_food(conn, food_id, given, confirmed=confirmed)
             return ConfirmResult(food=_food(row), changed=changed)
 
     @server.tool(annotations=CHANGES)

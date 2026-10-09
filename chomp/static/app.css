@@ -187,6 +187,9 @@ a.step:active { background: var(--track); }
 .entries details[open] > summary .name { color: var(--accent); }
 .edit, .more { padding-top: .5rem; }
 .more p { margin: .25rem 0; }
+.confirm-food { margin: .5rem 0; }
+.stack label.checkline { display: flex; flex-direction: row; align-items: center; gap: .6rem; color: inherit; }
+.stack .checkline input { width: 1.4rem; height: 1.4rem; min-height: 0; accent-color: var(--accent); }
 details form { margin: .4rem 0; }
 .confirm summary {
   color: var(--over); cursor: pointer; font-size: .85rem; padding: .5rem 0; display: inline-block;
