@@ -404,15 +404,17 @@ def test_undo_after_a_change_from_elsewhere_is_refused(http, conn, logged):
 # --- Goals and food names -------------------------------------------------------------------
 
 
-def test_goals_page_with_sliders_and_split(http, conn, logged):
+def test_goals_page_calorie_bar(http, conn, logged):
     sign_in(http)
     text = http.get("/app").text
     assert "Edit goals" in text
     text = http.get("/app/targets?back=/app").text.replace("\xa0", " ")
     assert "<h1>Daily goals</h1>" in text
-    assert text.count('type="range"') == 4
-    assert 'name="protein_g"' in text and 'value="180"' in text
-    assert 'class="split" hidden' in text  # carbs and fat have no goal yet
+    assert 'type="range"' not in text and text.count('data-handle="') == 2
+    # no calorie goal yet: 2,000 kcal, and protein 180 g alone isn't a split, so even thirds
+    assert 'autocomplete="off" required value="2000"' in text
+    assert 'name="protein_g" inputmode="decimal" autocomplete="off" required value="167"' in text
+    assert 'value="74"' in text and 'value="166"' in text
     r = http.post(
         "/app/targets",
         data={"kcal": "2200", "protein_g": "180", "carbs_g": "200", "fat_g": "70", "back": "/app"},
@@ -426,25 +428,45 @@ def test_goals_page_with_sliders_and_split(http, conn, logged):
         "carbs_g": 200,
         "fat_g": 70,
     }
+    # they add up to 2,150 kcal, 50 off: fitted to the calories, keeping each macro's share
     text = http.get("/app/targets").text.replace("\xa0", " ")
-    assert "<b data-macro-kcal>2,150</b>" in text and ">33%<" in text
-    # an empty box clears that goal; undo restores it
-    http.post("/app/targets", data={"kcal": "", "protein_g": "150"}, headers=ORIGIN)
+    assert "added up to 2,150 kcal" in text
+    assert 'value="184"' in text and 'value="204"' in text and 'value="72"' in text
+    # within 25 kcal: shown as saved
+    store.set_targets(conn, {"kcal": 2160})
+    text = http.get("/app/targets").text.replace("\xa0", " ")
+    assert 'value="180"' in text and "data-refit" not in text
+    assert "<b data-g>200</b> g · <span data-pct>37</span>%" in text
+
+
+def test_goals_need_every_number(http, conn, logged):
+    sign_in(http)
+    r = http.post("/app/targets", data={"kcal": "2000", "protein_g": "150"}, headers=ORIGIN)
+    assert r.status_code == 400 and "Carbs must be a number" in r.text
     assert store.get_targets(conn)["kcal"] is None
+
+
+@pytest.mark.parametrize("value", ["-1", "0", "abc", "inf", "99999", ""])
+def test_goals_reject_bad_values(http, conn, logged, value):
+    sign_in(http)
+    data = {"kcal": value, "protein_g": "180", "carbs_g": "200", "fat_g": "70"}
+    r = http.post("/app/targets", data=data, headers=ORIGIN)
+    assert r.status_code == 400 and 'role="alert"' in r.text
+    assert f'value="{value}"' in r.text  # typed values stay
+    assert store.get_targets(conn)["kcal"] is None
+
+
+def test_goals_undo(http, conn, logged):
+    sign_in(http)
+    store.set_targets(conn, {"kcal": 2200, "protein_g": 180, "carbs_g": 200, "fat_g": 70})
+    data = {"kcal": "1800", "protein_g": "150", "carbs_g": "150", "fat_g": "60"}
+    http.post("/app/targets", data=data, headers=ORIGIN)
+    assert store.get_targets(conn)["kcal"] == 1800
     page = http.get(
         "/app?done=" + str(conn.execute("SELECT max(id) FROM undo_actions").fetchone()[0])
     )
     follow(http, undo(http, page.text))
     assert store.get_targets(conn)["kcal"] == 2200
-
-
-@pytest.mark.parametrize("value", ["-1", "0", "abc", "inf", "99999"])
-def test_goals_reject_bad_values(http, conn, logged, value):
-    sign_in(http)
-    r = http.post("/app/targets", data={"kcal": value, "protein_g": "180"}, headers=ORIGIN)
-    assert r.status_code == 400 and 'role="alert"' in r.text
-    assert f'value="{value}"' in r.text  # typed values stay
-    assert store.get_targets(conn)["kcal"] is None
 
 
 def test_rename_food(http, conn, logged):

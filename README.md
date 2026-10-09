@@ -145,7 +145,7 @@ meals against your targets (the arrows, the row of days and the date box move be
 Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
 set), tapping an item gives a grams slider, a move to another meal and delete, **Edit meal…**
 changes a meal's name, time or date or combines it with another, **Edit goals** sets your
-daily targets, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
+daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
 five-wrong-passwords lockout applies.
 
 **Foods > Add a new food** adds a food three ways, all ending in the same form: scan its

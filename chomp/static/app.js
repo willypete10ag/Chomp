@@ -48,53 +48,145 @@
     }
   }
 
-  // Goals: what the protein, carbs and fat goals add up to, and each one's share
-  function goalsPreview(form) {
-    var hint = form.querySelector("[data-macro-kcal]");
-    if (!hint) return;
-    var parts = {};
-    var total = 0;
-    var complete = Object.keys(KCAL_PER_G).every(function (k) {
-      var v = parse((form.elements[k] || {}).value);
-      if (v === null || v <= 0) return false;
-      parts[k] = v * KCAL_PER_G[k];
-      total += parts[k];
-      return true;
+  // Goals: one calorie bar split into protein, carbs and fat. Dragging a border trades
+  // calories between the two slices beside it while the total stays the number typed above
+  // the bar; a new number starts the slices at even thirds. Grams move in 1 g steps and no
+  // slice gets under 5%. The math repeats logic.fit_macros; the server checks what's saved.
+  var MACRO_KEYS = ["protein_g", "carbs_g", "fat_g"];
+  var MIN_SHARE = 0.05;
+
+  function calorieBar(form) {
+    var bar = form.querySelector("[data-calbar]");
+    if (!bar) return;
+    var kcalField = form.elements.kcal;
+    var handles = bar.querySelectorAll("[data-handle]");
+    var grams = {};
+    MACRO_KEYS.forEach(function (k) {
+      grams[k] = parse(form.elements[k].value) || 0;
     });
-    var match = form.querySelector("[data-match]");
-    form.querySelector(".split").hidden = !complete || total <= 0;
-    if (match) match.hidden = !complete || total <= 0;
-    if (!complete || total <= 0) return;
-    hint.textContent = fmt(total, 0);
-    if (match) {
-      match.dataset.set = String(Math.round(total));
-      match.textContent = "Match protein, carbs and fat · " + fmt(total, 0) + " kcal";
+
+    function total() {
+      var n = parse(kcalField.value);
+      return n !== null && n > 0 ? n : null;
     }
-    var x = 0;
-    Object.keys(KCAL_PER_G).forEach(function (k) {
-      var share = (100 * parts[k]) / total;
-      var rect = form.querySelector('.split rect[data-k="' + k + '"]');
-      if (rect) {
-        rect.setAttribute("x", x.toFixed(1));
-        rect.setAttribute("width", share.toFixed(1));
+
+    function clamp(n, lo, hi) {
+      return Math.max(lo, Math.min(hi, n));
+    }
+
+    // Carbs take whatever protein and fat leave
+    function settle(kcal) {
+      var rest = kcal - grams.protein_g * 4 - grams.fat_g * 9;
+      grams.carbs_g = Math.max(Math.round(rest / 4), 0);
+    }
+
+    function thirds(kcal) {
+      grams.protein_g = Math.round(kcal / 3 / 4);
+      grams.fat_g = Math.round(kcal / 3 / 9);
+      settle(kcal);
+    }
+
+    // which 0 is the protein | carbs border (sets protein), 1 the carbs | fat one (sets fat)
+    function setBorder(which, g) {
+      var kcal = total();
+      if (!kcal) return;
+      var key = which === 0 ? "protein_g" : "fat_g";
+      var other = which === 0 ? "fat_g" : "protein_g";
+      var per = KCAL_PER_G[key];
+      var lo = Math.ceil((MIN_SHARE * kcal) / per);
+      var hi = Math.floor(((1 - MIN_SHARE) * kcal - grams[other] * KCAL_PER_G[other]) / per);
+      grams[key] = clamp(Math.round(g), lo, hi);
+      settle(kcal);
+      draw();
+    }
+
+    function draw() {
+      var parts = {};
+      var sum = 0;
+      MACRO_KEYS.forEach(function (k) {
+        parts[k] = grams[k] * KCAL_PER_G[k];
+        sum += parts[k];
+      });
+      if (sum <= 0) return;
+      var x = 0;
+      var out = false;
+      MACRO_KEYS.forEach(function (k, i) {
+        var share = parts[k] / sum;
+        var rect = bar.querySelector('rect[data-k="' + k + '"]');
+        rect.setAttribute("x", (100 * x).toFixed(2));
+        rect.setAttribute("width", (100 * share).toFixed(2));
+        var lab = bar.querySelector('[data-lab="' + k + '"]');
+        lab.style.left = 100 * x + "%";
+        lab.style.width = 100 * share + "%";
+        lab.querySelector("[data-g]").textContent = fmt(grams[k], 1);
+        lab.querySelector("[data-pct]").textContent = Math.round(100 * share);
+        lab.classList.remove("out");
+        if (lab.querySelector(".txt").offsetWidth > lab.clientWidth - 8) {
+          lab.classList.add("out");
+          out = true;
+        }
+        form.elements[k].value = String(grams[k]);
+        x += share;
+        if (i < 2) {
+          var h = handles[i];
+          h.style.left = 100 * x + "%";
+          var g = grams[i === 0 ? "protein_g" : "fat_g"];
+          h.setAttribute("aria-valuenow", String(g));
+          h.setAttribute("aria-valuetext", fmt(g, 1) + " grams of " + (i === 0 ? "protein" : "fat"));
+        }
+      });
+      bar.classList.toggle("has-out", out);
+    }
+
+    handles.forEach(function (h) {
+      var which = parseInt(h.dataset.handle, 10);
+      function follow(event) {
+        var kcal = total();
+        if (!kcal) return;
+        var r = bar.getBoundingClientRect();
+        var pos = clamp((event.clientX - r.left) / r.width, 0, 1);
+        setBorder(which, which === 0 ? (pos * kcal) / 4 : ((1 - pos) * kcal) / 9);
       }
-      var pct = form.querySelector('[data-pct="' + k + '"]');
-      if (pct) pct.textContent = Math.round(share) + "%";
-      x += share;
+      h.addEventListener("pointerdown", function (event) {
+        h.setPointerCapture(event.pointerId);
+        h.classList.add("drag");
+        event.preventDefault();
+      });
+      h.addEventListener("pointermove", function (event) {
+        if (h.hasPointerCapture(event.pointerId)) follow(event);
+      });
+      ["pointerup", "pointercancel"].forEach(function (type) {
+        h.addEventListener(type, function () {
+          h.classList.remove("drag");
+        });
+      });
+      // Arrow keys move the border 1 g at a time
+      h.addEventListener("keydown", function (event) {
+        var step = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        if (which === 0) setBorder(0, grams.protein_g + step);
+        else setBorder(1, grams.fat_g - step);
+      });
     });
-    var kcal = parse((form.elements.kcal || {}).value);
-    var diff = form.querySelector("[data-kcal-diff]");
-    if (diff) {
-      var gap = kcal ? Math.round(total - kcal) : 0;
-      diff.textContent = !kcal || Math.abs(gap) < 25 ? "" :
-        " (" + fmt(Math.abs(gap), 0) + (gap > 0 ? " over" : " under") + " your calorie goal)";
-    }
+
+    kcalField.addEventListener("input", function () {
+      var kcal = total();
+      if (!kcal) return;
+      thirds(kcal);
+      var note = form.querySelector("[data-refit]");
+      if (note) note.hidden = true;
+      draw();
+    });
+    window.addEventListener("resize", draw);
+    draw();
   }
+
+  document.querySelectorAll("form.goals").forEach(calorieBar);
 
   function changed(form) {
     if (!form) return;
     foodPreview(form);
-    goalsPreview(form);
   }
 
   // A slider and its number box move together
