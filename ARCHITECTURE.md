@@ -36,8 +36,9 @@ unconfirmed unless I approve the numbers; `confirm_food` approves it later.
 
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
-(any day via arrows, a seven-day strip or a date picker; calories logged and remaining, then
-protein/carbs/fat with bars where targets exist, plus fiber/sugar/sodium; meals led by their
+(any day via arrows, a seven-day strip or a date picker; calories remaining as the big number,
+amber up to 100 kcal over the goal and red past that, then protein/carbs/fat with bars; goals
+not set count as 2,000 kcal split in even thirds, for the connector's progress too; plus fiber/sugar/sodium; meals led by their
 time; tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
 nutrition facts, where tapping a nutrient lists the foods that gave the most; a food with no

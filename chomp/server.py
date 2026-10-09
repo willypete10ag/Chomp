@@ -312,7 +312,7 @@ def tool_errors() -> Iterator[None]:
 
 def _progress(totals: logic.Nutrients, targets: dict) -> dict[str, TargetProgress]:
     out = {}
-    for k, p in logic.progress(totals, targets).items():
+    for k, p in logic.progress(totals, logic.with_default_targets(targets)).items():
         places = logic.DISPLAY_PLACES[k]
         out[k] = TargetProgress(
             target=p["target"],
@@ -1135,7 +1135,8 @@ def build_server(
         ] = None,
     ) -> Targets:
         """Set or change the user's daily targets. Only the targets given change; use clear
-        to remove one.
+        to remove one. A target that isn't set counts as the default in progress: 2,000 kcal,
+        and a third of the calorie goal each for protein, carbs and fat.
 
         Use when the user states a goal ("my protein target is 180 g"). get_day,
         get_totals and log results then report progress against these. Returns all

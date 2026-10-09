@@ -239,7 +239,14 @@ async def test_log_correct_and_review_the_done_when_scenario(server, conn):
     assert len(day["meals"]) == 1
     assert day["totals"]["kcal"] == 471
     assert day["totals"]["protein_g"] == pytest.approx(27.7 + 32.7, abs=0.1)
-    assert day["progress"] == {}
+    # no goals set: progress is against the defaults, 2,000 kcal and even thirds
+    assert day["progress"]["kcal"]["target"] == 2000
+    assert {k: p["target"] for k, p in day["progress"].items()} == {
+        "kcal": 2000,
+        "protein_g": 167,
+        "carbs_g": 166,
+        "fat_g": 74,
+    }
 
 
 @pytest.mark.anyio
@@ -476,7 +483,9 @@ async def test_get_day_progress_against_targets(server, conn):
         "remaining": 117.0,
         "percent": 35.0,
     }
-    assert set(day["progress"]) == {"kcal", "protein_g"}
+    # carbs and fat aren't set, so they count as a third of the calorie goal
+    assert day["progress"]["carbs_g"]["target"] == 166
+    assert day["progress"]["fat_g"]["target"] == 74
 
 
 @pytest.mark.anyio

@@ -304,7 +304,7 @@ def test_entry_slider_preview_and_quick_picks(http, logged):
     assert 'data-set="100"' in item and 'data-set="400"' in item  # half and double
     # preview from the food's per-100 g values: 200 g eggs = 286 kcal; day 442 kcal
     assert '<span data-n="kcal">286</span>' in item
-    assert "Today after this: <span data-day>442 kcal</span>" in item
+    assert "Today after this: <span data-day>442 of 2,000 kcal</span>" in item
     assert "Move to another meal" in item  # a two-item meal can split
 
 

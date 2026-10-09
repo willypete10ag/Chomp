@@ -319,11 +319,13 @@ def top_list(top: list[tuple[str, bool, float]], key: str) -> str:
     return f'<ol class="top">{items}</ol>'
 
 
-def meter(percent: float | None, kind: str, *, warn_over: bool = False) -> str:
+def meter(percent: float | None, kind: str, *, warn_over: bool = False, tone: str = "") -> str:
     """A progress bar. Only warn_over bars turn red past 100% (going over a protein target
-    isn't a mistake)."""
+    isn't a mistake); tone ("caution" for amber) overrides that color."""
     width = 0.0 if percent is None else max(0.0, min(percent, 100.0))
     over = " over" if warn_over and percent is not None and percent > 100 else ""
+    if tone:
+        over = f" {tone}"
     return (
         f'<svg class="meter" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true">'
         f'<rect class="track" width="100" height="8"/>'
@@ -1340,7 +1342,7 @@ def add_routes(
         meals = [
             (m, store.meal_entries(conn, m["id"])) for m in store.meals_between(conn, start, end)
         ]
-        targets = store.get_targets(conn)
+        targets = logic.with_default_targets(store.get_targets(conn))
         totals = logic.sum_nutrients(x.nutrients for _, entries in meals for x in entries)
         ctx = DayContext(
             day=day,
@@ -1562,24 +1564,20 @@ def add_routes(
         summary = [
             f'<section class="card summary" aria-label="Totals for {e(day_title(day, now))}">'
         ]
-        kcal = progress.get("kcal")
+        kcal = progress["kcal"]
+        left = round(kcal["remaining"])
+        # Over the goal: amber up to 100 kcal over, red past that
+        tone = "" if left >= 0 else "over" if left < -100 else "caution"
+        cls = f"big kcal {tone}".rstrip()
         summary.append(
             f'<div class="row"><a class="hero" href="{breakdown_url(day)}">'
-            f'<span class="big kcal">{num(shown["kcal"])}</span> kcal logged'
+            f'<span class="{cls}">{num(abs(left))}</span>'
+            f" {'remaining' if left >= 0 else 'over'}"
             f' <span class="more-link small">Breakdown&nbsp;&rsaquo;</span></a>'
             f'<a class="small" href="{goals_url}">Edit goals</a></div>'
+            + meter(kcal["percent"], "kcal", tone=tone)
+            + f'<p class="muted small">Goal {num(kcal["target"])} kcal</p>'
         )
-        if kcal:
-            left = round(kcal["remaining"])
-            state = (
-                f"{num(left)} remaining"
-                if left >= 0
-                else f'<span class="warn">{num(-left)} over</span>'
-            )
-            summary.append(
-                meter(kcal["percent"], "kcal", warn_over=True)
-                + f'<p class="muted small">{state} · Goal {num(kcal["target"])}</p>'
-            )
         macros = []
         for key, cls, _ in MACROS:
             p = progress.get(key)
@@ -2628,7 +2626,7 @@ def add_routes(
         _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
             by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
-            targets = store.get_targets(conn)
+            targets = logic.with_default_targets(store.get_targets(conn))
         totals = logic.sum_nutrients(by_day.values())
         average = logic.round_for_display(logic.average(totals, len(by_day))) if by_day else None
 

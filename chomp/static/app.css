@@ -170,6 +170,7 @@ a.step:active { background: var(--track); }
 .fill.kcal { fill: var(--kcal); } .fill.protein_g { fill: var(--protein); }
 .fill.carbs_g { fill: var(--carbs); } .fill.fat_g { fill: var(--fat); }
 .fill.over { fill: var(--over); }
+.fill.caution { fill: var(--carbs); }
 
 /* Meals and lists */
 .mealhead { margin-bottom: .25rem; }
@@ -345,6 +346,8 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .big { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .big.kcal { color: var(--kcal); } .big.protein_g { color: var(--protein); }
 .big.carbs_g { color: var(--carbs); } .big.fat_g { color: var(--fat); }
+/* Calories remaining once past the goal: amber up to 100 kcal over, red beyond */
+.big.caution { color: var(--carbs-text); } .big.over { color: var(--over); }
 .chart { display: block; width: 100%; height: auto; }
 .chart .axis { stroke: var(--line); }
 .chart .bar.kcal { fill: var(--kcal); } .chart .bar.protein_g { fill: var(--protein); }
