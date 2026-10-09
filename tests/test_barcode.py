@@ -297,7 +297,17 @@ async def test_save_food_needs_the_serving_weight(server):
             "save_food",
             {"name": "Pad thai", "kcal": 900, "protein_g": 30, "carbs_g": 120, "fat_g": 30},
         )
-    assert bad.is_error
+        blank = await call_error(
+            client,
+            "save_food",
+            name="  ",
+            serving_g=300,
+            kcal=900,
+            protein_g=30,
+            carbs_g=120,
+            fat_g=30,
+        )
+    assert bad.is_error and "needs a name" in blank
 
 
 def test_off_parse_kj_only_and_missing_core():

@@ -859,6 +859,8 @@ def build_server(
         ready for log_entries; to approve it later, use confirm_food.
         """
         with tool_errors(), connect() as conn:
+            if not name.strip():
+                raise ValueError("a food needs a name")
             per_serving = {
                 "kcal": kcal,
                 "protein_g": protein_g,
