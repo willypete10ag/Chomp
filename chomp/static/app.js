@@ -26,13 +26,25 @@
     }
   }
 
+  // The grams a food form will log: its servings times the serving size when Servings is
+  // picked (#80), else its grams box
+  function amountGrams(form) {
+    var by = form.querySelector("input[name=by]:checked");
+    if (by && by.value === "servings") {
+      var box = form.querySelector("[data-servings]");
+      var n = parse(box.value);
+      return n !== null ? n * parse(box.closest("[data-serving]").dataset.serving) : null;
+    }
+    var field = form.querySelector("[data-amount]");
+    return field ? parse(field.value) : null;
+  }
+
   // Food previews: "= 214 kcal · P 18.9 C 1.1 F 14.3", and the day's calories after saving
   function foodPreview(form) {
     var per = json(form, "per100");
     var out = form.querySelector(".preview");
-    var field = form.querySelector("[data-amount]");
-    if (!per || !out || !field) return;
-    var grams = parse(field.value);
+    if (!per || !out || !form.querySelector("[data-amount]")) return;
+    var grams = amountGrams(form);
     var ok = grams !== null && grams > 0;
     Object.keys(PLACES).forEach(function (k) {
       var el = out.querySelector('[data-n="' + k + '"]');
@@ -208,17 +220,65 @@
         if (n > parse(range.max)) range.max = String(Math.ceil(n));
         range.value = String(n);
       }
+      syncServings(field.form, n);
       changed(field.form);
     });
+  });
+
+  // Servings (#80): the servings box and the grams box show the same amount, whichever is
+  // changed; the Servings / Grams toggle says which one gets logged
+  function countText(n) {
+    return String(Math.round(n * 100) / 100);
+  }
+  function syncServings(form, grams) {
+    var box = form && form.querySelector("[data-servings]");
+    if (!box || grams === null || grams <= 0) return;
+    box.value = countText(grams / parse(box.closest("[data-serving]").dataset.serving));
+  }
+  document.querySelectorAll("[data-servings]").forEach(function (box) {
+    var form = box.form;
+    var size = parse(box.closest("[data-serving]").dataset.serving);
+    var field = form.querySelector("[data-amount]");
+    var range = field.closest(".amount").querySelector("input[type=range]");
+    var estimated = form.querySelector("input[name=estimated]");
+    box.addEventListener("input", function () {
+      if (estimated) estimated.value = "0";
+      var n = parse(box.value);
+      if (n !== null && n > 0) {
+        var grams = Math.round(n * size * 10) / 10;
+        field.value = String(grams);
+        if (range) {
+          if (grams > parse(range.max)) range.max = String(Math.ceil(grams));
+          range.value = String(grams);
+        }
+      }
+      changed(form);
+    });
+    // − and + move to the next half serving down or up (1.76 goes to 1.5 or 2), not under ½
+    box.closest(".field").querySelectorAll("[data-step]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var n = parse(box.value) || 0;
+        var next = button.dataset.step === "1"
+          ? Math.floor(n * 2 + 1e-9) / 2 + 0.5
+          : Math.ceil(n * 2 - 1e-9) / 2 - 0.5;
+        box.value = countText(Math.max(next, 0.5));
+        box.dispatchEvent(new Event("input"));
+      });
+    });
+  });
+  document.addEventListener("change", function (event) {
+    if (event.target.name === "by") changed(event.target.form);
   });
 
   // Quick picks: "1 serving · 46 g", "1 handful · ~30 g", "100 g"
   document.addEventListener("click", function (event) {
     var chip = event.target.closest("[data-set]");
     if (!chip) return;
-    var box = chip.closest(".goal, form").querySelector(".amount");
-    var field = box.querySelector("[data-amount]");
+    var field = chip.closest(".goal, form").querySelector("[data-amount]");
     field.value = chip.dataset.set;
+    // Chips are weights, so a tap on one while Servings is picked switches to Grams
+    var grams = field.form && field.form.querySelector("input[name=by][value=grams]");
+    if (grams) grams.checked = true;
     field.dispatchEvent(new Event("input"));
     var estimated = field.form && field.form.querySelector("input[name=estimated]");
     if (estimated && chip.dataset.estimated) estimated.value = "1";

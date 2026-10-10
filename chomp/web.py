@@ -485,6 +485,17 @@ def parse_grams(value: str) -> float:
     return grams
 
 
+def parse_servings(value: str, serving_g: float) -> float:
+    """A number of servings (#80), as the grams it comes to."""
+    try:
+        servings = float(value)
+    except ValueError:
+        raise ValueError("Enter the servings as a number, like 2 or 1.5.") from None
+    if not math.isfinite(servings) or servings <= 0 or servings * serving_g > MAX_GRAMS:
+        raise ValueError(f"Servings must be more than 0 and at most {MAX_GRAMS:,} g in all.")
+    return servings * serving_g
+
+
 def int_param(value: str | None) -> int | None:
     try:
         return int(value) if value else None
@@ -558,6 +569,63 @@ def amount_field(
     )
 
 
+def whole_servings(grams: float, serving_g: float) -> float | None:
+    """Grams as a number of servings when that's a whole or half number (341.6 g of an
+    85.4 g serving is 4), else None."""
+    count = round(grams / serving_g * 2) / 2
+    return count if count >= 0.5 and abs(count * serving_g - grams) < 0.05 else None
+
+
+def count_text(count: float) -> str:
+    """A number of servings: up to 2 decimals, no trailing zeros (4, 1.5, 1.76)."""
+    return num(count, 2).rstrip("0").rstrip(".")
+
+
+def servings_text(count: float) -> str:
+    return f"{count_text(count)} serving" + ("" if count_text(count) == "1" else "s")
+
+
+def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = "") -> str:
+    """How much to log: the grams box, and for a food with a serving size a Servings / Grams
+    toggle (#80) with a minus / plus stepper in half servings. Servings is picked when the amount is
+    a whole or half number of servings. Both boxes are submitted and the toggle says which
+    counts; the script keeps them showing the same amount. by and typed put a rejected value
+    back the way it was typed."""
+    value = num(grams, 1).replace(",", "")
+    serving = food["serving_g"]
+    if not serving:
+        return amount_field("grams", typed if typed else value, label="Grams", unit="g", top=top)
+    count = whole_servings(grams, serving)
+    by = by if by in ("servings", "grams") else "servings" if count else "grams"
+    servings = count_text(count or grams / serving).replace(",", "")
+    if by == "servings" and typed:
+        servings = typed
+    elif typed:
+        value = typed
+
+    def option(name: str, label: str) -> str:
+        checked = " checked" if by == name else ""
+        return f'<label><input type="radio" name="by" value="{name}"{checked}>{label}</label>'
+
+    size = num(serving, 1).replace(",", "")
+    return (
+        '<div class="by" role="radiogroup" aria-label="Amount in">'
+        + option("servings", "Servings")
+        + option("grams", "Grams")
+        + "</div>"
+        f'<div class="amount servings" data-serving="{size}">'
+        '<span class="lead">Servings</span><span class="field">'
+        '<button type="button" class="stepper js-only" data-step="-1"'
+        ' aria-label="Half a serving less">&minus;</button>'
+        f'<input name="servings" data-servings inputmode="decimal" autocomplete="off"'
+        f' aria-label="Servings" value="{e(servings)}">'
+        '<button type="button" class="stepper js-only" data-step="1"'
+        ' aria-label="Half a serving more">+</button>'
+        f'<span class="unit">&times; {num(serving, 1)}{NBSP}g</span></span></div>'
+        + amount_field("grams", value, label="Grams", unit="g", top=top, required=False)
+    )
+
+
 def chips(options: list[tuple[str, float] | tuple[str, float, bool]]) -> str:
     """Quick picks that fill in the grams box (script only). A pick marked estimated (an
     estimated portion, #75) logs its entry as estimated."""
@@ -595,8 +663,6 @@ def grams_chips(food, portions=(), current: float | None = None) -> str:
         approx = "~" if p["estimated"] else ""
         label = f"1 {e(p['name'])} · {approx}{num(p['grams'], 1)}{NBSP}g"
         options.append((label, p["grams"], bool(p["estimated"])))
-    if food["serving_g"]:
-        options.append((f"1 serving · {num(food['serving_g'], 1)}{NBSP}g", food["serving_g"]))
     if not current:
         options.append((f"100{NBSP}g", 100))
     return chips(options)
@@ -682,10 +748,16 @@ def entry_item(
     n = logic.round_for_display(x.nutrients)
     brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
     kcal = "" if single else f'<span class="kcal">{num(n["kcal"])}{NBSP}<small>kcal</small></span>'
-    value, problem, is_open = num(x.grams, 1).replace(",", ""), "", ""
+    by, typed, problem, is_open = "", "", "", ""
     if error and error[0] == x.id:
-        value, is_open = error[1], " open"
-        problem = f'<p class="error" role="alert">{e(error[2])}</p>'
+        by, typed, is_open = error[1], error[2], " open"
+        try:
+            if by == "servings" and food["serving_g"]:
+                parse_servings(typed, food["serving_g"])
+            else:
+                parse_grams(typed)
+        except ValueError as err:
+            problem = f'<p class="error" role="alert">{e(str(err))}</p>'
     extras = " · ".join(filter(None, (extras_line(n), micros_line(n))))
     per_100g = store.nutrients_of(food)
     base = ctx.kcal - (x.nutrients["kcal"] or 0)
@@ -707,7 +779,7 @@ def entry_item(
         + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
         + f'<form class="stack" method="post" action="{PREFIX}/entries/{x.id}"'
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, base)}>'
-        + amount_field("grams", value, label="Grams", unit="g", top=slider_top(x.grams))
+        + amount_picker(food, x.grams, slider_top(x.grams), by=by, typed=typed)
         + grams_chips(food, current=x.grams)
         + preview(per_100g, x.grams, ctx, base)
         + '<button type="submit">Save</button></form>'
@@ -889,6 +961,7 @@ PROBLEMS = {
     "when": "Pick a date up to today and a time.",
     "gap": "That time doesn't exist on that day (the clocks changed). Pick another.",
     "grams": f"Grams must be a number more than 0 and at most {MAX_GRAMS:,}.",
+    "servings": f"Servings must be a number more than 0 and at most {MAX_GRAMS:,} g in all.",
     "gone": "That was changed or deleted in the meantime; this is the latest.",
     "undo": "Couldn't undo: those items changed since (maybe from Claude), so nothing changed.",
     "name": "A food needs a name.",
@@ -1244,13 +1317,7 @@ def pick_item(
         f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         f'<input type="hidden" name="q" value="{e(q)}">'
         + (f'<p class="muted small">{e(row["name"])}</p>' if len(row["name"]) > LONG_NAME else "")
-        + amount_field(
-            "grams",
-            num(grams, 1).replace(",", ""),
-            label="Grams",
-            unit="g",
-            top=slider_top(grams, row["serving_g"]),
-        )
+        + amount_picker(row, grams, slider_top(grams, row["serving_g"]))
         + grams_chips(row, portions)
         + preview(per_100g, grams, ctx, ctx.kcal)
         + where
@@ -1605,14 +1672,10 @@ def add_routes(
         progress = logic.progress(totals, logic.with_default_targets(targets))
         shown = logic.round_for_display(totals)
 
-        # After a rejected grams edit: the typed value back on its entry, with the reason
+        # After a rejected amount: the typed value back on its entry, which says what's wrong
         error: tuple[int, str, str] | None = None
         if (failed := int_param(params.get("error"))) is not None:
-            raw = params.get("grams", "")[:20]
-            try:
-                parse_grams(raw)
-            except ValueError as err:
-                error = (failed, raw, str(err))
+            error = (failed, params.get("by", ""), params.get("amount", "")[:20])
 
         prev_day, next_day = day - timedelta(days=1), day + timedelta(days=1)
         forward = (
@@ -2053,10 +2116,6 @@ def add_routes(
         except ValueError:
             day = today()
         retry = add_url(day, meal_id, q)
-        try:
-            grams = parse_grams(str(form.get("grams", "")).replace(",", "").strip())
-        except ValueError:
-            return go(with_params(retry, problem="grams"))
         # One transaction: an edit from elsewhere can't land between the change and its
         # undo record
         with connect(request) as conn, db.transaction(conn):
@@ -2067,7 +2126,18 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            items = [(food["id"], grams, form.get("estimated") == "1")]
+            by_servings = form.get("by") == "servings" and food["serving_g"]
+            try:
+                if by_servings:
+                    raw = str(form.get("servings", "")).replace(",", "").strip()
+                    grams = parse_servings(raw, food["serving_g"])
+                else:
+                    grams = parse_grams(str(form.get("grams", "")).replace(",", "").strip())
+            except ValueError:
+                return go(with_params(retry, problem="servings" if by_servings else "grams"))
+            # Servings are counted by hand, so they're exact even when a portion was usual
+            estimated = not by_servings and form.get("estimated") == "1"
+            items = [(food["id"], grams, estimated)]
             if into is not None:
                 before = store.capture(conn, meals=[into])
                 store.add_to_meal(conn, into, items)
@@ -2082,6 +2152,9 @@ def add_routes(
                 into = store.log_meal(conn, items, when, label)
                 created = [into]
             summary = f"Added {num(grams, 1)} g {food['name']}"
+            if by_servings:
+                count = grams / food["serving_g"]
+                summary = f"Added {servings_text(count)} of {food['name']} ({num(grams, 1)} g)"
             undo_id = store.record_undo(conn, summary, before, meals=created)
             meal = store.get_meal(conn, into)
         log.info("dashboard: logged food %d into meal %d", food["id"], into)
@@ -2136,7 +2209,6 @@ def add_routes(
         if (no := refused(request, "Edit entries")) is not None:
             return no
         form = await request.form()
-        raw = str(form.get("grams", "")).replace(",", "").strip()
         entry_id = request.path_params["entry_id"]
         anchor = f"entry-{entry_id}"
         # One transaction: an edit from elsewhere can't land between the change and its
@@ -2147,10 +2219,16 @@ def add_routes(
                 day = meal_day(store.get_meal(conn, entry.meal_id))
             except store.NotFound:
                 return message("Not found", "That entry no longer exists.", 404, signed_in=True)
+            food = store.get_food(conn, entry.food_id)
+            by = "servings" if form.get("by") == "servings" and food["serving_g"] else "grams"
+            raw = str(form.get(by, "")).replace(",", "").strip()
             try:
-                grams = parse_grams(raw)
+                if by == "servings":
+                    grams = parse_servings(raw, food["serving_g"])
+                else:
+                    grams = parse_grams(raw)
             except ValueError:
-                return back_to_day(day, anchor, error=entry_id, grams=raw[:20])
+                return back_to_day(day, anchor, error=entry_id, by=by, amount=raw[:20])
             before = store.capture(conn, entries=[entry_id])
             store.update_entry(conn, entry_id, grams, None)
             summary = f"Changed {entry.name} from {num(entry.grams, 1)} g to {num(grams, 1)} g"
