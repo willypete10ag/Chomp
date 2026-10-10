@@ -143,7 +143,7 @@ Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It sho
 meals against your targets (the arrows, the row of days and the date box move between days),
 7/30/90-day history charts, and your saved meals and foods. It works without
 Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
-set), tapping an item gives a grams slider, a move to another meal and delete, **Edit meal…**
+set), tapping an item gives a number of servings or a grams slider, a move to another meal and delete, **Edit meal…**
 changes a meal's name, time or date or combines it with another, **Edit goals** sets your
 daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
 five-wrong-passwords lockout applies.
