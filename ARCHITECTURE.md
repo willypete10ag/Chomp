@@ -27,9 +27,11 @@ Claude handles conversation, speech, and vision (reading barcodes and nutrition 
 3. Miss → Claude asks for a label photo, reads the panel, calls `save_food_from_label`. Cached forever after.
 
 ### Food with no label
-Restaurant dish or home cooking: Claude asks for the nutrition numbers (the restaurant's
-published info, or my own) and the serving weight in grams, then `save_food`. It is saved
-unconfirmed unless I approve the numbers; `confirm_food` approves it later.
+Restaurant dish: Claude looks up the restaurant's published nutrition (its own site or PDF
+first) or uses numbers I give, then `save_food`, never a generic USDA stand-in. Home
+cooking: Claude asks for my numbers. Either way it needs the serving weight in grams (asked
+for when not published). It is saved unconfirmed unless I approve the numbers;
+`confirm_food` approves it later.
 
 ### Review
 `get_day(date)` and `get_totals(start, end)` for daily/weekly summaries and protein-target checks.
@@ -98,7 +100,7 @@ local-only mode everything is the owner's.
 | `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
-| `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
+| `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
 | `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams or portion + count, estimated?}]`, `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
 | `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?`, `estimated?` (new grams count as exact unless set) |
 | `update_meal` | Move a meal to a different time, or change its label or note | `meal_id`, `eaten_at?`, `meal_label?`, `note?` |

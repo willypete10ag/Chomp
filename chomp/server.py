@@ -32,8 +32,9 @@ log = logging.getLogger("chomp")
 INSTRUCTIONS = """\
 Chomp is the user's meal log. Use its tools to look up foods, log what they ate, and review totals.
 Every calorie and macro number you show must come from a Chomp tool result. Never estimate or
-invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo,
-or, for a restaurant dish or home cooking, the nutrition numbers and serving weight (save_food).
+invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo.
+For a restaurant dish, look up the restaurant's published nutrition (or use numbers the user
+gives) and save it with save_food; for home cooking, ask for the numbers and serving weight.
 Typical flow: search_food for each item, pick the best match (prefer portion and saved
 matches), log_entries with food_ids, amounts and the time they ate (ask if they haven't said;
 don't label meals breakfast/lunch/dinner unless they do), then show the user the per-item
@@ -523,7 +524,8 @@ def build_server(
         saved matches; prefer generic FDC foods unless the user named a brand. If
         `templates` names a saved meal template, the user means that meal: log it with
         log_meal_template. Show the user which food you picked. If nothing fits, say so and
-        ask for a barcode or label photo rather than guessing.
+        ask for a barcode or label photo rather than guessing; for a restaurant dish, use
+        save_food with the restaurant's published nutrition instead of a generic FDC food.
         """
         notes: list[str] = []
         hits: list[SearchHit] = []
@@ -574,7 +576,8 @@ def build_server(
                 h.portions = [_portion(p) for p in portions[h.food_id]]
         if not hits and not templates:
             notes.append(
-                "No match. Try a simpler or more generic name, or ask for a barcode or label photo."
+                "No match. Try a simpler or more generic name, or ask for a barcode or label "
+                "photo. For a restaurant dish, save its published nutrition with save_food."
             )
         return SearchResult(query=query, templates=templates, results=hits, notes=notes)
 
@@ -836,7 +839,8 @@ def build_server(
         label values. If no barcode is known, ask the user for the digits under the barcode
         and pass them as upc so future scans find this food. Enter the per-serving numbers
         exactly as printed, including the fat breakdown, cholesterol, added sugars and sugar
-        alcohols when listed; Chomp converts them to per 100 g. Include every vitamin and
+        alcohols when listed; Chomp converts them to per 100 g. For a restaurant dish or
+        nutrition from a website, use save_food instead. Include every vitamin and
         mineral the label lists: as an amount when printed (e.g. "Vitamin D 2mcg 10%" is
         vitamin_d_mcg 2), otherwise as % DV. The food is saved as verified
         (it is the user's own label). Returns the saved food with a food_id
@@ -911,11 +915,16 @@ def build_server(
         numbers the user gives (for a whole recipe, its totals divided into servings by the
         user, with the weight of one serving).
 
-        Use when search_food and lookup_barcode don't have the food. Every number must come
-        from the user or from nutrition information they point you to, never estimates; if
-        the serving weight in grams isn't published, ask the user for it. Pass confirmed=True
-        only when the user says the numbers are right. Returns the saved food with a food_id
-        ready for log_entries; to approve it later, use confirm_food.
+        Use when search_food and lookup_barcode don't have the food. For a restaurant dish
+        you may look up its nutrition on the web yourself: prefer the restaurant's own
+        nutrition page or PDF, then a site that republishes it. Copy the published numbers
+        exactly, tell the user where they came from, and don't swap in a generic USDA food
+        for a specific restaurant item. Every number must be published or given by the
+        user, never estimated; if the serving weight in grams isn't published, ask the user
+        for it. Pass confirmed=True only when the user says the numbers are right; web
+        numbers stay unconfirmed (amber on the dashboard) until they approve them. Returns
+        the saved food with a food_id ready for log_entries; to approve it later, use
+        confirm_food.
         """
         with tool_errors(), connect() as conn:
             if not name.strip():
