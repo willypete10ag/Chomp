@@ -134,6 +134,7 @@ def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients)
         return row
     sets = ", ".join(f"{k} = ?" for k in missing)
     conn.execute(f"UPDATE foods SET {sets} WHERE id = ?", (*missing.values(), row["id"]))
+    resync_recipes_using(conn, row["id"])
     return get_food(conn, row["id"])
 
 
@@ -148,6 +149,7 @@ def delete_food(conn: sqlite3.Connection, food_id: int) -> tuple[sqlite3.Row, in
     released for a fresh scan. Everyone's portions of it go, and it leaves every saved
     meal (a meal left empty goes too). Returns the food and how many saved meals it left."""
     food = get_food(conn, food_id)
+    _not_a_recipe(conn, food_id)
     with transaction(conn):
         templates = [
             r[0]
@@ -238,6 +240,7 @@ def confirm_food(
     their snapshots.
     """
     details = dict(details or {})
+    _not_a_recipe(conn, food_id)
     if unknown := set(details) - set(FOOD_DETAILS):
         raise ValueError(f"unknown food details: {sorted(unknown)}")
     current = nutrients_of(get_food(conn, food_id))
@@ -249,7 +252,16 @@ def confirm_food(
             f"UPDATE foods SET verified = ?, updated_at = datetime('now'), {sets} WHERE id = ?",
             (int(confirmed), *(merged[k] for k in logic.NUTRIENTS), *details.values(), food_id),
         )
+        if changed:
+            resync_recipes_using(conn, food_id)
     return get_food(conn, food_id), changed
+
+
+def _not_a_recipe(conn: sqlite3.Connection, food_id: int) -> None:
+    """A recipe's food row follows its ingredients; it is changed through the recipe."""
+    row = conn.execute("SELECT name FROM recipes WHERE food_id = ?", (food_id,)).fetchone()
+    if row is not None:
+        raise ValueError(f"food {food_id} is the recipe {row['name']!r}; edit the recipe instead")
 
 
 _TOKEN = re.compile(r"\w+", re.UNICODE)
@@ -376,6 +388,7 @@ def rename_food(conn: sqlite3.Connection, food_id: int, name: str) -> sqlite3.Ro
     if not name:
         raise ValueError("a food needs a name")
     get_food(conn, food_id)
+    _not_a_recipe(conn, food_id)
     with transaction(conn):
         conn.execute(
             "UPDATE foods SET name = ?, updated_at = datetime('now') WHERE id = ?", (name, food_id)
@@ -560,6 +573,195 @@ def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sql
         ).fetchall()
         out.append((t, items))
     return out
+
+
+# --- Recipes (#82) -------------------------------------------------------------------------
+
+RECIPE_BRAND = "Recipe"
+
+
+@dataclass
+class Recipe:
+    id: int
+    name: str
+    servings: float
+    steps: list[str]
+    food_id: int | None
+    # food_id, name, brand, grams and the food's per-100 g nutrients, in recipe order
+    ingredients: list[sqlite3.Row]
+
+
+def save_recipe(
+    conn: sqlite3.Connection,
+    name: str,
+    servings: float,
+    ingredients: list[tuple[int, float]],
+    steps: str | list[str] | None = None,
+    *,
+    recipe_id: int | None = None,
+) -> tuple[Recipe, bool]:
+    """Create a recipe, or replace one: the recipe `recipe_id` (which may rename it), else
+    this user's recipe with the same name. Ingredients are (food_id, grams). Steps are a list
+    or text with one step per line. Returns the recipe and whether one was replaced.
+
+    The recipe's food row (what logging it uses) is created or updated to match."""
+    name = name.strip()
+    if not name:
+        raise ValueError("a recipe needs a name")
+    if not ingredients:
+        raise ValueError("a recipe needs at least one ingredient")
+    foods = get_foods(conn, (f for f, _ in ingredients))
+    logic.recipe_nutrition(
+        [(nutrients_of(foods[f]), g) for f, g in ingredients], servings
+    )  # validates grams and servings before anything is written
+    user_id = user_of(conn)
+    lines = steps if isinstance(steps, list) else (steps or "").splitlines()
+    text_steps = "\n".join(s.strip() for s in lines if s.strip()) or None
+    with transaction(conn):
+        if recipe_id is not None:
+            row = _recipe_row(conn, recipe_id)
+        else:
+            row = conn.execute(
+                "SELECT * FROM recipes WHERE user_id = ? AND name = ?", (user_id, name)
+            ).fetchone()
+        clash = conn.execute(
+            "SELECT id FROM recipes WHERE user_id = ? AND name = ? AND id != ?",
+            (user_id, name, row["id"] if row else 0),
+        ).fetchone()
+        if clash:
+            raise ValueError(f"you already have a recipe named {name!r}")
+        if row is not None and any(f == row["food_id"] for f, _ in ingredients):
+            raise ValueError("a recipe can't be an ingredient of itself")
+        if row is None:
+            rid = conn.execute(
+                "INSERT INTO recipes (user_id, name, servings, steps) VALUES (?, ?, ?, ?)",
+                (user_id, name, servings, text_steps),
+            ).lastrowid
+        else:
+            rid = row["id"]
+            conn.execute(
+                "UPDATE recipes SET name = ?, servings = ?, steps = ?,"
+                " updated_at = datetime('now') WHERE id = ?",
+                (name, servings, text_steps, rid),
+            )
+            conn.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (rid,))
+        conn.executemany(
+            "INSERT INTO recipe_ingredients (recipe_id, food_id, grams) VALUES (?, ?, ?)",
+            [(rid, f, g) for f, g in ingredients],
+        )
+        _sync_recipe_food(conn, rid)
+    return get_recipe_by_id(conn, rid), row is not None
+
+
+def _recipe_row(conn: sqlite3.Connection, recipe_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM recipes WHERE id = ? AND user_id = ?", (recipe_id, user_of(conn))
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"no recipe with id {recipe_id}")
+    return row
+
+
+def _sync_recipe_food(conn: sqlite3.Connection, recipe_id: int) -> None:
+    """Write a recipe's summed nutrition to its food row (one serving as the serving size),
+    creating the row the first time. Any user's recipe: foods are shared, so a change to an
+    ingredient updates every recipe that uses it. Past entries keep their snapshots."""
+    r = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    items = conn.execute(
+        f"SELECT i.grams, {', '.join('f.' + k for k in logic.NUTRIENTS)}"
+        " FROM recipe_ingredients i JOIN foods f ON f.id = i.food_id"
+        " WHERE i.recipe_id = ? ORDER BY i.id",
+        (recipe_id,),
+    ).fetchall()
+    n = logic.recipe_nutrition([(nutrients_of(i), i["grams"]) for i in items], r["servings"])
+    desc = f"1 serving (recipe makes {r['servings']:g})"
+    values = (
+        r["name"],
+        *(n["per_100g"][k] for k in logic.NUTRIENTS),
+        round(n["serving_g"], 1),
+        desc,
+    )
+    sets = ", ".join(f"{k} = ?" for k in logic.NUTRIENTS)
+    if r["food_id"] is not None:
+        conn.execute(
+            f"UPDATE foods SET name = ?, {sets}, serving_g = ?, serving_desc = ?, deleted = 0,"
+            " verified = 1, updated_at = datetime('now') WHERE id = ?",
+            (*values, r["food_id"]),
+        )
+        return
+    food_id = conn.execute(
+        f"INSERT INTO foods (name, {NUTRIENT_COLS}, serving_g, serving_desc, brand, source,"
+        f" verified, saved) VALUES (?, {NUTRIENT_MARKS}, ?, ?, ?, 'manual', 1, 1)",
+        (*values, RECIPE_BRAND),
+    ).lastrowid
+    conn.execute("UPDATE recipes SET food_id = ? WHERE id = ?", (food_id, recipe_id))
+
+
+def resync_recipes_using(conn: sqlite3.Connection, food_id: int) -> None:
+    """Recompute every recipe with this food as an ingredient (its values changed)."""
+    with transaction(conn):
+        for (rid,) in conn.execute(
+            "SELECT DISTINCT recipe_id FROM recipe_ingredients WHERE food_id = ?", (food_id,)
+        ).fetchall():
+            _sync_recipe_food(conn, rid)
+
+
+def _recipe(conn: sqlite3.Connection, row: sqlite3.Row) -> Recipe:
+    cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    items = conn.execute(
+        f"SELECT i.grams, {cols} FROM recipe_ingredients i JOIN foods f ON f.id = i.food_id"
+        " WHERE i.recipe_id = ? ORDER BY i.id",
+        (row["id"],),
+    ).fetchall()
+    return Recipe(
+        id=row["id"],
+        name=row["name"],
+        servings=row["servings"],
+        steps=(row["steps"] or "").splitlines(),
+        food_id=row["food_id"],
+        ingredients=items,
+    )
+
+
+def get_recipe_by_id(conn: sqlite3.Connection, recipe_id: int) -> Recipe:
+    return _recipe(conn, _recipe_row(conn, recipe_id))
+
+
+def get_recipe(conn: sqlite3.Connection, name: str) -> Recipe:
+    """A recipe by name (any case). If no name matches exactly, a single recipe whose name
+    contains the phrase or is contained in it ('my chili') is used."""
+    rows = conn.execute(
+        "SELECT * FROM recipes WHERE user_id = ? ORDER BY name", (user_of(conn),)
+    ).fetchall()
+    wanted = name.strip().lower()
+    row = next((r for r in rows if r["name"].lower() == wanted), None)
+    if row is None:
+        close = [r for r in rows if r["name"].lower() in wanted or wanted in r["name"].lower()]
+        if len(close) == 1:
+            row = close[0]
+    if row is None:
+        known = ", ".join(repr(r["name"]) for r in rows) if rows else "none saved yet"
+        raise NotFound(f"no recipe named {name!r} (recipes: {known})")
+    return _recipe(conn, row)
+
+
+def list_recipes(conn: sqlite3.Connection) -> list[Recipe]:
+    """This user's recipes by name, with ingredients."""
+    rows = conn.execute(
+        "SELECT * FROM recipes WHERE user_id = ? ORDER BY name", (user_of(conn),)
+    ).fetchall()
+    return [_recipe(conn, r) for r in rows]
+
+
+def delete_recipe(conn: sqlite3.Connection, recipe_id: int) -> Recipe:
+    """Delete one of this user's recipes. Its food row is deleted like any food (entries
+    that logged it keep their snapshots). Returns the recipe as it was."""
+    recipe = get_recipe_by_id(conn, recipe_id)
+    with transaction(conn):
+        conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        if recipe.food_id is not None:
+            delete_food(conn, recipe.food_id)
+    return recipe
 
 
 # --- Meals and entries ----------------------------------------------------------------------

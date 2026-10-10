@@ -34,7 +34,9 @@ Chomp is the user's meal log. Use its tools to look up foods, log what they ate,
 Every calorie and macro number you show must come from a Chomp tool result. Never estimate or
 invent nutrition values; if a food can't be found, say so and ask for a barcode or label photo.
 For a restaurant dish, look up the restaurant's published nutrition (or use numbers the user
-gives) and save it with save_food; for home cooking, ask for the numbers and serving weight.
+gives) and save it with save_food. For home cooking, check the user's recipes (get_recipe);
+a recipe is logged like a food by its food_id, one serving being its serving_g. Otherwise ask
+for the numbers and serving weight.
 Typical flow: search_food for each item, pick the best match (prefer portion and saved
 matches), log_entries with food_ids, amounts and the time they ate (ask if they haven't said;
 don't label meals breakfast/lunch/dinner unless they do), then show the user the per-item
@@ -280,6 +282,43 @@ class TemplateResult(BaseModel):
     replaced: bool
     items: list[TemplateItem]
     totals: Nutrients
+
+
+class RecipeIngredient(BaseModel):
+    food_id: int
+    name: str
+    brand: str | None
+    grams: float
+    nutrients: Nutrients
+
+
+class RecipeOut(BaseModel):
+    recipe_id: int
+    name: str
+    servings: float = Field(description="How many servings the recipe makes")
+    food_id: int = Field(
+        description="Log the recipe with log_entries using this food_id; grams = servings "
+        "eaten x serving_g"
+    )
+    serving_g: float = Field(description="Weight of one serving (raw ingredients / servings)")
+    per_serving: Nutrients
+    total: Nutrients = Field(description="The whole recipe")
+    ingredients: list[RecipeIngredient]
+    steps: list[str]
+
+
+class RecipeResult(BaseModel):
+    recipe: RecipeOut
+    replaced: bool = Field(description="True if an existing recipe was updated")
+
+
+class RecipeList(BaseModel):
+    recipes: list[RecipeOut]
+
+
+class RecipeIngredientIn(BaseModel):
+    food_id: int = Field(description="food_id from search_food (save missing foods first)")
+    grams: float = Field(gt=0, description="Grams of this ingredient in the whole recipe")
 
 
 class Targets(BaseModel):
@@ -1165,6 +1204,82 @@ def build_server(
                 meal_label or template["name"],
             )
             return LogResult(meal=meal_out(conn, meal_id), day=day_summary(conn, when))
+
+    def recipe_out(conn, recipe: store.Recipe) -> RecipeOut:
+        items = [(store.nutrients_of(i), i["grams"]) for i in recipe.ingredients]
+        n = logic.recipe_nutrition(items, recipe.servings)
+        return RecipeOut(
+            recipe_id=recipe.id,
+            name=recipe.name,
+            servings=recipe.servings,
+            food_id=recipe.food_id,
+            serving_g=round(n["serving_g"], 1),
+            per_serving=_nutrients(n["per_serving"]),
+            total=_nutrients(n["total"]),
+            ingredients=[
+                RecipeIngredient(
+                    food_id=i["id"],
+                    name=i["name"],
+                    brand=i["brand"],
+                    grams=i["grams"],
+                    nutrients=_nutrients(logic.snapshot(store.nutrients_of(i), i["grams"])),
+                )
+                for i in recipe.ingredients
+            ],
+            steps=recipe.steps,
+        )
+
+    @server.tool(annotations=CHANGES)
+    def save_recipe(
+        name: Annotated[str, Field(min_length=1, description="Recipe name, e.g. 'chili'")],
+        servings: Annotated[float, Field(gt=0, description="How many servings it makes")],
+        ingredients: Annotated[
+            list[RecipeIngredientIn], Field(min_length=1, description="Foods and grams")
+        ],
+        steps: Annotated[
+            list[str] | None, Field(description="Method, one string per step, in order")
+        ] = None,
+    ) -> RecipeResult:
+        """Save one of the user's homemade recipes ("save this as my chili recipe").
+
+        Find each ingredient with search_food first (save_food for ones Chomp lacks) and use
+        the grams the user gives for the whole recipe; ask how many servings it makes if they
+        haven't said. Saving an existing name replaces that recipe. Nutrition per serving is
+        calculated from the ingredients. Returns the recipe with its food_id for logging.
+        """
+        with tool_errors(), connect() as conn:
+            recipe, replaced = store.save_recipe(
+                conn, name, servings, [(i.food_id, i.grams) for i in ingredients], steps
+            )
+            return RecipeResult(recipe=recipe_out(conn, recipe), replaced=replaced)
+
+    @server.tool(annotations=READ_ONLY)
+    def get_recipe(
+        name: Annotated[
+            str | None, Field(description="Recipe name, any case. Omit to list every recipe.")
+        ] = None,
+    ) -> RecipeList:
+        """Look up the user's saved recipes ("what's in my chili?", "what recipes do I have?").
+
+        Returns each recipe's ingredients with grams, steps, servings, nutrition per serving
+        and for the whole recipe, and the food_id to log it with (log_entries, grams =
+        servings eaten x serving_g). If the name is unknown, the error lists saved recipes.
+        """
+        with tool_errors(), connect() as conn:
+            recipes = [store.get_recipe(conn, name)] if name else store.list_recipes(conn)
+            return RecipeList(recipes=[recipe_out(conn, r) for r in recipes])
+
+    @server.tool(annotations=CHANGES)
+    def delete_recipe(
+        recipe_id: Annotated[int, Field(description="recipe_id from get_recipe")],
+    ) -> RecipeResult:
+        """Delete one of the user's recipes, only when they ask to. Meals already logged
+        from it keep their numbers. Returns the deleted recipe."""
+        with tool_errors(), connect() as conn:
+            recipe = store.get_recipe_by_id(conn, recipe_id)
+            out = recipe_out(conn, recipe)
+            store.delete_recipe(conn, recipe_id)
+            return RecipeResult(recipe=out, replaced=False)
 
     @server.tool(annotations=READ_ONLY)
     def get_totals(
