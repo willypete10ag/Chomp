@@ -63,6 +63,10 @@ async def test_tool_list_and_descriptions(server):
         tools["search_food"].description
     )
     assert "estimate" in server.instructions.lower()
+    # restaurant nutrition from the web goes to save_food, not a refusal or a USDA stand-in (#78)
+    assert "save_food" in server.instructions
+    assert "web" in tools["save_food"].description
+    assert "save_food" in tools["save_food_from_label"].description
 
 
 @pytest.mark.anyio
