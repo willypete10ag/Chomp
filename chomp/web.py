@@ -607,7 +607,7 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
         checked = " checked" if by == name else ""
         return f'<label><input type="radio" name="by" value="{name}"{checked}>{label}</label>'
 
-    size = num(serving, 1).replace(",", "")
+    size = repr(float(serving))  # unrounded: the script's math must match the server's
     return (
         '<div class="by" role="radiogroup" aria-label="Amount in">'
         + option("servings", "Servings")

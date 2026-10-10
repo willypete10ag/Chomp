@@ -43,6 +43,14 @@ def test_add_food_starts_on_one_serving(http, conn, logged, pizza):
     assert 'value="servings" checked' in item and "data-servings" in item
     assert 'name="servings" data-servings' in item and 'value="1"' in item
     assert "1 serving ·" not in item  # the stepper covers it
+    assert 'data-serving="85.4"' in item
+
+
+def test_serving_size_is_not_rounded_for_the_script(conn, pizza):
+    conn.execute("UPDATE foods SET serving_g = 28.35 WHERE id = ?", (pizza,))
+    food = store.get_food(conn, pizza)
+    html = web.amount_picker(food, 56.7, 500)
+    assert 'data-serving="28.35"' in html and 'value="2"' in html
 
 
 def test_food_without_serving_size_shows_grams_only(http, conn, logged):

@@ -211,6 +211,7 @@
     range.addEventListener("input", function () {
       field.value = range.value;
       if (estimated) estimated.value = "0";
+      syncServings(field.form, parse(range.value));
       changed(field.form);
     });
     field.addEventListener("input", function () {
