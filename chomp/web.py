@@ -62,6 +62,7 @@ HISTORY_RANGES = (7, 30, 90)
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
+PORTION_NAME_MAX = 40
 ADD_LIMIT = 30  # foods listed on the Add food page
 USDA_LIMIT = 10
 UNDO_SHOW_S = 30 * 60  # how long a confirmation keeps its Undo button
@@ -474,10 +475,6 @@ def safe_next(value: str) -> str:
     return value
 
 
-def grams_note(grams: float | None) -> str:
-    return f" · {num(grams, 1)}{NBSP}g" if grams else ""
-
-
 def parse_grams(value: str) -> float:
     try:
         grams = float(value)
@@ -561,27 +558,43 @@ def amount_field(
     )
 
 
-def chips(options: list[tuple[str, float]]) -> str:
-    """Quick picks that fill in the grams box (script only)."""
+def chips(options: list[tuple[str, float] | tuple[str, float, bool]]) -> str:
+    """Quick picks that fill in the grams box (script only). A pick marked estimated (an
+    estimated portion, #75) logs its entry as estimated."""
     if not options:
         return ""
     seen, buttons = set(), []
-    for label, grams in options:
+    for label, grams, *estimated in options:
         value = num(grams, 1).replace(",", "")
         if value in seen:
             continue
         seen.add(value)
-        buttons.append(f'<button type="button" class="chip" data-set="{value}">{label}</button>')
+        flag = ' data-estimated="1"' if any(estimated) else ""
+        buttons.append(
+            f'<button type="button" class="chip" data-set="{value}"{flag}>{label}</button>'
+        )
     return f'<div class="chips js-only">{"".join(buttons)}</div>'
 
 
-def grams_chips(food, alias_grams: float | None = None, current: float | None = None) -> str:
+def grams_text(grams: float, estimated: bool) -> str:
+    """Grams as shown on an entry or portion; an estimated amount (#75) gets a muted "~"."""
+    if not estimated:
+        return f"{num(grams, 1)}{NBSP}g"
+    return (
+        f'<span class="approx" title="Estimated amount">~</span>{num(grams, 1)}{NBSP}g'
+        '<span class="sr"> (estimated)</span>'
+    )
+
+
+def grams_chips(food, portions=(), current: float | None = None) -> str:
     options = []
     if current:
         options += [(f"½ · {num(current / 2, 1)}{NBSP}g", current / 2)]
         options += [(f"2&times; · {num(current * 2, 1)}{NBSP}g", current * 2)]
-    if alias_grams:
-        options.append((f"Your usual · {num(alias_grams, 1)}{NBSP}g", alias_grams))
+    for p in portions:
+        approx = "~" if p["estimated"] else ""
+        label = f"1 {e(p['name'])} · {approx}{num(p['grams'], 1)}{NBSP}g"
+        options.append((label, p["grams"], bool(p["estimated"])))
     if food["serving_g"]:
         options.append((f"1 serving · {num(food['serving_g'], 1)}{NBSP}g", food["serving_g"]))
     if not current:
@@ -688,7 +701,7 @@ def entry_item(
         f'<li id="entry-{x.id}"><details{is_open}><summary>'
         f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
         f"{brand}</span>{kcal}</div>"
-        f'<div class="row small muted"><span>{num(x.grams, 1)}{NBSP}g</span>'
+        f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
         f"<span>{macros_line(n)}</span></div></summary>"
         f'<div class="edit">{problem}'
         + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
@@ -728,10 +741,65 @@ def fold(name: str, heading: str, body: str, note: str = "", *, opened: bool = T
     )
 
 
-def food_item(row, back: str, last_logged: str = "") -> str:
+def portion_item(food_id: int, p, back: str) -> str:
+    """One of the person's portions of a food (#75), in the food's details: swipe it left to
+    delete it, press and hold it to change its name or grams. Without the script a tap opens
+    it, Delete included."""
+    action = f"{PREFIX}/foods/{food_id}/portions"
+    hidden = (
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        f'<input type="hidden" name="old" value="{e(p["name"])}">'
+    )
+    delete = (
+        f'<form class="swipe-action js-only" method="post" action="{action}/delete">{hidden}'
+        f'<button type="submit" aria-label="Delete the {e(p["name"])} portion">Delete</button>'
+        "</form>"
+    )
+    hint = (
+        '<p class="small muted">Estimated, not weighed. Saving a weight here makes it exact.</p>'
+        if p["estimated"]
+        else ""
+    )
+    return (
+        f'<li class="swipe">{delete}<div class="swipe-body" data-swipe><details><summary>'
+        f'<div class="row"><span class="name">{e(p["name"])}</span>'
+        f'<span class="muted">{grams_text(p["grams"], p["estimated"])}</span></div></summary>'
+        f'<form class="stack" method="post" action="{action}">{hidden}{hint}'
+        f'<label>Name<input name="name" value="{e(p["name"])}" required'
+        f' maxlength="{PORTION_NAME_MAX}"></label>'
+        f'<label>Grams in one<input name="grams" type="number" inputmode="decimal"'
+        f' step="any" min="0.1" max="{MAX_GRAMS}" value="{num(p["grams"], 1).replace(",", "")}"'
+        " required></label>"
+        '<button type="submit">Save portion</button></form>'
+        f'<form class="no-js" method="post" action="{action}/delete">{hidden}'
+        f'<button class="danger" type="submit">Delete {e(p["name"])}</button></form>'
+        "</details></div></li>"
+    )
+
+
+def portions_block(row, portions, back: str) -> str:
+    """The person's portions of a food, and a form to add one."""
+    lis = "".join(portion_item(row["id"], p, back) for p in portions)
+    listed = f'<ul class="entries portions">{lis}</ul>' if lis else ""
+    none = "" if lis else '<p class="muted">None yet. Claude learns them as you log.</p>'
+    return (
+        f'<div class="portions-block"><p><b>Your portions</b></p>{listed}{none}'
+        '<details class="sub add-portion"><summary>+ Add portion</summary>'
+        f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/portions">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        f'<label>Name<input name="name" placeholder="handful, slice, scoop" required'
+        f' maxlength="{PORTION_NAME_MAX}"></label>'
+        f'<label>Grams in one<input name="grams" type="number" inputmode="decimal"'
+        f' step="any" min="0.1" max="{MAX_GRAMS}" required></label>'
+        '<button type="submit">Add portion</button></form></details></div>'
+    )
+
+
+def food_item(row, back: str, last_logged: str = "", portions=(), *, opened: bool = False) -> str:
     """A saved food: name (two lines at most), kcal and macros per 100 g. With the script,
     press and hold it for details and to rename it, swipe it left to delete it; without it,
-    a tap opens the details, Delete… included. `last_logged` says when it was last logged."""
+    a tap opens the details, Delete… included. `last_logged` says when it was last logged.
+    The details list the person's `portions`; `opened` shows them open (after an edit)."""
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
     meta = []
@@ -753,6 +821,7 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         more.append(
             f"<p><b>Per serving</b> ({e(desc)}): {num(s['kcal'])} kcal · {macros_line(s)}</p>"
         )
+    more.append(portions_block(row, portions, back))
     if extras := " · ".join(filter(None, (extras_line(n), micros_line(n)))):
         more.append(f"<p><b>Per 100 g:</b> {extras}</p>")
     checked = "Confirmed" if row["verified"] else "Not confirmed yet"
@@ -770,7 +839,7 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         + "</form>"
     )
     more.append(
-        '<details class="sub"><summary>Rename…</summary>'
+        '<details class="sub rename"><summary>Rename…</summary>'
         f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/rename">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         f'<label>Name shown in Chomp<input name="name" value="{e(row["name"])}" required'
@@ -780,7 +849,7 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/delete">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
-        " numbers; nicknames for it go, and it leaves any saved meal.</p>"
+        " numbers; portions of it go, and it leaves any saved meal.</p>"
         f'<button class="danger" type="submit">Yes, delete {e(row["name"])}</button>'
         "</form></details>"
     )
@@ -792,8 +861,9 @@ def food_item(row, back: str, last_logged: str = "") -> str:
         "</form>"
     )
     return (
-        f'<li class="swipe{"" if row["verified"] else " unconfirmed"}">{swipe}'
-        '<div class="swipe-body" data-swipe><details><summary>'
+        f'<li id="food-{row["id"]}" class="swipe{"" if row["verified"] else " unconfirmed"}">'
+        f'{swipe}<div class="swipe-body" data-swipe><details{" open" if opened else ""}>'
+        "<summary>"
         f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
         f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
         f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
@@ -808,7 +878,7 @@ def with_params(url: str, anchor: str = "", **params: str | int) -> str:
     query = [
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in ("done", "undone", "problem", "checked", "ok")
+        if k not in ("done", "undone", "problem", "checked", "ok", "open", "portion")
     ]
     query += [(k, str(v)) for k, v in params.items()]
     return parts.path + (f"?{urlencode(query)}" if query else "") + (f"#{anchor}" if anchor else "")
@@ -822,6 +892,7 @@ PROBLEMS = {
     "gone": "That was changed or deleted in the meantime; this is the latest.",
     "undo": "Couldn't undo: those items changed since (maybe from Claude), so nothing changed.",
     "name": "A food needs a name.",
+    "portion": f"A portion needs a name and grams more than 0 and at most {MAX_GRAMS:,}.",
 }
 
 # --- New food (#59): barcode scan, label photo, or typed in; all fill the same form ----------
@@ -1136,17 +1207,20 @@ def goals_form(values: dict[str, str], back: str, error: str = "") -> str:
     )
 
 
-def pick_item(row, ctx: DayContext, meal_id: int | None, q: str, default_time: str) -> str:
+def pick_item(
+    row, ctx: DayContext, meal_id: int | None, q: str, default_time: str, portions=()
+) -> str:
     """A food on the Add food page: tap it for a grams slider, a live preview and where to
     log it."""
     keys = row.keys()
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
-    usual = row["default_grams"] if "default_grams" in keys else None
+    usual = row["portion_grams"] if "portion_grams" in keys else None
     grams = usual or row["serving_g"] or 100.0
+    estimated = bool(usual and row["portion_estimated"])
     meta = []
-    if "alias" in keys and row["alias"]:
-        meta.append(f"“{e(row['alias'])}”")
+    if "portion" in keys and row["portion"]:
+        meta.append(f"“{e(row['portion'])}”")
     if row["brand"]:
         meta.append(e(row["brand"]))
     if not row["verified"]:
@@ -1166,6 +1240,7 @@ def pick_item(row, ctx: DayContext, meal_id: int | None, q: str, default_time: s
         f'<form class="stack edit" method="post" action="{PREFIX}/log"'
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
         f'<input type="hidden" name="food_id" value="{row["id"]}">'
+        f'<input type="hidden" name="estimated" value="{int(estimated)}">'
         f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         f'<input type="hidden" name="q" value="{e(q)}">'
         + (f'<p class="muted small">{e(row["name"])}</p>' if len(row["name"]) > LONG_NAME else "")
@@ -1176,7 +1251,7 @@ def pick_item(row, ctx: DayContext, meal_id: int | None, q: str, default_time: s
             unit="g",
             top=slider_top(grams, row["serving_g"]),
         )
-        + grams_chips(row, usual)
+        + grams_chips(row, portions)
         + preview(per_100g, grams, ctx, ctx.kcal)
         + where
         + '<button type="submit">Add to log</button></form></details></li>'
@@ -1853,15 +1928,16 @@ def add_routes(
             if meal is None:  # gone, or on another day: log a new meal instead
                 meal_id = None
             if q:
-                aliases = store.search_aliases(conn, q, ADD_LIMIT)
+                portioned = store.search_portions(conn, q, ADD_LIMIT)
                 rows = store.search_foods(conn, q, ADD_LIMIT)
                 names = set(store.templates_matching(conn, q))
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
-                aliases = []
+                portioned = []
                 rows = store.list_used_foods(conn, ADD_LIMIT)
                 templates = store.list_templates(conn)
-            seen = {r["id"] for r in rows} | {a["id"] for a in aliases}
+            seen = {r["id"] for r in rows} | {a["id"] for a in portioned}
+            portions = store.portions_of(conn, seen)
             if want_usda:
                 try:
                     records = await fdc.search_ranked(q, USDA_LIMIT)
@@ -1897,7 +1973,7 @@ def add_routes(
             banner,
             f'<form class="search" method="get" action="{PREFIX}/add">{hidden}'
             f'<input type="search" name="q" value="{e(q)}" placeholder="Search your foods"'
-            ' aria-label="Search foods, nicknames and saved meals">'
+            ' aria-label="Search foods and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
         ]
         if templates:
@@ -1908,11 +1984,11 @@ def add_routes(
                 '<section class="card"><h2 class="section">Saved meals</h2>'
                 f'<ul class="entries">{lis}</ul></section>'
             )
-        picks = [pick_item(a, ctx, meal_id, q, default_time) for a in aliases]
+        picks = [pick_item(a, ctx, meal_id, q, default_time, portions[a["id"]]) for a in portioned]
         picks += [
-            pick_item(r, ctx, meal_id, q, default_time)
+            pick_item(r, ctx, meal_id, q, default_time, portions[r["id"]])
             for r in rows
-            if r["id"] not in {a["id"] for a in aliases}
+            if r["id"] not in {a["id"] for a in portioned}
         ]
         if picks:
             heading = "Your matches" if q else "Your foods"
@@ -1991,7 +2067,7 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            items = [(food["id"], grams)]
+            items = [(food["id"], grams, form.get("estimated") == "1")]
             if into is not None:
                 before = store.capture(conn, meals=[into])
                 store.add_to_meal(conn, into, items)
@@ -2034,7 +2110,7 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            items = [(r["food_id"], r["grams"]) for r in rows]
+            items = [(r["food_id"], r["grams"], bool(r["estimated"])) for r in rows]
             if into is not None:
                 before = store.capture(conn, meals=[into])
                 store.add_to_meal(conn, into, items)
@@ -2608,6 +2684,51 @@ def add_routes(
         log.info("dashboard: deleted food %d", food_id)
         return go(with_params(back, removed=food["name"][:FOOD_NAME_MAX], meals=meals))
 
+    # --- Portions (#75) ---
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/portions", methods=["POST"])
+    async def save_portion(request: Request) -> Response:
+        """Add a portion, or change one (`old` names it) from the food's details. A weight
+        typed here is exact, so it clears an estimate."""
+        if (no := refused(request, "Change portions")) is not None:
+            return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", f"{PREFIX}/foods")))
+        food_id = request.path_params["food_id"]
+        old = str(form.get("old", ""))
+        name = " ".join(str(form.get("name", "")).split())[:PORTION_NAME_MAX]
+        try:
+            grams = parse_grams(str(form.get("grams", "")))
+            name = store.portion_name(name)
+        except ValueError:
+            return go(with_params(back, f"food-{food_id}", problem="portion", open=food_id))
+        with connect(request) as conn, db.transaction(conn):
+            try:
+                if old and store.portion_name(old).lower() != name.lower():
+                    store.delete_portion(conn, food_id, old)
+                row, _ = store.save_portion(conn, food_id, name, grams)
+            except (store.NotFound, ValueError):
+                return message("Not found", "That food or portion is gone.", 404, signed_in=True)
+        log.info("dashboard: saved a portion of food %d", food_id)
+        said = f"Saved 1 {row['name']} = {num(row['grams'], 1)} g."
+        return go(with_params(back, f"food-{food_id}", open=food_id, portion=said))
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/portions/delete", methods=["POST"])
+    async def delete_portion(request: Request) -> Response:
+        if (no := refused(request, "Change portions")) is not None:
+            return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", f"{PREFIX}/foods")))
+        food_id = request.path_params["food_id"]
+        with connect(request) as conn:
+            try:
+                row = store.delete_portion(conn, food_id, str(form.get("old", "")))
+            except (store.NotFound, ValueError):
+                return message("Not found", "That portion is already gone.", 404, signed_in=True)
+        log.info("dashboard: deleted a portion of food %d", food_id)
+        said = f"Deleted the {row['name']} portion."
+        return go(with_params(back, f"food-{food_id}", open=food_id, portion=said))
+
     # --- History ---
 
     @server.custom_route(f"{PREFIX}/history", methods=["GET"])
@@ -2687,7 +2808,7 @@ def add_routes(
             user=account(request),
         )
 
-    # --- Foods, nicknames and templates ---
+    # --- Foods and templates ---
 
     def added_notice(conn, food_id: int) -> str:
         """The banner after New food saves one, with a link to log it."""
@@ -2725,16 +2846,18 @@ def add_routes(
             meals = int_param(request.query_params.get("meals")) or 0
             left = f" It left {meals} saved meal{'s' if meals != 1 else ''}." if meals else ""
             banner += toast(f"<span>Deleted {e(removed)}.{e(left)}</span>", "status")
+        if said := request.query_params.get("portion", "")[: PORTION_NAME_MAX + 40]:
+            banner += toast(f"<span>{e(said)}</span>", "status")
+        opened = int_param(request.query_params.get("open"))
         with connect(request) as conn:
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT, view)
-                nicknames = store.search_aliases(conn, q, FOODS_LIMIT) if everything else []
                 names = set(store.templates_matching(conn, q)) if everything else set()
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, view)
-                nicknames = store.list_aliases(conn) if everything else []
                 templates = store.list_templates(conn) if everything else []
+            portions = store.portions_of(conn, (r["id"] for r in rows))
 
         def view_url(v: str) -> str:
             params = {k: val for k, val in (("q", q), ("view", v)) if val and val != "most"}
@@ -2750,16 +2873,16 @@ def add_routes(
             "<h1>Foods</h1>",
             banner,
             f'<form class="search" method="get" action="{PREFIX}/foods">{keep_view}'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods, nicknames, meals"'
-            ' aria-label="Search foods, nicknames and saved meals">'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods and meals"'
+            ' aria-label="Search foods and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
             f'<nav class="segment filters" aria-label="Show">{chips}</nav>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
-        if q and not (rows or nicknames or templates):
+        if q and not (rows or templates):
             parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')
 
-        # Reusable meals and nicknames first, so they're reachable without scrolling every food
+        # Reusable meals first, so they're reachable without scrolling every food
         if templates:
             cards = []
             for t, t_items in templates:
@@ -2778,13 +2901,6 @@ def add_routes(
                     f"{macros_line(t_totals)}</div></div>"
                 )
             parts.append(fold("meals", "Saved meals", "".join(cards)))
-        if nicknames:
-            lis = "".join(
-                f'<li class="row"><span>“{e(a["alias"])}”</span><span class="muted name">'
-                f"{e(a['name'])}{grams_note(a['default_grams'])}</span></li>"
-                for a in nicknames
-            )
-            parts.append(fold("nicknames", "Nicknames", f'<ul class="plain">{lis}</ul>'))
         if rows:
             heading = "Foods" if q or not everything else "Your foods"
             note = f"{FOOD_VIEWS[view][1]}, " if not q or not everything else ""
@@ -2796,7 +2912,10 @@ def add_routes(
                 title = day_title(logic.local_date(row["last_used"], tz), day)
                 return title.lower() if title in ("Today", "Yesterday") else title
 
-            items = "".join(food_item(r, back, last(r)) for r in rows)
+            items = "".join(
+                food_item(r, back, last(r), portions[r["id"]], opened=r["id"] == opened)
+                for r in rows
+            )
             hint = (
                 '<p class="small muted js-only hint">Press and hold a food to see, confirm or'
                 " rename it. Swipe it left to delete it.</p>"

@@ -1,4 +1,4 @@
-"""M4 quality-of-life tools: aliases, meal templates, totals over a range, targets."""
+"""M4 quality-of-life tools: portions (#75), meal templates, totals over a range, targets."""
 
 from __future__ import annotations
 
@@ -20,27 +20,99 @@ def foods(conn):
 
 
 @pytest.mark.anyio
-async def test_alias_is_found_first_with_default_grams(server, foods, upstream):
+async def test_portion_is_learned_and_logged_by_count(server, foods, upstream):
     _eggs, whites = foods
     upstream.add("/fdc/v1/foods/search", {"foods": []})
     async with Client(server) as client:
+        # "those 3 scoops were 90 g": one scoop is 30 g
         out = await call(
-            client, "save_alias", alias=" My Egg Whites ", food_id=whites, default_grams=300
+            client, "save_portion", food_id=whites, name=" a  Scoop ", grams=90, count=3
         )
-        assert out["alias"] == "My Egg Whites" and out["replaced"] is False
-        out = await call(
-            client, "save_alias", alias="my egg whites", food_id=whites, default_grams=250
+        assert out["portion"] == {"name": "Scoop", "grams": 30, "estimated": False}
+        assert out["replaced"] is False
+        out = await call(client, "save_portion", food_id=whites, name="scoop", grams=32)
+        assert out["replaced"] is True and out["portions"][0]["grams"] == 32
+        found = await call(client, "search_food", query="scoop")
+        top = found["results"][0]
+        assert (top["match"], top["food_id"], top["portion"]) == ("portion", whites, "scoop")
+        assert top["portions"] == [{"name": "scoop", "grams": 32, "estimated": False}]
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": whites, "portion": "1 scoop", "count": 2.5}],
+            eaten_at="now",
         )
-        assert out["replaced"] is True
-        found = await call(client, "search_food", query="my egg whites")
-    top = found["results"][0]
-    assert top["match"] == "alias" and top["food_id"] == whites and top["default_grams"] == 250
+    entry = logged["meal"]["entries"][0]
+    assert entry["grams"] == 80 and entry["estimated"] is False
 
 
 @pytest.mark.anyio
-async def test_alias_needs_existing_food(server):
+async def test_estimated_amounts_are_marked_until_weighed(server, conn, foods):
+    eggs, _whites = foods
     async with Client(server) as client:
-        assert "no food with id 5" in await call_error(client, "save_alias", alias="x", food_id=5)
+        logged = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 100, "estimated": True}],
+            eaten_at="now",
+        )
+        entry = logged["meal"]["entries"][0]
+        assert entry["estimated"] is True
+        await call(client, "save_portion", food_id=eggs, name="egg", grams=50, estimated=True)
+        again = await call(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "portion": "egg", "count": 3}],
+            eaten_at="now",
+        )
+        logged_again = again["meal"]["entries"][0]
+        assert (logged_again["grams"], logged_again["estimated"]) == (150, True)
+        # The user weighs it: the entry and the portion become exact
+        fixed = await call(client, "update_entry", entry_id=entry["entry_id"], grams=110)
+        assert fixed["entry"]["estimated"] is False
+        out = await call(client, "save_portion", food_id=eggs, name="egg", grams=55)
+        assert out["portion"]["estimated"] is False
+        gone = await call(client, "forget_portion", food_id=eggs, name="Egg")
+        assert gone["portion"]["name"] == "egg" and gone["portions"] == []
+
+
+@pytest.mark.anyio
+async def test_saved_meal_keeps_estimated_amounts(server, foods):
+    eggs, whites = foods
+    async with Client(server) as client:
+        await call(client, "save_portion", food_id=eggs, name="egg", grams=50, estimated=True)
+        saved = await call(
+            client,
+            "save_meal_template",
+            name="eggs and whites",
+            items=[
+                {"food_id": eggs, "portion": "egg", "count": 2},
+                {"food_id": whites, "grams": 100},
+            ],
+        )
+        assert [i["grams"] for i in saved["items"]] == [100, 100]
+        logged = await call(client, "log_meal_template", name="eggs and whites", eaten_at="now")
+    assert [e["estimated"] for e in logged["meal"]["entries"]] == [True, False]
+
+
+@pytest.mark.anyio
+async def test_log_items_need_grams_or_a_known_portion(server, foods):
+    eggs, _ = foods
+    async with Client(server) as client:
+        both = await call_error(
+            client,
+            "log_entries",
+            items=[{"food_id": eggs, "grams": 50, "portion": "egg"}],
+            eaten_at="now",
+        )
+        assert "grams or a portion" in both
+        unknown = await call_error(
+            client, "log_entries", items=[{"food_id": eggs, "portion": "egg"}], eaten_at="now"
+        )
+        assert "no portion named 'egg'" in unknown
+        assert "no food with id 5" in await call_error(
+            client, "save_portion", food_id=5, name="x", grams=1
+        )
 
 
 @pytest.mark.anyio

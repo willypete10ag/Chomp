@@ -166,10 +166,10 @@ def test_add_page_lists_foods_saved_meals_and_sliders(http, logged):
     assert "1 serving" not in text  # no serving size known for these foods
     assert '<option value="new">A new meal</option>' in text
     assert "8:" in text or "AM" in text or "PM" in text  # existing meal offered in Add to
-    # searching finds a nickname with its usual grams first
+    # searching finds a portion with its usual grams first
     text = http.get("/app/add", params={"date": today(), "q": "my whites"}).text
     text = text.replace("\xa0", " ")
-    assert "“my whites”" in text and 'value="300"' in text and "Your usual · 300 g" in text
+    assert "“my whites”" in text and 'value="300"' in text and "1 my whites · 300 g" in text
 
 
 def test_log_food_as_a_new_meal_then_undo(http, conn, logged):
@@ -495,6 +495,79 @@ def test_rename_food(http, conn, logged):
     assert "problem=name" in r.headers["location"]
 
 
+# --- Portions (#75) -------------------------------------------------------------------------
+
+
+def test_estimated_entries_show_a_tilde_until_new_grams(http, conn, logged):
+    _, _, entries = logged
+    store.update_entry(conn, entries[0].id, 150, None, estimated=True)
+    sign_in(http)
+    page = http.get("/app").text.replace("\xa0", " ")
+    assert '<span class="approx" title="Estimated amount">~</span>150 g' in page
+    r = http.post(f"/app/entries/{entries[0].id}", data={"grams": "120"}, headers=ORIGIN)
+    assert "~</span>" not in follow(http, r)
+    assert store.get_entry(conn, entries[0].id).estimated is False
+
+
+def test_portions_in_food_details_add_edit_delete(http, conn, logged):
+    eggs, _, _ = logged
+    sign_in(http)
+    page = http.get("/app/foods").text
+    assert "Your portions" in page and "+ Add portion" in page and "None yet" in page
+    back = {"back": "/app/foods"}
+    r = http.post(
+        f"/app/foods/{eggs}/portions", data={"name": "1 Egg", "grams": "50", **back}, headers=ORIGIN
+    )
+    assert r.headers["location"].endswith(f"#food-{eggs}")
+    page = follow(http, r)
+    assert "Saved 1 Egg = 50 g." in page
+    assert f'<li id="food-{eggs}" class="swipe unconfirmed"><form' in page
+    assert f'id="food-{eggs}"' in page and "<details open>" in page  # back where it was
+    # An estimated portion shows its "~"; saving a weight renames it and makes it exact
+    store.save_portion(conn, eggs, "Egg", 48, estimated=True)
+    page = http.get("/app/foods").text.replace("\xa0", " ")
+    assert "Estimated, not weighed" in page and "~</span>48 g" in page
+    r = http.post(
+        f"/app/foods/{eggs}/portions",
+        data={"old": "Egg", "name": "large egg", "grams": "56", **back},
+        headers=ORIGIN,
+    )
+    assert "Saved 1 large egg = 56 g." in follow(http, r)
+    [p] = store.portions_of(conn, [eggs])[eggs]
+    assert (p["name"], p["grams"], p["estimated"]) == ("large egg", 56, 0)
+    # Bad input comes back with a problem, not an error page
+    r = http.post(
+        f"/app/foods/{eggs}/portions", data={"name": "x", "grams": "0", **back}, headers=ORIGIN
+    )
+    assert "problem=portion" in r.headers["location"]
+    r = http.post(
+        f"/app/foods/{eggs}/portions/delete", data={"old": "Large Egg", **back}, headers=ORIGIN
+    )
+    assert "Deleted the large egg portion." in follow(http, r)
+    assert store.portions_of(conn, [eggs])[eggs] == []
+    r = http.post(f"/app/foods/{eggs}/portions/delete", data={"old": "egg"}, headers=ORIGIN)
+    assert r.status_code == 404
+
+
+def test_add_food_offers_portion_chips(http, conn, logged):
+    eggs, _, _ = logged
+    store.save_portion(conn, eggs, "egg", 50)
+    store.save_portion(conn, eggs, "handful", 30, estimated=True)
+    sign_in(http)
+    text = http.get("/app/add", params={"date": today(), "q": "egg"}).text.replace("\xa0", " ")
+    assert 'data-set="50">1 egg · 50 g</button>' in text
+    assert 'data-set="30" data-estimated="1">1 handful · ~30 g</button>' in text
+    # A search naming an estimated portion starts at it, marked estimated; so does its entry
+    text = http.get("/app/add", params={"date": today(), "q": "handful"}).text
+    assert 'name="estimated" value="1"' in text and 'value="30"' in text
+    r = http.post(
+        "/app/log",
+        data={"food_id": eggs, "grams": "30", "estimated": "1", "date": today(), "time": "09:00"},
+        headers=ORIGIN,
+    )
+    assert "~</span>30 g" in follow(http, r)
+
+
 # --- Guards ---------------------------------------------------------------------------------
 
 
@@ -511,6 +584,8 @@ def test_new_routes_need_sign_in_and_same_origin(http, conn, logged):
         ("/app/targets", {"kcal": "100"}),
         (f"/app/foods/{eggs}/rename", {"name": "x"}),
         (f"/app/foods/{eggs}/confirm", {"confirmed": "1"}),
+        (f"/app/foods/{eggs}/portions", {"name": "egg", "grams": "50"}),
+        (f"/app/foods/{eggs}/portions/delete", {"old": "egg"}),
         ("/app/undo/1", {}),
     ]
     for path, data in posts:

@@ -22,7 +22,7 @@ def logged(conn):
     # 2026-10-05 08:00 and 2026-10-06 00:30 New York time (EDT, UTC-4)
     store.log_meal(conn, [(eggs, 200), (whites, 300)], "2026-10-05T12:00:00Z", "breakfast")
     store.log_meal(conn, [(whites, 150)], "2026-10-06T04:30:00Z", None, note="late snack")
-    store.save_alias(conn, "my whites", whites, 300)
+    store.save_portion(conn, whites, "carton", 300)
     store.save_template(conn, "usual breakfast", [(eggs, 200), (whites, 300)])
     store.set_targets(conn, {"protein_g": 180})
     return eggs, whites
@@ -125,7 +125,10 @@ def test_json_holds_everything(conn, logged):
     first, second = data["meals"]
     assert first["eaten_at"] == "2026-10-05T08:00:00-04:00" and len(first["entries"]) == 2
     assert second["note"] == "late snack"
-    assert data["aliases"] == [{"alias": "my whites", "food_id": logged[1], "default_grams": 300}]
+    assert data["portions"] == [
+        {"food_id": logged[1], "name": "carton", "grams": 300, "estimated": False}
+    ]
+    assert first["entries"][0]["estimated"] is False
     assert data["meal_templates"][0]["name"] == "usual breakfast"
     assert len(data["meal_templates"][0]["items"]) == 2
     assert data["targets"]["protein_g"] == 180

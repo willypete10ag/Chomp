@@ -371,7 +371,7 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
     oats = add_food(conn, "Rolled oats", 379, 13, 68, 7, verified=1)
     milk = add_food(conn, "Oat milk", 48, 1, 7, 2)
     meal = store.log_meal(conn, [(oats, 50)], "2026-10-02T12:00:00Z", None)
-    store.save_alias(conn, "my oats", oats, 50)
+    store.save_portion(conn, oats, "my oats", 50)
     store.save_template(conn, "oat bowl", [(oats, 50), (milk, 200)])
     store.save_template(conn, "plain oats", [(oats, 80)])
     app.get(f"/app/foods/new?barcode={NUTELLA}")
@@ -388,7 +388,8 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
 
     assert "oats" not in [r["name"] for r in store.list_used_foods(conn, 10)]
     assert [r["name"] for r in store.search_foods(conn, "oats", 5)] == ["Oat milk"]
-    assert store.search_aliases(conn, "my oats", 5) == []
+    assert store.search_portions(conn, "my oats", 5) == []
+    assert conn.execute("SELECT count(*) FROM portions").fetchone()[0] == 0
     assert [t["name"] for t, _ in store.list_templates(conn)] == ["oat bowl"]  # plain one empty
     assert store.meal_entries(conn, meal)[0].nutrients["kcal"] == 189.5  # history kept
 
@@ -421,7 +422,7 @@ def test_deleted_food_cannot_be_picked_again(conn):
     for attempt in (
         lambda: store.log_meal(conn, [(oats, 10)], "2026-10-03T12:00:00Z", None),
         lambda: store.add_to_meal(conn, meal, [(oats, 10)]),
-        lambda: store.save_alias(conn, "my oats", oats, None),
+        lambda: store.save_portion(conn, oats, "bowl", 40),
         lambda: store.save_template(conn, "oats", [(oats, 10)]),
     ):
         with pytest.raises(store.NotFound):

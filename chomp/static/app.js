@@ -194,11 +194,15 @@
     var range = box.querySelector("input[type=range]");
     var field = box.querySelector("[data-amount]");
     if (!range || !field) return;
+    // Grams chosen by hand are exact; an estimated portion chip marks them again (#75)
+    var estimated = field.form && field.form.querySelector("input[name=estimated]");
     range.addEventListener("input", function () {
       field.value = range.value;
+      if (estimated) estimated.value = "0";
       changed(field.form);
     });
     field.addEventListener("input", function () {
+      if (estimated) estimated.value = "0";
       var n = parse(field.value);
       if (n !== null) {
         if (n > parse(range.max)) range.max = String(Math.ceil(n));
@@ -208,7 +212,7 @@
     });
   });
 
-  // Quick picks: "1 serving · 46 g", "Your usual · 300 g", "100 g"
+  // Quick picks: "1 serving · 46 g", "1 handful · ~30 g", "100 g"
   document.addEventListener("click", function (event) {
     var chip = event.target.closest("[data-set]");
     if (!chip) return;
@@ -216,6 +220,8 @@
     var field = box.querySelector("[data-amount]");
     field.value = chip.dataset.set;
     field.dispatchEvent(new Event("input"));
+    var estimated = field.form && field.form.querySelector("input[name=estimated]");
+    if (estimated && chip.dataset.estimated) estimated.value = "1";
   });
 
   // Time nudges on meal times: -15 min, +15 min, now
@@ -313,7 +319,8 @@
 
   // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
   // another to hide it again. Only one shows at a time. Press and hold a food to open it
-  // (details and Rename); a plain tap only closes an open one.
+  // (details and Rename); a plain tap only closes an open one. Portions in a food's
+  // details work the same way: swipe to delete, press and hold to edit.
   var OPEN = 96;
   var HOLD_MS = 450;
   var shown = null;
@@ -342,6 +349,8 @@
     }
     body.addEventListener("pointerdown", function (event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
+      // A portion inside an open food swipes and holds on its own, not the food with it
+      if (event.target.closest("[data-swipe]") !== body) return;
       start = { x: event.clientX, y: event.clientY, base: body === shown ? -OPEN : 0 };
       dx = 0;
       sliding = false;
@@ -353,7 +362,7 @@
           unhold();
           held = true;
           details.open = true;
-          var rename = details.querySelector("details.sub:not(.no-js)");
+          var rename = details.querySelector("details.sub.rename");
           if (rename) rename.open = true;
           if (navigator.vibrate) navigator.vibrate(15);
         }, HOLD_MS);

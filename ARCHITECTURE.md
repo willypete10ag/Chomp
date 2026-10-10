@@ -47,12 +47,15 @@ nutrition facts, where tapping a nutrient lists the foods that gave the most; a 
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
 out), History (7/30/90-day averages and inline-SVG charts; each day links to its Breakdown)
 and Foods (one search over saved
-meals, nicknames and used foods, most logged first, with filters for recent, newest,
+meals and used foods, most logged first, with filters for recent, newest,
 unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
 in the browser; tap a food for its per-serving values and
-source, or to give it a shorter name).
+source, or to give it a shorter name, and for your portions of it (#75): swipe one left to
+delete it, press and hold it to change its name or grams, or + Add portion). An entry whose
+grams were estimated shows a muted "~" before them until new grams are saved, and Add food
+offers your portions as chips ("1 handful · 30 g") next to the gram chips.
 
-It also works without Claude (#54): Add food (search your foods, nicknames and saved meals, or
+It also works without Claude (#54): Add food (search your foods, portions and saved meals, or
 USDA when `FDC_API_KEY` is set; log to a new meal at a time or into an existing one), change an
 entry's grams, move it to another meal, edit a meal's name, time, date and note, combine or
 delete meals, and set daily goals. Every edit is a form post through `store.py` like the
@@ -80,7 +83,7 @@ until `confirm_food`.
 
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
-`aliases`, `meal_templates`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
+`portions`, `meal_templates`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
 `user_id`; `foods` are shared, so anyone's saved or label foods turn up in everyone's search
 (use counts are per person). User 1 is the owner, holds everything logged before users
 existed, and signs in with `AUTH_PASSWORD`. Others are added with `chomp user add NAME` and
@@ -94,19 +97,19 @@ local-only mode everything is the owner's.
 ## MCP tools
 | Tool | Purpose | Key args |
 |---|---|---|
-| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): aliases → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, aliased or templated; verified first) → FDC (ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged | `query`, `limit` |
+| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
 | `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
-| `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams}]`, `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
-| `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?` |
+| `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams or portion + count, estimated?}]`, `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
+| `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?`, `estimated?` (new grams count as exact unless set) |
 | `update_meal` | Move a meal to a different time, or change its label or note | `meal_id`, `eaten_at?`, `meal_label?`, `note?` |
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
 | `get_totals` | Aggregates, per-day totals and daily averages over a range (inclusive local dates), with progress against targets | `start`, `end?` |
 | `confirm_food` | Mark a food verified once the user approves it (an OFF hit, a restaurant or home-cooked food, anything), optionally correcting its macros | `food_id`, `confirmed?` (false to unconfirm), macros?, `micronutrients?`, `micronutrients_percent_dv?`, `per_serving_g?` |
 | `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
-| `save_alias` | "my usual eggs" → food_id + default grams | `alias`, `food_id`, `default_grams?` |
+| `save_portion` / `forget_portion` | Remember (or forget) what one of the user's portions of a food weighs ("my handful of Cheez-Its = 30 g") | `food_id`, `name`, `grams`, `count?`, `estimated?` / `food_id`, `name` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
@@ -116,9 +119,18 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Label details (#63, migration 0009): saturated, trans, polyunsaturated and monounsaturated fat, cholesterol, added sugars and sugar alcohols (`logic.DETAILS`), nullable like fiber, sugar and sodium, mapped from FDC and OFF (`polyols`), read by the label OCR and the New food form, and backfilled into cached unconfirmed foods the same way as vitamins. Net carbs (carbs − fiber − sugar alcohols) is computed on the Breakdown, only when sugar alcohols are known.
 - Vitamins and minerals (#53, migration 0007): nullable `foods`/`entries` columns named with their unit (`vitamin_d_mcg`, `iron_mg`, ...; list and FDA Daily Values in `logic.MICROS` / `logic.DAILY_VALUES`). NULL means the source didn't report it. Tool results carry the known ones in `micronutrients`; a total names the ones only some items reported in `micronutrients_partial` (the sum is a floor). FDC and OFF amounts are converted from their reported unit (vitamin D IU → mcg; vitamin A IU is skipped). A cached, unconfirmed upstream food that lacks them gains them the next time the same record comes back; logged entries keep their snapshots.
 - One `foods` row per upstream record (unique `(source, source_id)`).
+- Portions (#75, migration 0010): people log counts ("3 handfuls"), not grams. `portions` holds
+  each user's named amount of a food (`name`, `grams` for one, `estimated`). With no portion
+  for a count, the agent asks for an exact weight or an estimate; an estimate is the food's
+  `serving_g` × its count of servings, so only the amount is ever estimated and nutrients
+  still come from the food. Entries logged that way carry `entries.estimated = 1` until new
+  grams replace them (update_entry or the dashboard slider). A real weight for a portion
+  (`save_portion`) clears its estimate. Portions replaced nicknames (`aliases`): the
+  migration turned each nickname with usual grams into a portion ("1 Birria taco" →
+  "Birria taco") and dropped the rest.
 - Deleting a food (dashboard, Foods > swipe a food left > Delete; migration 0008) is for everyone,
   since foods are shared. Entries still point at it, so the row stays with `deleted = 1`,
-  hidden from search and lists, its barcode released; everyone's nicknames for it go, and it
+  hidden from search and lists, its barcode released; everyone's portions of it go, and it
   leaves every saved meal (an emptied one goes too). If the same USDA or Open Food Facts
   record turns up again it comes back, barcode included.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
@@ -149,7 +161,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Backup and export
 - `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one.
-- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, aliases, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
+- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.
@@ -205,7 +217,7 @@ Then create one issue per bullet below with `gh issue create --milestone "<name>
 - One week of real-world use; file bugs as issues
 
 **M4: Quality of life**
-- `save_alias`, `save_meal_template`, `log_meal_template`
+- `save_meal_template`, `log_meal_template` (`save_alias` was replaced by portions, #75)
 - `get_totals`
 - Nightly SQLite backup
 
