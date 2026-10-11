@@ -753,5 +753,104 @@
     });
   });
 
+  // The month view (#71): tapping the day's title opens it as a sheet over the page. Month
+  // arrows and the year list load the next month into the sheet; a day opens that day.
+  // A tap outside, Escape or the back button closes it. Without this, the title opens
+  // the month view as its own page.
+  var opener = document.querySelector("[data-calendar]");
+  if (opener && window.fetch) {
+    opener.addEventListener("click", function (event) {
+      event.preventDefault();
+      openCalendar(opener.href);
+    });
+  }
+  function openCalendar(href) {
+    var layer = document.createElement("div");
+    layer.className = "cal-layer";
+    var sheet = document.createElement("div");
+    sheet.className = "cal-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.setAttribute("aria-label", "Calendar");
+    var grab = document.createElement("div");
+    grab.className = "grab";
+    var body = document.createElement("div");
+    sheet.append(grab, body);
+    layer.appendChild(sheet);
+
+    function load(url, focus) {
+      return fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "part=1", {
+        credentials: "same-origin",
+      }).then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      }).then(function (html) {
+        body.innerHTML = html;
+        var target = focus && body.querySelector(focus);
+        (target || body.querySelector("[aria-current=date], .caldays a, a")).focus({
+          preventScroll: true,
+        });
+      });
+    }
+    body.addEventListener("click", function (event) {
+      var link = event.target.closest("a[href]");
+      if (!link) return;
+      event.preventDefault();
+      if (!link.hasAttribute("data-cal")) {
+        // A day (or Today): take the sheet's history entry's place, so Back returns to the
+        // page the sheet opened over
+        if (history.state && history.state.calendar) location.replace(link.href);
+        else location.href = link.href;
+        return;
+      }
+      var label = link.getAttribute("aria-label");
+      load(link.href, label ? '[aria-label="' + label + '"]' : null).catch(function () {
+        location.href = link.href;
+      });
+    });
+
+    function close() {
+      layer.classList.remove("on");
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("popstate", close);
+      setTimeout(function () {
+        layer.remove();
+      }, 220);
+      opener.focus({ preventScroll: true });
+    }
+    function dismiss() {
+      if (history.state && history.state.calendar) history.back();
+      else close();
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        var years = body.querySelector(".years[open]");
+        if (years) years.open = false;
+        else dismiss();
+      }
+    }
+    layer.addEventListener("click", function (event) {
+      if (event.target === layer) dismiss();
+    });
+
+    load(href).then(function () {
+      document.body.appendChild(layer);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          layer.classList.add("on");
+        });
+      });
+      try {
+        history.pushState({ calendar: true }, "");
+        window.addEventListener("popstate", close);
+      } catch (err) {
+        // the back button just leaves the page then
+      }
+      document.addEventListener("keydown", onKey);
+    }).catch(function () {
+      location.href = href;
+    });
+  }
+
   document.querySelectorAll("form").forEach(changed);
 })();

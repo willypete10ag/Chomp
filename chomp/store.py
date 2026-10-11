@@ -824,6 +824,13 @@ def entries_between(
     return [(r["eaten_at"], nutrients_of(r)) for r in rows]
 
 
+def first_meal_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest meal was eaten (UTC), or None before anything is logged."""
+    return conn.execute(
+        "SELECT min(eaten_at) FROM meals WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()[0]
+
+
 # --- Targets --------------------------------------------------------------------------------
 
 TARGET_KEYS = ("kcal", "protein_g", "carbs_g", "fat_g")
