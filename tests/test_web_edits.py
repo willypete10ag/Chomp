@@ -265,7 +265,7 @@ def test_add_page_searches_usda_when_configured(public_settings, conn, logged, f
     upstream.add(
         SEARCH,
         fixture_json("fdc/search_egg_white_generic.json"),
-        match={"dataType": "Foundation,SR Legacy"},
+        match={"dataType": "Foundation,SR Legacy,Survey (FNDDS)"},
     )
     upstream.add(
         SEARCH,
@@ -277,9 +277,9 @@ def test_add_page_searches_usda_when_configured(public_settings, conn, logged, f
     )
     with TestClient(app, base_url=PUBLIC, follow_redirects=False) as client:
         sign_in(client)
+        # none of your foods match, so USDA is searched without the button (#88)
         text = client.get("/app/add", params={"date": today(), "q": "egg white"}).text
-        assert "Search USDA for" in text
-        text = client.get("/app/add", params={"date": today(), "q": "egg white", "usda": 1}).text
+        assert "Search USDA for" not in text
         assert "USDA FoodData Central" in text and "Unconfirmed" in text
     assert upstream.requests
 

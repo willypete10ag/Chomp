@@ -301,10 +301,10 @@ def search_portions(conn: sqlite3.Connection, query: str, limit: int) -> list[sq
 
 
 # Foods someone has chosen: verified, added from a label or barcode, logged, with a portion, or in
-# a template. FDC search hits are cached in foods too, but only as a lookup cache. Foods are
-# shared, so one person's saved foods are found by everyone.
+# a template. FDC and Open Food Facts search hits (#88) are cached in foods too, but only as a
+# lookup cache. Foods are shared, so one person's saved foods are found by everyone.
 USED_FOOD = (
-    "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
+    "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source NOT IN ('fdc', 'off')"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM portions p WHERE p.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"

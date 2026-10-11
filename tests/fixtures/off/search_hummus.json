@@ -1,0 +1,42 @@
+{
+ "count": 4,
+ "page": 1,
+ "page_size": 24,
+ "products": [
+  {
+   "code": "0000000000001",
+   "product_name": "Hummus chips",
+   "brands": "Snacky",
+   "nutriments": {
+    "energy-kcal_100g": 480, "proteins_100g": 8, "carbohydrates_100g": 60, "fat_100g": 22,
+    "sugars_100g": 2, "fiber_100g": 5, "sodium_100g": 0.6
+   }
+  },
+  {
+   "code": "5000112637922",
+   "product_name": "Classic Houmous",
+   "product_name_en": "Classic hummus",
+   "brands": "Sabra,PepsiCo",
+   "serving_size": "30 g",
+   "serving_quantity": "30",
+   "serving_quantity_unit": "g",
+   "nutriments": {
+    "energy-kcal_100g": 267, "proteins_100g": 7.1, "carbohydrates_100g": 13.3, "fat_100g": 20,
+    "sugars_100g": 0, "fiber_100g": 6.7, "sodium_100g": 0.433
+   },
+   "image_front_url": "https://images.openfoodfacts.org/images/products/500/011/263/7922/front_en.3.400.jpg"
+  },
+  {
+   "code": "0000000000002",
+   "product_name": "Hummus with no nutrition",
+   "nutriments": {}
+  },
+  {
+   "product_name": "Hummus without a code",
+   "nutriments": {
+    "energy-kcal_100g": 250, "proteins_100g": 7, "carbohydrates_100g": 14, "fat_100g": 18,
+    "sugars_100g": 1, "fiber_100g": 6, "sodium_100g": 0.4
+   }
+  }
+ ]
+}

@@ -21,7 +21,8 @@ from chomp.sources.http import TTLCache, get_json
 log = logging.getLogger("chomp.sources.fdc")
 
 BASE_URL = "https://api.nal.usda.gov/fdc/v1"
-GENERIC_TYPES = ("Foundation", "SR Legacy")
+# Survey (FNDDS) foods are dishes as eaten, e.g. "chicken burrito" (#88)
+GENERIC_TYPES = ("Foundation", "SR Legacy", "Survey (FNDDS)")
 BRANDED = "Branded"
 TYPE_RANK = {"Foundation": 0, "SR Legacy": 1, "Survey (FNDDS)": 2, "Branded": 3}
 
@@ -323,8 +324,8 @@ class FDCClient:
         and egg bagels highly), so results are re-ranked by how many query words the food's
         name and brand contain, then by how much of the name's lead (before the first comma)
         is what the user asked for, so "milk" finds fluid milk before "Crackers, milk".
-        Remaining ties go to Foundation, then SR Legacy, then Branded, then
-        FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
+        Remaining ties go to Foundation, then SR Legacy, then Survey (FNDDS), then Branded,
+        then FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
         """
         results: list[list[FoodRecord]] = []
         errors: list[SourceError] = []
