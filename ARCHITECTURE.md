@@ -167,6 +167,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 ## Gotchas
 - **UPC normalization:** UPC-A (12 digits) vs EAN-13 (leading 0) vs FDC's GTIN padding. Normalize to 14-digit GTIN for storage and try variants on lookup.
 - **FDC Branded data** is per serving in `labelNutrients` and per 100 g in `foodNutrients`; prefer per-100 g, but when a core value differs from the label by more than 10% (and past a small rounding floor), use the label values and flag it.
+- **FDC generic foods** (Foundation, SR Legacy) have no label serving. Their household measures (`foodMeasures` on search hits, `foodPortions` in details) give one: one of a thing ("1 large", medium before large) is preferred, else the first single measure ("1 cup"); bare weights never. A cached food without a serving gains one when its record comes back, and `serving_fill.py` (at most every 10 minutes, each food once per process) fetches details for the used FDC foods still missing one.
 - **FDC carbs "by difference"** can be slightly negative (seen: -0.104 g). Carbs down to -1 are stored as 0; any other negative value drops the record.
 - **Open Food Facts** quality varies; mark OFF-sourced foods unverified until I confirm one.
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
