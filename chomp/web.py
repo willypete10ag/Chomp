@@ -48,6 +48,7 @@ from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
+from chomp.photos import PhotoError, Photos
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
 from chomp.sources.fdc import FDCClient
@@ -732,6 +733,18 @@ def hhmm(local_iso: str) -> str:
     return datetime.fromisoformat(local_iso).strftime("%H:%M")
 
 
+def thumb(src: str, name: str) -> str:
+    """A food's photo as a small square (#74), or its first letter on a tile without one."""
+    if src:
+        return f'<img class="thumb" src="{e(src)}" alt="" loading="lazy" decoding="async">'
+    letter = next((c for c in name if c.isalnum()), "·").upper()
+    return f'<span class="thumb none" aria-hidden="true">{e(letter)}</span>'
+
+
+def with_thumb(src: str, name: str, inner: str) -> str:
+    return f'<div class="with-thumb">{thumb(src, name)}<div class="grow">{inner}</div></div>'
+
+
 def entry_item(
     x: store.EntryRow,
     food,
@@ -739,6 +752,7 @@ def entry_item(
     error: tuple[int, str, str] | None,
     ctx: DayContext,
     meal_time: str,
+    photo: str = "",
 ) -> str:
     """One logged food. Tapping the row opens its grams slider (with a live preview), a move
     to another meal, and a guarded delete.
@@ -771,10 +785,15 @@ def entry_item(
         )
     return (
         f'<li id="entry-{x.id}"><details{is_open}><summary>'
-        f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
-        f"{brand}</span>{kcal}</div>"
-        f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
-        f"<span>{macros_line(n)}</span></div></summary>"
+        + with_thumb(
+            photo,
+            x.name,
+            f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
+            f"{brand}</span>{kcal}</div>"
+            f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+        )
+        + "</summary>"
         f'<div class="edit">{problem}'
         + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
         + f'<form class="stack" method="post" action="{PREFIX}/entries/{x.id}"'
@@ -872,11 +891,12 @@ def food_url(food_id: int, back: str) -> str:
     return f"{PREFIX}/foods/{food_id}?{urlencode({'back': back})}"
 
 
-def food_item(row, back: str, last_logged: str = "", log_url: str = "") -> str:
+def food_item(row, back: str, last_logged: str = "", log_url: str = "", photo: str = "") -> str:
     """A saved food: name (two lines at most), kcal and macros per 100 g. A tap opens its
     details page (#72). With the script, press and hold it for a menu (Edit, Rename,
     Confirm, Log it, Delete), swipe it left to delete it, and swipe an unconfirmed one right
-    to confirm it. `last_logged` says when it was last logged; `log_url` logs it."""
+    to confirm it. `last_logged` says when it was last logged; `log_url` logs it; `photo`
+    is its picture's URL, if it has one."""
     n = logic.round_for_display(store.nutrients_of(row))
     meta = []
     if row["brand"]:
@@ -905,13 +925,53 @@ def food_item(row, back: str, last_logged: str = "", log_url: str = "") -> str:
     return (
         f'<li id="food-{row["id"]}" class="swipe{"" if row["verified"] else " unconfirmed"}"'
         f' data-food="{base}" data-name="{e(row["name"])}" data-back="{e(back)}"'
-        f' data-log="{e(log_url)}" data-confirmed="{int(bool(row["verified"]))}">'
+        f' data-log="{e(log_url)}" data-confirmed="{int(bool(row["verified"]))}"'
+        f' data-photo="{int(bool(photo))}">'
         f'{confirm}{delete}<div class="swipe-body" data-swipe>'
         f'<a class="food-link" href="{e(food_url(row["id"], back))}" draggable="false">'
-        f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
-        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-        f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
-        f"<span>{macros_line(n)}</span></div></a></div></li>"
+        + with_thumb(
+            photo,
+            row["name"],
+            f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
+            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+            f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+        )
+        + "</a></div></li>"
+    )
+
+
+def photo_block(food_id: int, name: str, src: str, back: str) -> str:
+    """The top of a food's page (#74): its photo with Replace and Remove, or a box to add
+    one. Choosing a picture sends it straight away (the script); without the script a
+    Save photo button does."""
+    action = f"{PREFIX}/foods/{food_id}/photo"
+    keep = f'<input type="hidden" name="back" value="{e(back)}">'
+
+    def picker(text: str, cls: str) -> str:
+        return (
+            f'<form class="photo-form" method="post" action="{action}"'
+            f' enctype="multipart/form-data">{keep}'
+            f'<label class="{cls}"><span>{text}</span><input type="file" name="photo"'
+            ' accept="image/*" required data-autosubmit></label>'
+            '<button class="no-js" type="submit">Save photo</button></form>'
+        )
+
+    if not src:
+        return (
+            '<div class="food-photo none" id="photo">'
+            + picker('<b aria-hidden="true">+</b> Add photo', "photo-add")
+            + '<p class="small muted">Take a picture of it, or pick one from your photos.</p>'
+            "</div>"
+        )
+    return (
+        f'<div class="food-photo" id="photo"><img src="{e(src)}" alt="Photo of {e(name)}">'
+        '<div class="photo-tools">'
+        + picker("Replace photo", "button ghost")
+        + '<details class="sub confirm"><summary>Remove photo…</summary>'
+        f'<form method="post" action="{action}/delete">{keep}'
+        '<button class="danger" type="submit">Yes, remove the photo</button></form>'
+        "</details></div></div>"
     )
 
 
@@ -966,7 +1026,7 @@ def with_params(url: str, anchor: str = "", **params: str | int) -> str:
     query = [
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in ("done", "undone", "problem", "checked", "ok", "portion")
+        if k not in ("done", "undone", "problem", "checked", "ok", "portion", "pic")
     ]
     query += [(k, str(v)) for k, v in params.items()]
     return parts.path + (f"?{urlencode(query)}" if query else "") + (f"#{anchor}" if anchor else "")
@@ -982,7 +1042,10 @@ PROBLEMS = {
     "undo": "Couldn't undo: those items changed since (maybe from Claude), so nothing changed.",
     "name": "A food needs a name.",
     "portion": f"A portion needs a name and grams more than 0 and at most {MAX_GRAMS:,}.",
+    "photo": "That file isn't a photo Chomp can read. Try a JPEG or PNG.",
+    "photo_big": "That photo is too big. Try one under 20 MB.",
 }
+PHOTO_TOASTS = {"saved": "Photo saved.", "removed": "Photo removed."}
 
 # --- New food (#59): barcode scan, label photo, or typed in; all fill the same form ----------
 
@@ -1303,7 +1366,13 @@ def goals_form(values: dict[str, str], back: str, error: str = "") -> str:
 
 
 def pick_item(
-    row, ctx: DayContext, meal_id: int | None, q: str, default_time: str, portions=()
+    row,
+    ctx: DayContext,
+    meal_id: int | None,
+    q: str,
+    default_time: str,
+    portions=(),
+    photo: str = "",
 ) -> str:
     """A food on the Add food page: tap it for a grams slider, a live preview and where to
     log it."""
@@ -1327,11 +1396,16 @@ def pick_item(
         else meal_menu(ctx, None, "Add to", default_time, with_name=True)
     )
     return (
-        f"<li><details><summary>"
-        f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
-        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-        f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
-        f"<span>{macros_line(n)}</span></div></summary>"
+        "<li><details><summary>"
+        + with_thumb(
+            photo,
+            row["name"],
+            f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
+            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+            f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+        )
+        + "</summary>"
         f'<form class="stack edit" method="post" action="{PREFIX}/log"'
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
         f'<input type="hidden" name="food_id" value="{row["id"]}">'
@@ -1414,6 +1488,7 @@ def add_routes(
     provider: ChompAuthProvider | None,
     fdc: FDCClient | None = None,
     off: OFFClient | None = None,
+    photos: Photos | None = None,
 ) -> None:
     """Register the dashboard. provider is None in local-only mode (no sign-in). With fdc
     configured, Add food can also search USDA FoodData Central. New food looks barcodes up
@@ -1426,7 +1501,9 @@ def add_routes(
     usda = fdc is not None and fdc.enabled
     fdc = fdc or FDCClient(settings.fdc_api_key)
     off = off or OFFClient(settings.off_user_agent)
+    photos = photos or Photos(settings.photos_path, off)
     ocr_limit = anyio.CapacityLimiter(1)  # one label photo at a time; OCR is CPU-heavy
+    photo_limit = anyio.CapacityLimiter(2)  # resizing a phone photo takes a moment too
 
     def user_of(request: Request) -> int | None:
         """The signed-in user (#46), or None. Local-only mode is always the owner."""
@@ -1435,6 +1512,12 @@ def add_routes(
         if not hasattr(request.state, "user_id"):
             request.state.user_id = sessions.user(request.cookies.get(COOKIE, ""))
         return request.state.user_id
+
+    def photo_src(food_id: int) -> str:
+        """The URL of a food's photo (#74), or "" when it has none. It changes with the
+        photo, so browsers may keep it for good."""
+        version = photos.version(food_id)
+        return "" if version is None else f"{PREFIX}/foods/{food_id}/photo?v={version}"
 
     def connect(request: Request):
         """A connection for the signed-in user's log. Routes check signed_in() first."""
@@ -1784,7 +1867,10 @@ def add_routes(
             meal_totals = logic.round_for_display(logic.sum_nutrients(x.nutrients for x in entries))
             time_value = hhmm(logic.local_iso(meal["eaten_at"], tz))
             items = "".join(
-                entry_item(x, foods[x.food_id], single, error, ctx, time_value) for x in entries
+                entry_item(
+                    x, foods[x.food_id], single, error, ctx, time_value, photo_src(x.food_id)
+                )
+                for x in entries
             )
             when = clock(logic.local_iso(meal["eaten_at"], tz))
             label = meal["label"] or ""
@@ -2069,9 +2155,12 @@ def add_routes(
                 '<section class="card"><h2 class="section">Saved meals</h2>'
                 f'<ul class="entries">{lis}</ul></section>'
             )
-        picks = [pick_item(a, ctx, meal_id, q, default_time, portions[a["id"]]) for a in portioned]
+        picks = [
+            pick_item(a, ctx, meal_id, q, default_time, portions[a["id"]], photo_src(a["id"]))
+            for a in portioned
+        ]
         picks += [
-            pick_item(r, ctx, meal_id, q, default_time, portions[r["id"]])
+            pick_item(r, ctx, meal_id, q, default_time, portions[r["id"]], photo_src(r["id"]))
             for r in rows
             if r["id"] not in {a["id"] for a in portioned}
         ]
@@ -2092,7 +2181,10 @@ def add_routes(
                 "Search for a food to find it in USDA FoodData Central.</p></section>"
             )
         if usda_rows or usda_note:
-            lis = "".join(pick_item(r, ctx, meal_id, q, default_time) for r in usda_rows)
+            lis = "".join(
+                pick_item(r, ctx, meal_id, q, default_time, photo=photo_src(r["id"]))
+                for r in usda_rows
+            )
             body = f'<ul class="entries">{lis}</ul>' if lis else ""
             if not usda_rows and not usda_note:
                 usda_note = "No USDA matches."
@@ -2556,6 +2648,9 @@ def add_routes(
             return new_food_page(request, body, 400)
         with connect(request) as conn:
             hit = await barcode_lookup(conn, code, fdc, off)
+        photos.backfill_soon(settings.db_path)
+        if hit.row is not None:
+            photos.fill_soon(hit.row["id"], hit.row["gtin"], hit.image_url)
         if hit.row is None:
             if hit.unreachable:
                 text = (
@@ -2803,6 +2898,8 @@ def add_routes(
             out += toast(f"<span>Deleted {e(removed)}.{e(left)}</span>", "status")
         if said := params.get("portion", "")[: PORTION_NAME_MAX + 40]:
             out += toast(f"<span>{e(said)}</span>", "status")
+        if pic := PHOTO_TOASTS.get(params.get("pic", "")):
+            out += toast(f"<span>{pic}</span>", "status")
         return out
 
     @server.custom_route(PREFIX + "/foods/{food_id:int}", methods=["GET"])
@@ -2859,7 +2956,8 @@ def add_routes(
             '<span class="step off" aria-hidden="true"></span></header>',
             banner,
             f'<section class="card summary food-hero{"" if row["verified"] else " unconfirmed"}">'
-            f'<h1 class="food-name">{e(row["name"])}</h1>'
+            + photo_block(food_id, row["name"], photo_src(food_id), here)
+            + f'<h1 class="food-name">{e(row["name"])}</h1>'
             + (f'<p class="muted brand">{e(row["brand"])}</p>' if row["brand"] else "")
             + f'<p class="badges">{badge}</p>'
             f'<p class="hero"><span class="big kcal">{num(basis["kcal"])}</span> kcal'
@@ -2980,6 +3078,62 @@ def add_routes(
                 return message("Not found", "That food no longer exists.", 404, signed_in=True)
         log.info("dashboard: deleted food %d", food_id)
         return go(with_params(back, removed=food["name"][:FOOD_NAME_MAX], meals=meals))
+
+    # --- Photos (#74) ---
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/photo", methods=["GET", "POST"])
+    async def food_photo(request: Request) -> Response:
+        """GET: the food's photo. POST: a new one from the person (multipart `photo`),
+        replacing any it had; label photos never come here."""
+        food_id = request.path_params["food_id"]
+        if request.method == "GET":
+            if not signed_in(request):
+                return Response("Not signed in", status_code=401)
+            try:
+                data = photos.path(food_id).read_bytes()
+            except OSError:
+                return Response("Not found", status_code=404)
+            return Response(
+                data,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "private, max-age=31536000, immutable"},
+            )
+        if (no := refused(request, "Add photos")) is not None:
+            return no
+        default = food_url(food_id, f"{PREFIX}/foods")
+        size = int_param(request.headers.get("content-length"))
+        if size is not None and size > PHOTO_MAX:
+            return go(with_params(default, problem="photo_big"))
+        async with request.form(max_files=1, max_fields=3) as form:
+            back = safe_next(str(form.get("back", "")) or default)
+            picture = form.get("photo")
+            data = await picture.read() if hasattr(picture, "read") else b""
+        if not data:
+            return go(with_params(back, problem="photo"))
+        if len(data) > PHOTO_MAX:
+            return go(with_params(back, problem="photo_big"))
+        with connect(request) as conn:
+            try:
+                store.get_food(conn, food_id, live=True)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+        try:
+            await anyio.to_thread.run_sync(photos.save, food_id, data, limiter=photo_limit)
+        except PhotoError:
+            return go(with_params(back, problem="photo"))
+        log.info("dashboard: photo saved for food %d", food_id)
+        return go(with_params(back, pic="saved"))
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/photo/delete", methods=["POST"])
+    async def remove_photo(request: Request) -> Response:
+        if (no := refused(request, "Remove photos")) is not None:
+            return no
+        form = await request.form()
+        food_id = request.path_params["food_id"]
+        back = safe_next(str(form.get("back", "")) or food_url(food_id, f"{PREFIX}/foods"))
+        await anyio.to_thread.run_sync(photos.remove, food_id)
+        log.info("dashboard: photo removed for food %d", food_id)
+        return go(with_params(back, pic="removed"))
 
     # --- Portions (#75) ---
 
@@ -3125,6 +3279,7 @@ def add_routes(
     async def foods(request: Request) -> Response:
         if not signed_in(request):
             return to_login(request)
+        photos.backfill_soon(settings.db_path)  # once: photos for barcode foods saved before #74
         q = request.query_params.get("q", "").strip()[:100]
         view = request.query_params.get("view", "most")
         if view not in FOOD_VIEWS:
@@ -3200,7 +3355,8 @@ def add_routes(
                 return title.lower() if title in ("Today", "Yesterday") else title
 
             items = "".join(
-                food_item(r, back, last(r), add_url(day, None, r["name"])) for r in rows
+                food_item(r, back, last(r), add_url(day, None, r["name"]), photo_src(r["id"]))
+                for r in rows
             )
             hint = (
                 '<p class="small muted js-only hint">Tap a food to see it; press and hold it'

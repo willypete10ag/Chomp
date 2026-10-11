@@ -590,6 +590,15 @@
     }
     item("Edit", go(url + "/edit?back=" + encodeURIComponent(back)));
     item("Rename", rename, "", true);
+    var hasPhoto = li.dataset.photo === "1";
+    // The file picker has to open from the tap itself, so the menu stays until a photo is
+    // chosen (#74)
+    item(hasPhoto ? "Change photo" : "Add photo", choosePhoto, "", true);
+    if (hasPhoto) {
+      item("Remove photo", function () {
+        post("/photo/delete", { back: back });
+      });
+    }
     if (li.dataset.confirmed !== "1") {
       item("Confirm", function () {
         post("/confirm", { back: back, confirmed: "1" });
@@ -599,6 +608,31 @@
     item("Delete", function () {
       post("/delete", { back: back });
     }, "danger");
+
+    function choosePhoto() {
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + "/photo";
+      form.enctype = "multipart/form-data";
+      form.hidden = true;
+      var keep = document.createElement("input");
+      keep.type = "hidden";
+      keep.name = "back";
+      keep.value = back;
+      var file = document.createElement("input");
+      file.type = "file";
+      file.name = "photo";
+      file.accept = "image/*";
+      file.addEventListener("change", function () {
+        if (!file.files.length) return;
+        leave(function () {
+          form.submit();
+        });
+      });
+      form.append(keep, file);
+      document.body.appendChild(form);
+      file.click();
+    }
 
     // Rename in place: the menu turns into the name box
     function rename() {
@@ -709,6 +743,15 @@
     document.addEventListener("keydown", onKey);
     menu.querySelector("button").focus({ preventScroll: true });
   }
+
+  // A food's photo (#74): choosing a picture sends it, no Save button needed
+  document.querySelectorAll("input[type=file][data-autosubmit]").forEach(function (file) {
+    file.addEventListener("change", function () {
+      if (!file.files.length) return;
+      file.closest("label").classList.add("busy");
+      file.form.submit();
+    });
+  });
 
   document.querySelectorAll("form").forEach(changed);
 })();

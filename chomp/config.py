@@ -39,6 +39,12 @@ class Settings:
     backup_dir: str = "./backups"
     backup_keep: int = 14
     backup_at: str = "03:30"
+    # Food photos (#74); blank = a photos/ folder next to the database
+    photos_dir: str = ""
+
+    @property
+    def photos_path(self) -> Path:
+        return Path(self.photos_dir) if self.photos_dir else Path(self.db_path).parent / "photos"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -59,4 +65,5 @@ class Settings:
             backup_dir=os.environ.get("BACKUP_DIR", "./backups"),
             backup_keep=int(os.environ.get("BACKUP_KEEP", "14")),
             backup_at=os.environ.get("BACKUP_AT", "03:30"),
+            photos_dir=os.environ.get("PHOTOS_DIR", ""),
         )

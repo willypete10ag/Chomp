@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse
 from chomp import __version__, auth, db, logic, store, text, users, web
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
+from chomp.photos import Photos
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
 from chomp.sources.fdc import FDCClient
@@ -47,6 +48,19 @@ save_portion(estimated=true) so you don't ask again for that food. Only the amou
 estimated: calories and macros always come from Chomp. When the user gives a real weight,
 correct the entry (update_entry) and the portion (save_portion).\
 """
+
+
+def instructions(public_url: str) -> str:
+    """INSTRUCTIONS, plus where food photos go (#74) when the dashboard is reachable."""
+    if not public_url:
+        return INSTRUCTIONS
+    return (
+        f"{INSTRUCTIONS}\nPhotos: Chomp can't take a picture from chat. When the user wants a"
+        " photo on a food, give them its dashboard page to add it there:"
+        f" {public_url}/app/foods/<food_id>#photo (save_food and save_food_from_label return"
+        " it as add_photo_url). A nutrition label photo is never a food's picture."
+    )
+
 
 SEARCH_LIMIT_MAX = 25
 
@@ -128,6 +142,16 @@ def _food(row) -> Food:
         serving_g=row["serving_g"],
         serving_desc=row["serving_desc"],
     )
+
+
+ADD_PHOTO = (
+    "Link to the food's page on the Chomp dashboard, where the user can add a photo of it; "
+    "offer it once. Null when the food already has a photo."
+)
+
+
+class SavedFood(Food):
+    add_photo_url: str | None = Field(default=None, description=ADD_PHOTO)
 
 
 class Portion(BaseModel):
@@ -253,6 +277,7 @@ class LabelResult(BaseModel):
     barcode_moved_from_food_id: int | None = Field(
         description="A food that previously held this barcode; it keeps its id for past entries"
     )
+    add_photo_url: str | None = Field(default=None, description=ADD_PHOTO)
 
 
 class ConfirmResult(BaseModel):
@@ -413,13 +438,17 @@ ASK_FOR_LABEL = (
 
 
 def build_server(
-    settings: Settings, *, fdc: FDCClient | None = None, off: OFFClient | None = None
+    settings: Settings,
+    *,
+    fdc: FDCClient | None = None,
+    off: OFFClient | None = None,
+    photos: Photos | None = None,
 ) -> MCPServer:
     provider = auth.ChompAuthProvider(settings) if auth.check_settings(settings) else None
     server = MCPServer(
         name="chomp",
         version=__version__,
-        instructions=INSTRUCTIONS,
+        instructions=instructions(settings.public_url),
         auth=auth.auth_settings(settings) if provider else None,
         auth_server_provider=provider,
     )
@@ -427,7 +456,8 @@ def build_server(
         auth.add_consent_route(server, provider)
     fdc = fdc or FDCClient(settings.fdc_api_key)
     off = off or OFFClient(settings.off_user_agent)
-    web.add_routes(server, settings, provider, fdc, off)
+    photos = photos or Photos(settings.photos_path, off)
+    web.add_routes(server, settings, provider, fdc, off, photos)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
 
@@ -444,6 +474,12 @@ def build_server(
 
     def connect():
         return closing(db.connect(settings.db_path, current_user()))
+
+    def add_photo_url(food_id: int) -> str | None:
+        """Where the person can add a food's photo (#74): chat can't hand Chomp a picture."""
+        if not settings.public_url or photos.has(food_id):
+            return None
+        return f"{settings.public_url}{web.PREFIX}/foods/{food_id}#photo"
 
     def meal_out(conn, meal_id: int) -> Meal:
         meal = store.get_meal(conn, meal_id)
@@ -766,7 +802,9 @@ def build_server(
             raise ToolError(f"{e}. Ask the user to re-read the barcode digits.") from e
         with connect() as conn:
             hit = await barcode_lookup(conn, code, fdc, off)
+        photos.backfill_soon(settings.db_path)
         if hit.row is not None:
+            photos.fill_soon(hit.row["id"], hit.row["gtin"], hit.image_url)
             food = _food(hit.row)
             notes = list(hit.flags)
             if not food.verified and food.source == "off" and not notes:
@@ -874,7 +912,11 @@ def build_server(
                 serving_g=serving_g,
                 serving_desc=serving_desc,
             )
-            return LabelResult(food=_food(row), barcode_moved_from_food_id=moved_from)
+            return LabelResult(
+                food=_food(row),
+                barcode_moved_from_food_id=moved_from,
+                add_photo_url=add_photo_url(row["id"]),
+            )
 
     @server.tool(annotations=ADDS)
     def save_food(
@@ -909,7 +951,7 @@ def build_server(
         serving_desc: Annotated[
             str | None, Field(description="The serving in words, e.g. '1 bowl' or '1 cup'")
         ] = None,
-    ) -> Food:
+    ) -> SavedFood:
         """Save a food that has no package label or barcode: a restaurant dish from the
         restaurant's published nutrition information, or a home-cooked dish or recipe from
         numbers the user gives (for a whole recipe, its totals divided into servings by the
@@ -953,7 +995,7 @@ def build_server(
                 source="manual",
                 verified=confirmed,
             )
-            return _food(row)
+            return SavedFood(**_food(row).model_dump(), add_photo_url=add_photo_url(row["id"]))
 
     @server.tool(annotations=CHANGES)
     def confirm_food(
