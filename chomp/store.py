@@ -776,6 +776,18 @@ def list_recipes(conn: sqlite3.Connection) -> list[Recipe]:
     return [_recipe(conn, r) for r in rows]
 
 
+def recipe_food_ids(conn: sqlite3.Connection) -> set[int]:
+    """Food rows that stand for a recipe (anyone's): the Foods list leaves them out."""
+    return {r[0] for r in conn.execute("SELECT food_id FROM recipes WHERE food_id IS NOT NULL")}
+
+
+def recipe_of_food(conn: sqlite3.Connection, food_id: int) -> sqlite3.Row | None:
+    """The recipe (id, user_id, name) a food row stands for, if any."""
+    return conn.execute(
+        "SELECT id, user_id, name FROM recipes WHERE food_id = ?", (food_id,)
+    ).fetchone()
+
+
 def delete_recipe(conn: sqlite3.Connection, recipe_id: int) -> Recipe:
     """Delete one of this user's recipes. Its food row is deleted like any food (entries
     that logged it keep their snapshots). Returns the recipe as it was."""

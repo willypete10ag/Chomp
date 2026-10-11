@@ -77,6 +77,15 @@ the day's total, and the goals page's calorie bar (drag the borders between prot
 and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
+Recipes (#82) open from a book button in Today's bottom corner (`/app/recipes`): a list with
+calories per serving (tap to open, press and hold to edit, swipe left to delete), a recipe page
+(per-serving calories and macros, Ingredients and Steps folds, and a Log it card pinned at the
+bottom with the servings stepper, posting to `/app/log` with the recipe's food row), and an
+editor (name, servings it makes, ingredients found by searching your foods with grams for the
+whole recipe, steps one per line). The editor goes back to the server to search, add or remove
+an ingredient (`/app/recipes/draft`); the script swaps the new form in place. A recipe's food
+row stays out of Foods, and opening it as a food opens the recipe.
+
 New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
 `/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run

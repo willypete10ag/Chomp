@@ -656,3 +656,54 @@ button.found {
   display: block; width: 100%; text-align: left; background: none; color: inherit;
   padding: 0; min-height: 0; border-radius: 0; font-weight: inherit;
 }
+
+/* Recipes (#82): a book in the bottom corner of Today opens them */
+.fab {
+  position: fixed; z-index: 5; right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(4.4rem + env(safe-area-inset-bottom));
+  width: 3.25rem; height: 3.25rem; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; background: var(--card); color: var(--accent);
+  border: 1px solid var(--line); box-shadow: 0 4px 14px rgb(0 0 0 / .18);
+}
+.fab:active { background: var(--track); }
+body:has(.toast) .fab { display: none; }
+.step.edit-link { width: auto; padding: 0 .75rem; font-size: 1rem; font-weight: 600; }
+.ingredients li { display: flex; justify-content: space-between; gap: .75rem; }
+ul.ingredients:not(.plain) { margin-bottom: .5rem; }
+ul.ingredients:not(.plain) li {
+  display: grid; grid-template-columns: 1fr 6.5rem 4.2rem 2.75rem; align-items: center;
+  gap: .4rem; padding: .35rem 0; border-top: 1px solid var(--line);
+}
+ul.ingredients:not(.plain) li:first-child { border-top: 0; }
+.ingredient .field { display: flex; align-items: center; gap: .3rem; }
+.ingredient .field input { min-width: 0; text-align: right; }
+.ingredient .unit { color: var(--muted); font-size: .9rem; }
+.ingredient .kcal { font-weight: 400; text-align: right; }
+button.remove {
+  background: transparent; color: var(--muted); font-size: 1.4rem; padding: 0; min-width: 2.75rem;
+}
+.recipe-form .search { margin: .5rem 0 0; }
+.picks { margin-top: .5rem; }
+.picks li { border-top: 1px solid var(--line); }
+.picks li:first-child { border-top: 0; }
+button.pick {
+  display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; width: 100%;
+  text-align: left; background: transparent; color: var(--text); padding: .5rem 0; gap: 0 .75rem;
+}
+button.pick .muted { grid-column: 1; }
+button.pick .plus {
+  grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--accent);
+  font-size: 1.5rem; font-weight: 600;
+}
+textarea {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: .55rem .7rem; width: 100%; resize: vertical;
+}
+ol.steps { margin: 0; padding-left: 1.4rem; }
+ol.steps li { padding: .3rem 0; }
+/* Log it stays in reach at the bottom of a recipe, above the tab bar */
+.log-recipe {
+  position: sticky; bottom: calc(4.2rem + env(safe-area-inset-bottom)); z-index: 4;
+  box-shadow: 0 -4px 16px rgb(0 0 0 / .12); max-height: 70vh; overflow-y: auto;
+}
+.log-recipe .fold:not([open]) > summary h2 { margin: 0; }
