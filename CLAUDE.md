@@ -25,6 +25,7 @@ chomp/
   barcode.py       # barcode chain (saved -> FDC -> OFF), shared by the tool and dashboard
   label.py         # nutrition label photo OCR (tesseract) and its text parser
   photos.py        # food photos: files, Open Food Facts fill and backfill
+  serving_fill.py  # serving sizes for used USDA generic foods from household measures
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
   web.py           # /app web dashboard (server-rendered, sign-in, entry edits)

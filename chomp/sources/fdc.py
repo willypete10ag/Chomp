@@ -132,7 +132,70 @@ def _name(food: Mapping[str, Any]) -> str:
     return name.title() if name.isupper() else name
 
 
+# Household measures that are a weight or a volume, not a countable thing like "1 large"
+MEASURE_WORDS = {
+    "cup", "cups", "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
+    "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds", "g", "gram", "grams", "kg",
+    "ml", "milliliter", "milliliters", "l", "liter", "liters", "fl", "pint", "pints",
+    "quart", "quarts", "gallon", "gallons",
+}  # fmt: skip
+NOT_A_SERVING = {"g", "gram", "grams", "kg", "lb", "lbs", "pound", "pounds"}  # bare weights
+UNSPECIFIED = ("quantity not specified", "not specified")
+
+
+def _portion_text(p: Mapping[str, Any]) -> str:
+    """'1 large' from a search hit's foodMeasures entry or a detail's foodPortions entry."""
+    text_ = (p.get("disseminationText") or p.get("portionDescription") or "").strip()
+    if text_:
+        return text_
+    unit = p.get("measureUnit") or {}
+    unit_name = (unit.get("name") if isinstance(unit, Mapping) else None) or p.get(
+        "measureUnitName"
+    )
+    if (unit_name or "").lower() == "undetermined":
+        unit_name = None
+    modifier = str(p.get("modifier") or "").strip()
+    if modifier.isdigit():  # FNDDS codes, not words
+        modifier = ""
+    amount = p.get("amount")
+    words = [f"{float(amount):g}" if amount else "1", unit_name or "", modifier]
+    return " ".join(w for w in words if w).strip()
+
+
+def household_serving(food: Mapping[str, Any]) -> tuple[float, str] | None:
+    """A generic food's serving from USDA's household measures ("1 large" = 50 g), for
+    foods with no label serving. One of a thing (1 medium, 1 large, 1 slice) is preferred,
+    medium before large; otherwise the first single measure in USDA's order (1 cup)."""
+    measures = food.get("foodMeasures") or food.get("foodPortions") or []
+    picks: list[tuple[tuple[int, int, int], float, str]] = []
+    for i, p in enumerate(measures):
+        if not isinstance(p, Mapping):
+            continue
+        try:
+            grams = float(p.get("gramWeight") or 0)
+        except (TypeError, ValueError):
+            continue
+        desc = _portion_text(p)
+        words = desc.lower().replace(",", " ").replace("(", " ").split()
+        if not (0 < grams <= 2000) or len(words) < 2 or words[0] not in ("1", "1.0"):
+            continue
+        if words[1] in NOT_A_SERVING or any(u in desc.lower() for u in UNSPECIFIED):
+            continue
+        counted = words[1] not in MEASURE_WORDS
+        size = 0 if "medium" in words else 1 if "large" in words and "extra" not in words else 2
+        order = p.get("rank") or p.get("sequenceNumber") or i
+        picks.append(((0 if counted else 1, size if counted else 0, int(order)), grams, desc))
+    if not picks:
+        return None
+    _, grams, desc = min(picks, key=lambda x: x[0])
+    return grams, f"{desc} ({grams:g} g)"
+
+
 def _serving(food: Mapping[str, Any]) -> tuple[float | None, str | None]:
+    if food.get("dataType") != BRANDED and not food.get("servingSize"):
+        household = household_serving(food)
+        if household:
+            return household
     size, unit = food.get("servingSize"), (food.get("servingSizeUnit") or "").strip()
     household = (food.get("householdServingFullText") or "").strip()
     serving_g = float(size) if size and unit.lower() in GRAM_UNITS else None

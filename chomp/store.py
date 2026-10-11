@@ -104,7 +104,9 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
                     (rec.gtin if free else row["gtin"], row["id"]),
                 )
                 row = get_food(conn, row["id"])
-            return (_fill_micros(conn, row, n) if same else row), False
+            if same:
+                row = fill_serving(conn, _fill_micros(conn, row, n), rec)
+            return row, False
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS},"
             f" serving_g, serving_desc) VALUES (?, ?, ?, ?, ?, 0, {NUTRIENT_MARKS}, ?, ?)",
@@ -120,6 +122,18 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
             ),
         )
         return get_food(conn, cur.lastrowid), True
+
+
+def fill_serving(conn: sqlite3.Connection, row: sqlite3.Row, rec: FoodRecord) -> sqlite3.Row:
+    """Give a food with no serving size the one its upstream record now has (USDA household
+    measures for generic foods, after they were cached without one)."""
+    if row["serving_g"] is not None or rec.serving_g is None:
+        return row
+    conn.execute(
+        "UPDATE foods SET serving_g = ?, serving_desc = ? WHERE id = ? AND serving_g IS NULL",
+        (rec.serving_g, rec.serving_desc, row["id"]),
+    )
+    return get_food(conn, row["id"])
 
 
 def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients) -> sqlite3.Row:

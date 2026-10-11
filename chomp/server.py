@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, auth, db, logic, store, text, users, web
+from chomp import __version__, auth, db, logic, serving_fill, store, text, users, web
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.photos import Photos
@@ -566,6 +566,7 @@ def build_server(
         notes: list[str] = []
         hits: list[SearchHit] = []
         seen: set[int] = set()
+        serving_fill.backfill_soon(settings.db_path, fdc)  # once: servings for USDA foods
 
         def add(row, **extra) -> None:
             if row["id"] not in seen and len(hits) < limit:

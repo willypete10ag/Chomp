@@ -43,7 +43,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db, logic, store, users
+from chomp import db, logic, serving_fill, store, users
 from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
@@ -2084,6 +2084,7 @@ def add_routes(
     async def add_food(request: Request) -> Response:
         if not signed_in(request):
             return to_login(request)
+        serving_fill.backfill_soon(settings.db_path, fdc)  # once: servings for USDA foods
         params = request.query_params
         try:
             day = parse_day(params.get("date"))
@@ -3280,6 +3281,7 @@ def add_routes(
         if not signed_in(request):
             return to_login(request)
         photos.backfill_soon(settings.db_path)  # once: photos for barcode foods saved before #74
+        serving_fill.backfill_soon(settings.db_path, fdc)
         q = request.query_params.get("q", "").strip()[:100]
         view = request.query_params.get("view", "most")
         if view not in FOOD_VIEWS:
