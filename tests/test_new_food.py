@@ -274,16 +274,52 @@ def test_typed_in_food_ticked_verified_is_confirmed(app, conn):
 def test_confirm_a_food_by_hand_and_take_it_back(app, conn):
     row = saved(conn, app.post("/app/foods/new", data=food_form(name="Mom's chili")))
     page = app.get("/app/foods").text
-    assert f'action="/app/foods/{row["id"]}/confirm"' in page and ">Confirm</button>" in page
+    # Swipe right on an unconfirmed food shows Confirm (#72)
+    swipe = f'class="swipe-action confirm js-only" method="post" action="/app/foods/{row["id"]}/'
+    assert swipe + 'confirm"' in page
+    assert 'aria-label="Confirm Mom&#x27;s chili">Confirm</button>' in page
+    assert ">Confirm</button>" in app.get(f"/app/foods/{row['id']}").text
     r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "1", "back": "/app/foods"})
     assert r.status_code == 303 and store.get_food(conn, row["id"])["verified"]
     page = app.get(r.headers["location"]).text
-    assert "Marked Mom&#x27;s chili as confirmed." in page and "Mark unconfirmed" in page
-    assert 'class="swipe unconfirmed"' not in page
+    assert "Marked Mom&#x27;s chili as confirmed." in page
+    assert 'class="swipe unconfirmed"' not in page and "swipe-action confirm" not in page
+    assert "Mark unconfirmed" in app.get(f"/app/foods/{row['id']}").text
     r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "0", "back": "/app/foods"})
     assert not store.get_food(conn, row["id"])["verified"]
     assert "as unconfirmed." in app.get(r.headers["location"]).text
     assert app.post("/app/foods/999/confirm", data={"confirmed": "1"}).status_code == 404
+
+
+def test_edit_a_food_from_its_page(app, conn):
+    row = saved(conn, app.post("/app/foods/new", data=food_form(verified="1")))
+    here = f"/app/foods/{row['id']}?back=%2Fapp%2Ffoods"
+    page = app.get(f"/app/foods/{row['id']}/edit", params={"back": here})
+    assert page.status_code == 200 and "<h1>Edit food</h1>" in page.text
+    assert 'name="mode" value="edit"' in page.text and 'value="Trail mix"' in page.text
+    assert 'name="kcal"' in page.text and 'value="200"' in page.text
+    assert 'name="verified" value="1" checked' in page.text and "Save changes" in page.text
+    # Only the changed value moves; unticking Verified makes it unconfirmed
+    form = food_form(mode="edit", food_id=row["id"], back=here, name="Trail mix, salty", kcal="210")
+    r = app.post("/app/foods/new", data=form)
+    assert r.status_code == 303 and r.headers["location"].startswith(here + "&done=")
+    after = store.get_food(conn, row["id"])
+    assert after["name"] == "Trail mix, salty" and after["kcal"] == 525 and not after["verified"]
+    assert after["protein_g"] == row["protein_g"] and after["serving_g"] == 40
+    assert "Edited Trail mix, salty." in app.get(r.headers["location"]).text
+    # A food with no serving size shows 100 g; describing it keeps that serving
+    conn.execute("UPDATE foods SET serving_g = NULL WHERE id = ?", (row["id"],))
+    bare = food_form(mode="edit", food_id=row["id"], back=here, serving_g="100", kcal="525")
+    r = app.post("/app/foods/new", data=bare | {"protein_g": "15", "carbs_g": "45", "fat_g": "30"})
+    assert r.status_code == 303 and store.get_food(conn, row["id"])["serving_g"] is None
+    r = app.post("/app/foods/new", data=bare | {"serving_desc": "1 cup"})
+    assert store.get_food(conn, row["id"])["serving_g"] == 100
+    # A bad value comes back on the edit form
+    r = app.post("/app/foods/new", data=form | {"kcal": "lots"})
+    assert r.status_code == 400 and "<h1>Edit food</h1>" in r.text
+    r = app.post("/app/foods/new", data=food_form(mode="edit", food_id=999))
+    assert r.status_code == 404
+    assert app.get("/app/foods/999/edit").status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -378,9 +414,9 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
     nutella = store.food_by_gtin(conn, "0" + NUTELLA)
 
     page = app.get("/app/foods").text
-    assert f'action="/app/foods/{oats}/delete"' in page and "Yes, delete Rolled oats" in page
-    assert 'class="swipe-action js-only"' in page and 'class="sub confirm no-js"' in page
-    assert "Press and hold a food" in page
+    assert f'action="/app/foods/{oats}/delete"' in page and 'class="swipe-action js-only"' in page
+    assert "press and hold it for more" in page
+    assert "Yes, delete Rolled oats" in app.get(f"/app/foods/{oats}").text
     r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?view=recent"})
     assert r.status_code == 303
     assert r.headers["location"] == "/app/foods?view=recent&removed=Rolled+oats&meals=2"
