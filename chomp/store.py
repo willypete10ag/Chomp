@@ -349,17 +349,17 @@ def search_foods(
     conn: sqlite3.Connection,
     query: str,
     limit: int,
-    sort: str = "most",
+    sort: str | None = None,
     desc: bool = True,
     per_serving: bool = False,
 ) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
-    verified first, then by relevance; any other sort (FOOD_SORTS, see food_order) orders
-    them by it instead."""
+    verified first, then by relevance; a `sort` (FOOD_SORTS, see food_order, as the Foods
+    page asks) orders them by it instead."""
     match = fts_query(query)
     if match is None:
         return []
-    order = None if sort == "most" and desc else food_order(sort, desc, per_serving)
+    order = food_order(sort, desc, per_serving) if sort else None
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     user = user_of(conn)
     rows = conn.execute(

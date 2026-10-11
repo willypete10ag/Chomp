@@ -384,6 +384,7 @@ def test_foods_sort_by_and_per_serving(app, conn):
     # per serving: bran 17 (per 100 g, no serving size), milk 2.4, cookie 1.8
     assert names("protein", per_serving=True) == ["Oat bran", "Oat milk", "Oat cookie"]
     assert names("protein", False, True, "oat") == ["Oat cookie", "Oat milk", "Oat bran"]
+    assert names("most", q="oat") == ["Oat bran", "Oat milk", "Oat cookie"]  # not relevance
     assert names("kcal", desc=False) == ["Oat milk", "Oat bran", "Oat cookie"]
 
     page = app.get("/app/foods").text
