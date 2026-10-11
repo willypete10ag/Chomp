@@ -101,6 +101,8 @@ def test_tapping_an_off_result_keeps_it_unconfirmed(app, conn, upstream):
     text = app.get("/app/foods/new", params={"q": "hummus"}).text
     assert "Classic hummus" in text and "Crowd-sourced" in text
     assert "No matches in USDA FoodData Central." in text
+    # shown but not tapped: OFF hits are a lookup cache, like USDA's
+    assert "Classic hummus" not in app.get("/app/foods", params={"q": "hummus"}).text
     row = conn.execute("SELECT id FROM foods WHERE source_id = '5000112637922'").fetchone()
     r = app.post("/app/foods/found", data={"food_id": row["id"]})
     assert r.status_code == 303
@@ -108,6 +110,7 @@ def test_tapping_an_off_result_keeps_it_unconfirmed(app, conn, upstream):
     assert food["verified"] == 0
     foods = app.get("/app/foods").text
     assert "Classic hummus" in foods and "Unconfirmed" in foods
+    assert "Hummus chips" not in foods
 
 
 def test_one_source_down_still_shows_the_other(app, upstream, egg_whites):
