@@ -99,3 +99,22 @@ async def test_backfill_fills_used_foods(settings, conn, fdc, upstream):
     # nothing left to fill: no more requests
     assert await serving_fill.backfill(settings.db_path, fdc, pause_s=0) == 0
     assert len(upstream.requests) == 1
+
+
+@pytest.mark.anyio
+async def test_later_scans_take_newly_used_foods_and_skip_tried_ones(settings, conn, fdc, upstream):
+    bare, _ = store.cache_record(conn, fdcmod.to_record(egg_hit()))
+    later, _ = store.cache_record(
+        conn, fdcmod.to_record(egg_hit(fdcId=999, description="Egg, later"))
+    )
+    add = "INSERT INTO portions (user_id, food_id, name, grams) VALUES (1, ?, 'bowl', 200)"
+    conn.execute(add, (bare["id"],))
+    upstream.add(f"/fdc/v1/food/{bare['source_id']}", egg_hit())  # USDA lists no measures
+    assert await serving_fill.backfill(settings.db_path, fdc, pause_s=0) == 0
+    conn.execute(add, (later["id"],))  # used after the first scan
+    portions = [{"amount": 1, "modifier": "large", "gramWeight": 50}]
+    upstream.add("/fdc/v1/food/999", egg_hit(fdcId=999, foodPortions=portions))
+    assert await serving_fill.backfill(settings.db_path, fdc, pause_s=0) == 1
+    assert store.get_food(conn, later["id"])["serving_g"] == 50
+    paths = [r.url.path for r in upstream.requests]
+    assert paths == [f"/fdc/v1/food/{bare['source_id']}", "/fdc/v1/food/999"]
