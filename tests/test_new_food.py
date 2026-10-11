@@ -354,37 +354,59 @@ def test_new_food_needs_sign_in_and_same_origin(http, conn):  # noqa: F811
 # --- Foods page filters and folding sections -----------------------------------------------
 
 
-def test_foods_filters_narrow_and_reorder(app, conn):
+def test_foods_sort_by_and_per_serving(app, conn):
     from test_tools import add_food
 
-    old = add_food(conn, "Oat bran", 246, 17, 66, 7, verified=1)
+    old = add_food(conn, "Oat bran", 246, 17, 66, 7, verified=1)  # no serving size
     eaten = add_food(conn, "Oat milk", 48, 1, 7, 2)
     new = add_food(conn, "Oat cookie", 450, 6, 65, 18)
+    conn.execute("UPDATE foods SET serving_g = 240 WHERE id = ?", (eaten,))
+    conn.execute("UPDATE foods SET serving_g = 30 WHERE id = ?", (new,))
     store.log_meal(conn, [(old, 50)], "2026-10-01T12:00:00Z", None)
     store.log_meal(conn, [(old, 50)], "2026-10-02T12:00:00Z", None)
     store.log_meal(conn, [(eaten, 200)], "2026-10-03T12:00:00Z", None)
     store.save_template(conn, "oat breakfast", [(old, 40)])
 
-    def names(view, q=""):
-        rows = store.search_foods(conn, q, 10, view) if q else store.list_used_foods(conn, 10, view)
+    def names(sort, desc=True, per_serving=False, q=""):
+        if q:
+            rows = store.search_foods(conn, q, 10, sort, desc, per_serving)
+        else:
+            rows = store.list_used_foods(conn, 10, sort, desc, per_serving)
         return [r["name"] for r in rows]
 
     assert names("most") == ["Oat bran", "Oat milk", "Oat cookie"]
-    assert names("recent") == ["Oat milk", "Oat bran"]  # only foods this user logged
-    assert names("new")[0] == "Oat cookie" and new
-    assert names("confirmed") == ["Oat bran"]
-    assert names("unconfirmed", "oat") == ["Oat milk", "Oat cookie"]
+    assert names("most", desc=False) == ["Oat cookie", "Oat milk", "Oat bran"]
+    assert names("recent") == ["Oat milk", "Oat bran", "Oat cookie"]  # never logged: last
+    assert names("recent", desc=False) == ["Oat bran", "Oat milk", "Oat cookie"]
+    assert names("new")[0] == "Oat cookie"
+    assert names("unconfirmed") == ["Oat milk", "Oat cookie", "Oat bran"]
+    assert names("protein") == ["Oat bran", "Oat cookie", "Oat milk"]  # 17, 6, 1 per 100 g
+    # per serving: bran 17 (per 100 g, no serving size), milk 2.4, cookie 1.8
+    assert names("protein", per_serving=True) == ["Oat bran", "Oat milk", "Oat cookie"]
+    assert names("protein", False, True, "oat") == ["Oat cookie", "Oat milk", "Oat bran"]
+    assert names("most", q="oat") == ["Oat bran", "Oat milk", "Oat cookie"]  # not relevance
+    assert names("kcal", desc=False) == ["Oat milk", "Oat bran", "Oat cookie"]
 
     page = app.get("/app/foods").text
     assert 'data-fold="meals"' in page and 'data-fold="foods"' in page and " open>" in page
-    assert "aria-current=page>Most used<" in page
-    page = app.get("/app/foods?view=recent").text
-    assert "aria-current=page>Recent<" in page and "last logged first" in page
-    assert "last Sat, Oct 3" in page and "Saved meals" not in page  # filters show foods only
-    page = app.get("/app/foods?view=confirmed&q=oat").text
-    assert "Oat bran" in page and "Oat milk" not in page
-    assert '<input type="hidden" name="view" value="confirmed">' in page
-    assert "Oat milk" in app.get("/app/foods?view=bogus").text  # unknown view: everything
+    assert 'class="sortbar"' in page and 'value="most" selected>Most logged<' in page
+    assert "Unconfirmed first" in page and "aria-current=page>Recent<" not in page  # no chips
+    assert "most logged first" not in page and 'class="badge">100 g<' not in page
+
+    page = app.get("/app/foods?sort=protein&per=serving").text
+    assert 'value="protein" selected>Protein<' in page and 'value="serving" selected' in page
+    assert page.index("Oat milk") < page.index("Oat cookie")
+    assert 'class="badge">100 g<' in page  # Oat bran has no serving size
+    assert "115 <small>kcal" in page  # 240 ml of oat milk
+    assert "highest first" in page and "dir=up" in page
+
+    page = app.get("/app/foods").text  # remembered on this device
+    assert 'value="protein" selected' in page and 'value="serving" selected' in page
+    page = app.get("/app/foods?sort=protein&dir=up&per=serving&q=oat").text
+    assert page.index("Oat cookie") < page.index("Oat milk") and "lowest first" in page
+    page = app.get("/app/foods?sort=recent").text  # a new sort: high to low, per 100 g
+    assert "last Sat, Oct 3" in page and 'value="100g" selected' in page
+    assert "Oat milk" in app.get("/app/foods?sort=bogus").text  # unknown sort: most logged
 
 
 def test_read_photo_refuses_huge_images_before_decoding():
@@ -417,9 +439,9 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
     assert f'action="/app/foods/{oats}/delete"' in page and 'class="swipe-action js-only"' in page
     assert "press and hold it for more" in page
     assert "Yes, delete Rolled oats" in app.get(f"/app/foods/{oats}").text
-    r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?view=recent"})
+    r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?q=oat"})
     assert r.status_code == 303
-    assert r.headers["location"] == "/app/foods?view=recent&removed=Rolled+oats&meals=2"
+    assert r.headers["location"] == "/app/foods?q=oat&removed=Rolled+oats&meals=2"
     assert "Deleted Rolled oats. It left 2 saved meals." in app.get(r.headers["location"]).text
 
     assert "oats" not in [r["name"] for r in store.list_used_foods(conn, 10)]

@@ -757,6 +757,13 @@
     });
   });
 
+  // Foods (#91): picking per 100 g / per serving or a sort shows it, no Go button needed
+  document.querySelectorAll("select[data-autosubmit]").forEach(function (select) {
+    select.addEventListener("change", function () {
+      select.form.submit();
+    });
+  });
+
   // The month view (#71): tapping the day's title opens it as a sheet over the page. Month
   // arrows and the year list load the next month into the sheet; a day opens that day.
   // A tap outside, Escape or the back button closes it. Without this, the title opens

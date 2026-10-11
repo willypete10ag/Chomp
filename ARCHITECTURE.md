@@ -49,9 +49,10 @@ nutrition facts, where tapping a nutrient lists the foods that gave the most; a 
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
 out), History (7/30/90-day averages and inline-SVG charts; each day links to its Breakdown)
 and Foods (one search over saved
-meals and used foods, most logged first, with filters for recent, newest,
-unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
-in the browser. A tap opens a food's page (#72): name, brand and calories, protein, carbs
+meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
+(most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
+`store.FOOD_SORTS`) with an arrow for high or low, remembered on the device in a cookie (#91),
+and sections that fold away, remembered in the browser. A tap opens a food's page (#72): name, brand and calories, protein, carbs
 and fat, nutrition facts per serving and per 100 g, vitamins and minerals folded away, your
 portions of it (#75: swipe one left to delete it, press and hold it to change its name or
 grams, or + Add portion), then Log it, Confirm, Edit (all values, `/foods/{id}/edit`, with

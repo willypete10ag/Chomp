@@ -332,31 +332,51 @@ LAST_USED = (
     " WHERE e.food_id = f.id AND m.user_id = ?) AS last_used"
 )
 MOST_USED = "uses DESC, f.verified DESC, f.name COLLATE NOCASE, f.id"
-# Ways to narrow or order the Foods list and its search (#59 follow-up): view -> (extra
-# condition, order). None for the order keeps search results by relevance.
-FOOD_VIEWS = {
-    "most": ("1", None),
-    "recent": ("last_used IS NOT NULL", "last_used DESC, f.id DESC"),
-    "new": ("1", "f.created_at DESC, f.id DESC"),
-    "unconfirmed": ("f.verified = 0", None),
-    "confirmed": ("f.verified = 1", None),
+# Ways to order the Foods list and its search (#91): sort -> the column it sorts by. Each
+# sorts high to low (most, latest, unconfirmed first) unless asked for low to high; foods with
+# no value go last either way, and ties fall back to MOST_USED.
+FOOD_SORTS = {
+    "most": "uses",
+    "recent": "last_used",
+    "new": "f.id",  # ids only grow, and same-second foods still order
+    "unconfirmed": "(f.verified = 0)",
+    "kcal": "f.kcal",
+    "protein": "f.protein_g",
+    "fat": "f.fat_g",
+    "carbs": "f.carbs_g",
 }
+MACRO_SORTS = ("kcal", "protein", "fat", "carbs")
+
+
+def food_order(sort: str, desc: bool = True, per_serving: bool = False) -> str:
+    """ORDER BY for the Foods list. Macro sorts compare the values shown: per serving when
+    `per_serving` (per 100 g for a food with no serving size), else per 100 g."""
+    col = FOOD_SORTS.get(sort, "uses")
+    if per_serving and sort in MACRO_SORTS:
+        col = f"({col} * coalesce(f.serving_g, 100) / 100)"
+    return f"{col} IS NULL, {col} {'DESC' if desc else 'ASC'}, {MOST_USED}"
 
 
 def search_foods(
-    conn: sqlite3.Connection, query: str, limit: int, view: str = "most"
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    sort: str | None = None,
+    desc: bool = True,
+    per_serving: bool = False,
 ) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
-    verified first, then by relevance. A `view` (FOOD_VIEWS) narrows or reorders them."""
+    verified first, then by relevance; a `sort` (FOOD_SORTS, see food_order, as the Foods
+    page asks) orders them by it instead."""
     match = fts_query(query)
     if match is None:
         return []
-    where, order = FOOD_VIEWS[view]
+    order = food_order(sort, desc, per_serving) if sort else None
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     user = user_of(conn)
     rows = conn.execute(
         f"SELECT {cols}, {USES}, {LAST_USED} FROM foods_fts JOIN foods f"
-        f" ON f.id = foods_fts.rowid WHERE foods_fts MATCH ? AND {USED_FOOD} AND {where}"
+        f" ON f.id = foods_fts.rowid WHERE foods_fts MATCH ? AND {USED_FOOD}"
         f" ORDER BY {order or 'f.verified DESC, bm25(foods_fts)'}",
         (user, user, match),
     )
@@ -371,15 +391,20 @@ def search_foods(
     return found
 
 
-def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") -> list[sqlite3.Row]:
+def list_used_foods(
+    conn: sqlite3.Connection,
+    limit: int,
+    sort: str = "most",
+    desc: bool = True,
+    per_serving: bool = False,
+) -> list[sqlite3.Row]:
     """Foods the user has used (see USED_FOOD), most logged first, then verified, then by
-    name. A `view` (FOOD_VIEWS) narrows or reorders them."""
-    where, order = FOOD_VIEWS[view]
+    name; another sort (FOOD_SORTS, see food_order) orders them by it instead."""
     cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
     user = user_of(conn)
     return conn.execute(
-        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods f WHERE {USED_FOOD} AND {where}"
-        f" ORDER BY {order or MOST_USED} LIMIT ?",
+        f"SELECT {cols}, {USES}, {LAST_USED} FROM foods f WHERE {USED_FOOD}"
+        f" ORDER BY {food_order(sort, desc, per_serving)} LIMIT ?",
         (user, user, limit),
     ).fetchall()
 
