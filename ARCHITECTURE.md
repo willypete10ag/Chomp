@@ -77,6 +77,15 @@ the day's total, and the goals page's calorie bar (drag the borders between prot
 and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
+Recipes (#82) open from a book button in Today's bottom corner (`/app/recipes`): a list with
+calories per serving (tap to open, press and hold to edit, swipe left to delete), a recipe page
+(per-serving calories and macros, Ingredients and Steps folds, and a Log it card pinned at the
+bottom with the servings stepper, posting to `/app/log` with the recipe's food row), and an
+editor (name, servings it makes, ingredients found by searching your foods with grams for the
+whole recipe, steps one per line). The editor goes back to the server to search, add or remove
+an ingredient (`/app/recipes/draft`); the script swaps the new form in place. A recipe's food
+row stays out of Foods, and opening it as a food opens the recipe.
+
 New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
 `/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run
@@ -109,7 +118,7 @@ food's page) when it has none, and the server instructions tell Claude to send t
 
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
-`portions`, `meal_templates`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
+`portions`, `meal_templates`, `recipes`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
 `user_id`; `foods` are shared, so anyone's saved or label foods turn up in everyone's search
 (use counts are per person). User 1 is the owner, holds everything logged before users
 existed, and signs in with `AUTH_PASSWORD`. Others are added with `chomp user add NAME` and
@@ -137,6 +146,7 @@ local-only mode everything is the owner's.
 | `set_targets` | Set daily kcal/protein/carbs/fat targets; only given ones change | `kcal?`, `protein_g?`, `carbs_g?`, `fat_g?`, `clear?` |
 | `save_portion` / `forget_portion` | Remember (or forget) what one of the user's portions of a food weighs ("my handful of Cheez-Its = 30 g") | `food_id`, `name`, `grams`, `count?`, `estimated?` / `food_id`, `name` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
+| `save_recipe` / `get_recipe` / `delete_recipe` | The user's homemade recipes (#82): ingredients from foods with grams, steps, servings it makes; returns nutrition per serving and the recipe's `food_id` for `log_entries` | `name`, `servings`, `ingredients`, `steps?` / `name?` (omit to list) / `recipe_id` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
 
@@ -159,6 +169,14 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   hidden from search and lists, its barcode released; everyone's portions of it go, and it
   leaves every saved meal (an emptied one goes too). If the same USDA or Open Food Facts
   record turns up again it comes back, barcode included.
+- Recipes (#82, migration 0012): each user's `recipes` (name, servings it makes, steps one
+  per line) and `recipe_ingredients` (food, grams for the whole recipe). Nutrition is the
+  ingredients' sum (`logic.recipe_nutrition`); an optional nutrient counts only if every
+  ingredient reports it. Each recipe keeps a confirmed food row (brand `Recipe`, source
+  `manual`, `serving_g` = raw ingredient weight / servings) so it is searched and logged like
+  any food, by servings. The row follows the recipe and its ingredients (re-summed when an
+  ingredient is corrected); it can't be edited, renamed or deleted as a food, only through
+  the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),

@@ -1,9 +1,10 @@
 """CSV and JSON export of the meal log (#34).
 
 CSV is one row per logged entry, for spreadsheets. JSON is everything a person would want to
-keep: foods, meals with their entries, portions, meal templates and targets. Times are local
-ISO 8601 with offset; nutrient values are the stored snapshots, unrounded. An export covers
-the user the connection was opened for (#46); foods are shared and always exported in full.
+keep: foods, meals with their entries, portions, meal templates, recipes and targets. Times
+are local ISO 8601 with offset; nutrient values are the stored snapshots, unrounded.
+An export covers the user the connection was opened for (#46); foods are shared
+and always exported in full.
 """
 
 from __future__ import annotations
@@ -91,7 +92,7 @@ def to_json(
     conn: sqlite3.Connection, tz: str, start: date | None = None, end: date | None = None
 ) -> dict:
     """Everything in the log as plain data. A date range limits meals only; foods,
-    portions, templates and targets are always included in full."""
+    portions, templates, recipes and targets are always included in full."""
     lo, hi = _bounds(start, end, tz)
     meals: dict[int, dict] = {}
     for r in _entries(conn, lo, hi):
@@ -128,6 +129,19 @@ def to_json(
             (t["id"],),
         )
         templates.append({"name": t["name"], "items": items})
+    recipes = []
+    for r in _dicts(
+        conn,
+        "SELECT id, name, servings, steps, food_id FROM recipes WHERE user_id = ? ORDER BY name",
+        (user_id,),
+    ):
+        ingredients = _dicts(
+            conn,
+            "SELECT food_id, grams FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+            (r.pop("id"),),
+        )
+        steps = (r["steps"] or "").splitlines()
+        recipes.append({**r, "steps": steps, "ingredients": ingredients})
     targets = conn.execute(
         "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE user_id = ?", (user_id,)
     ).fetchone()
@@ -158,6 +172,7 @@ def to_json(
             )
         ],
         "meal_templates": templates,
+        "recipes": recipes,
         "targets": dict(targets) if targets else None,
     }
 

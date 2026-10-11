@@ -426,6 +426,7 @@
       held = true;
       if (navigator.vibrate) navigator.vibrate(15);
       if (details) details.open = true;
+      else if (li.dataset.hold) location.href = li.dataset.hold; // a recipe opens to edit
       else holdMenu(li);
     }
     body.addEventListener("pointerdown", function (event) {
@@ -452,7 +453,8 @@
       if (!details && event.pointerType !== "touch") {
         event.preventDefault();
         hide();
-        holdMenu(li);
+        if (li.dataset.hold) location.href = li.dataset.hold;
+        else holdMenu(li);
       }
     });
     body.addEventListener("pointermove", function (event) {
@@ -853,6 +855,45 @@
       location.href = href;
     });
   }
+
+  // The recipe editor (#82): searching for, adding or removing an ingredient asks the
+  // server for the form again and swaps it in place, so the page doesn't jump
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    var by = event.submitter;
+    if (!form.hasAttribute("data-draft") || !by || !by.hasAttribute("formaction")) return;
+    event.preventDefault();
+    var data = new FormData(form);
+    if (by.name) data.append(by.name, by.value);
+    fetch(by.formAction, { method: "POST", body: data, credentials: "same-origin" })
+      .then(function (response) {
+        if (!response.ok) throw new Error(response.status);
+        return response.text();
+      })
+      .then(function (text) {
+        var page = new DOMParser().parseFromString(text, "text/html");
+        var fresh = page.querySelector("form[data-draft]");
+        if (!fresh) throw new Error("no form");
+        form.replaceWith(fresh);
+        var focus = null;
+        if (by.name === "add") {
+          var boxes = fresh.querySelectorAll('input[name="grams"]');
+          focus = boxes[boxes.length - 1];
+        } else if (by.name === "do") {
+          focus = fresh.querySelector(".picks button") || fresh.querySelector("[data-draft-search]");
+        }
+        if (focus) {
+          focus.focus({ preventScroll: true });
+          if (focus.select) focus.select();
+          focus.scrollIntoView({ block: "nearest" });
+        }
+      })
+      .catch(function () {
+        form.removeAttribute("data-draft");
+        if (form.requestSubmit) form.requestSubmit(by);
+        else by.click();
+      });
+  });
 
   document.querySelectorAll("form").forEach(changed);
 })();
