@@ -4,6 +4,7 @@ Backups use SQLite's online backup API (what `sqlite3 .backup` uses), so they ar
 while the server is running. Each copy is integrity-checked before it gets its final name.
 Food photos (#74) are copied alongside into one photos/ folder: new and changed files only,
 and none are deleted there, so a photo removed today is still there for an older backup.
+A restore keeps only photos of foods in the restored database (see restore_photos).
 """
 
 from __future__ import annotations
@@ -45,9 +46,9 @@ def backups(dest_dir: Path) -> list[Path]:
     return sorted(p for p in dest_dir.iterdir() if NAME_RE.match(p.name))
 
 
-def copy_photos(src_dir: str | Path, dest_dir: str | Path, *, only_missing: bool = False) -> int:
+def copy_photos(src_dir: str | Path, dest_dir: str | Path) -> int:
     """Copy food photos (and their removal markers) from src_dir to dest_dir: files that are
-    new or changed there, or with only_missing, files dest_dir lacks. Returns how many."""
+    new or changed there. Returns how many."""
     src, dest = Path(src_dir), Path(dest_dir)
     if not src.is_dir():
         return 0
@@ -58,7 +59,7 @@ def copy_photos(src_dir: str | Path, dest_dir: str | Path, *, only_missing: bool
         target = dest / f.name
         if target.exists():
             same = target.stat().st_size == f.stat().st_size
-            if only_missing or (same and target.stat().st_mtime_ns >= f.stat().st_mtime_ns):
+            if same and target.stat().st_mtime_ns >= f.stat().st_mtime_ns:
                 continue
         dest.mkdir(parents=True, exist_ok=True)
         partial = dest / f".{f.name}.partial"
@@ -117,8 +118,8 @@ def restore(
     """Replace the database at db_path with backup_file. Stop the server first.
 
     The current database is first saved next to it as <name>.pre-restore-<time>; that path
-    is returned (None if there was no database). Food photos saved beside the backup that
-    photos_dir lacks are copied back; photos already there stay."""
+    is returned (None if there was no database). Food photos are matched to the restored
+    database by restore_photos."""
     src_path = Path(backup_file)
     if not src_path.is_file():
         raise BackupError(f"{src_path} not found")
@@ -139,9 +140,41 @@ def restore(
         src.backup(dst)
     log.info("restored %s into %s (schema version %d)", src_path.name, target, version)
     if photos_dir is not None:
-        n = copy_photos(src_path.parent / "photos", photos_dir, only_missing=True)
-        log.info("restored %d food photo file(s)", n)
+        with closing(sqlite3.connect(src_path)) as conn:
+            food_ids = {r[0] for r in conn.execute("SELECT id FROM foods")}
+        restore_photos(src_path.parent / "photos", photos_dir, food_ids)
     return saved
+
+
+def restore_photos(backup_dir: str | Path, photos_dir: str | Path, food_ids: set[int]) -> int:
+    """After a restore, keep a photo only for a food the restored database has: the current
+    one if there is one, else the backup's. Foods added after the backup was taken are gone
+    from the database, and a new food may get one of their ids, so their photos must not stay
+    in place. The current folder is first moved aside to <folder>.pre-restore-<time>.
+    Returns how many photo files the folder holds afterwards."""
+    photos, backed_up = Path(photos_dir), Path(backup_dir)
+    before = None
+    if photos.is_dir():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        before = photos.with_name(f"{photos.name}.pre-restore-{stamp}")
+        photos.replace(before)
+    photos.mkdir(parents=True, exist_ok=True)
+    kept = 0
+    for source in (before, backed_up):  # current files first; the backup fills the gaps
+        if source is None or not source.is_dir():
+            continue
+        for f in source.iterdir():
+            if not f.is_file() or f.suffix not in (".jpg", ".none") or not f.stem.isdigit():
+                continue
+            target = photos / f.name
+            if int(f.stem) not in food_ids or target.exists():
+                continue
+            shutil.copy2(f, target)
+            kept += 1
+    if before is not None and (before / ".off-backfill-done").exists():
+        (photos / ".off-backfill-done").touch()
+    log.info("restored food photos: %d file(s) kept for the restored foods", kept)
+    return kept
 
 
 def next_run(at: time, tz: str, now: datetime) -> datetime:

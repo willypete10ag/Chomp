@@ -129,6 +129,21 @@ async def test_fill_from_off_skips_removed_and_existing(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_a_late_fill_never_undoes_the_persons_change(tmp_path, monkeypatch):
+    p = Photos(tmp_path, OFF().client())
+    real = p.off.fetch_image
+
+    async def slow(url):  # the person removes the photo while the download runs
+        data = await real(url)
+        p.remove(1)
+        return data
+
+    monkeypatch.setattr(p.off, "fetch_image", slow)
+    assert await p.fill_from_off(1, f"0{NUTELLA}") is False
+    assert not p.has(1) and p.removed(1)
+
+
+@pytest.mark.anyio
 async def test_fill_from_off_without_a_photo_or_unreachable(tmp_path):
     p = Photos(tmp_path, OFF(image_url=None).client())
     assert await p.fill_from_off(1, f"0{NUTELLA}") is False
@@ -267,15 +282,34 @@ async def test_save_food_has_no_photo_link_in_local_mode(settings, conn):
 
 
 def test_backup_copies_photos_and_restore_brings_back_missing(settings, conn, tmp_path):
+    a, b, c = (add_food(conn, n, 100, 1, 1, 1) for n in ("A", "B", "C"))
     p = Photos(settings.photos_path)
-    p.save(1, picture())
-    p.remove(2)
+    p.save(a, picture())
+    p.remove(b)
     dest = tmp_path / "backups"
     made = backup.backup(settings.db_path, dest, 3, datetime(2026, 10, 11), settings.photos_path)
-    assert (dest / "photos" / "1.jpg").exists() and (dest / "photos" / "2.none").exists()
+    assert (dest / "photos" / f"{a}.jpg").exists() and (dest / "photos" / f"{b}.none").exists()
     assert backup.copy_photos(settings.photos_path, dest / "photos") == 0  # nothing changed
 
-    p.path(1).unlink()
-    p.save(3, picture())
+    p.path(a).unlink()
+    p.save(c, picture())
     backup.restore(made, settings.db_path, settings.migrations_dir, settings.photos_path)
-    assert p.has(1) and p.has(3)
+    assert p.has(a) and p.has(c) and p.removed(b)
+
+
+def test_restore_drops_photos_of_foods_added_after_the_backup(settings, conn, tmp_path):
+    p = Photos(settings.photos_path)
+    banana = add_food(conn, "Banana", 89, 1.1, 22.8, 0.3)
+    p.save(banana, picture())
+    dest = tmp_path / "backups"
+    made = backup.backup(settings.db_path, dest, 3, datetime(2026, 10, 11), settings.photos_path)
+    later = add_food(conn, "Pizza", 266, 11, 33, 10)
+    p.save(later, picture())
+    backup.backup(settings.db_path, dest, 3, datetime(2026, 10, 12), settings.photos_path)
+    p.path(banana).unlink()
+
+    backup.restore(made, settings.db_path, settings.migrations_dir, settings.photos_path)
+    assert p.has(banana)  # from the backup
+    assert not p.has(later)  # its id may go to the next new food
+    aside = list(settings.photos_path.parent.glob("photos.pre-restore-*"))
+    assert len(aside) == 1 and (aside[0] / f"{later}.jpg").exists()

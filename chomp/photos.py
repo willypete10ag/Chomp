@@ -15,6 +15,7 @@ import io
 import logging
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from pathlib import Path
 
@@ -70,6 +71,9 @@ class Photos:
         self.off = off
         self._tasks: set[asyncio.Task] = set()
         self._backfill_started = False
+        # Saves, removals and automatic fills change a food's files one at a time, so a fill
+        # that finishes late never overwrites a photo the person just chose or removed
+        self._lock = threading.Lock()
 
     def path(self, food_id: int) -> Path:
         return self.folder / f"{int(food_id)}.jpg"
@@ -94,8 +98,10 @@ class Photos:
 
     def save(self, food_id: int, data: bytes) -> None:
         """Store a picture as the food's photo, replacing any it had. Raises PhotoError."""
-        self._write(food_id, prepare(data))
-        self._marker(food_id).unlink(missing_ok=True)
+        jpeg = prepare(data)
+        with self._lock:
+            self._write(food_id, jpeg)
+            self._marker(food_id).unlink(missing_ok=True)
 
     def _write(self, food_id: int, jpeg: bytes) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -106,11 +112,20 @@ class Photos:
 
     def remove(self, food_id: int) -> bool:
         """Remove the food's photo; True if it had one."""
-        had = self.has(food_id)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        self.path(food_id).unlink(missing_ok=True)
-        self._marker(food_id).touch()
+        with self._lock:
+            had = self.has(food_id)
+            self.folder.mkdir(parents=True, exist_ok=True)
+            self._marker(food_id).touch()
+            self.path(food_id).unlink(missing_ok=True)
         return had
+
+    def _write_if_missing(self, food_id: int, jpeg: bytes) -> bool:
+        """An automatic fill: only while the food still has no photo and none was removed."""
+        with self._lock:
+            if self.has(food_id) or self.removed(food_id):
+                return False
+            self._write(food_id, jpeg)
+            return True
 
     # --- Open Food Facts ---
 
@@ -129,9 +144,8 @@ class Photos:
         except (SourceError, PhotoError) as e:
             log.info("no Open Food Facts photo for food %d: %s", food_id, e)
             return False
-        if self.has(food_id) or self.removed(food_id):  # the person got there first
-            return False
-        await asyncio.to_thread(self._write, food_id, jpeg)
+        if not await asyncio.to_thread(self._write_if_missing, food_id, jpeg):
+            return False  # the person got there first
         log.info("food %d: photo from Open Food Facts", food_id)
         return True
 
