@@ -38,7 +38,9 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
-(any day via arrows, a seven-day strip or a date picker; calories remaining as the big number,
+(any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
+day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
+goal, months back to the first logged one and a year list; calories remaining as the big number,
 amber up to 100 kcal over the goal and red past that, then protein/carbs/fat with bars; goals
 not set count as 2,000 kcal split in even thirds, for the connector's progress too; plus fiber/sugar/sodium; meals led by their
 time; tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the

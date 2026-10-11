@@ -93,7 +93,7 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self';"
-        " manifest-src 'self'; media-src 'self' blob: mediastream:;"
+        " connect-src 'self'; manifest-src 'self'; media-src 'self' blob: mediastream:;"
         " form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     ),
     "X-Frame-Options": "DENY",
@@ -519,6 +519,93 @@ def week_strip(day: date, today: date) -> str:
             f"<b>{d.day}</b></a>"
         )
     return f'<nav class="week" aria-label="Nearby days">{"".join(links)}</nav>'
+
+
+def month_start(day: date) -> date:
+    return day.replace(day=1)
+
+
+def add_months(month: date, n: int) -> date:
+    """The first of the month n months after `month`'s."""
+    i = month.year * 12 + month.month - 1 + n
+    return date(i // 12, i % 12 + 1, 1)
+
+
+def calendar_url(month: date, shown: date) -> str:
+    return f"{PREFIX}/calendar?{urlencode({'month': month.strftime('%Y-%m'), 'date': shown})}"
+
+
+def month_calendar(
+    month: date,
+    shown: date,
+    today: date,
+    first: date,
+    by_day: dict[date, logic.Nutrients],
+    targets: dict[str, float | None],
+) -> str:
+    """The month view (#71): the month between arrows, a year box, then the days. A dot under
+    days with anything logged, a star instead on days within STAR_WITHIN of every goal. Months
+    run from the first logged one to this one; future days can't be picked."""
+    last = month_start(today)
+    prev_month, next_month = add_months(month, -1), add_months(month, 1)
+    prev = (
+        f'<a class="step" href="{calendar_url(prev_month, shown)}" data-cal'
+        ' aria-label="Previous month">&lsaquo;</a>'
+        if prev_month >= first
+        else '<span class="step off" aria-hidden="true">&lsaquo;</span>'
+    )
+    forward = (
+        f'<a class="step" href="{calendar_url(next_month, shown)}" data-cal'
+        ' aria-label="Next month">&rsaquo;</a>'
+        if next_month <= last
+        else '<span class="step off" aria-hidden="true">&rsaquo;</span>'
+    )
+    years = []
+    for y in range(last.year, first.year - 1, -1):
+        target = min(max(month.replace(year=y), first), last)
+        current = ' aria-current="true"' if y == month.year else ""
+        years.append(f'<a href="{calendar_url(target, shown)}" data-cal{current}>{y}</a>')
+    year_box = (
+        f'<details class="years"><summary aria-label="Pick a year">{month.year}'
+        f' <span aria-hidden="true">&#9662;</span></summary>'
+        f'<div class="yearlist">{"".join(years)}</div></details>'
+    )
+    head = f'<div class="calhead">{prev}<h2>{month.strftime("%B")}</h2>{forward}{year_box}</div>'
+    names = "".join(f'<span aria-hidden="true">{d}</span>' for d in "SMTWTFS")
+    cells = ['<span class="pad"></span>'] * ((month.weekday() + 1) % 7)  # Sunday first
+    d = month
+    while d.month == month.month:
+        n = by_day.get(d)
+        star = n is not None and logic.near_goals(n, targets)
+        mark = (
+            '<i class="star" aria-hidden="true">&#9733;</i>'
+            if star
+            else '<i class="dot" aria-hidden="true"></i>'
+            if n is not None
+            else ""
+        )
+        said = long_date(d, today) + (
+            ", near your goals" if star else ", logged" if n is not None else ""
+        )
+        cls = ' class="is-today"' if d == today else ""
+        current = ' aria-current="date"' if d == shown else ""
+        if d <= today:
+            cells.append(
+                f'<a href="{PREFIX}?date={d.isoformat()}"{cls}{current}'
+                f' aria-label="{e(said)}"><b>{d.day}</b>{mark}</a>'
+            )
+        else:
+            cells.append(f'<span class="future" aria-hidden="true"><b>{d.day}</b></span>')
+        d += timedelta(days=1)
+    within = round(logic.STAR_WITHIN * 100)
+    return (
+        f'<div class="calendar" data-month="{month.strftime("%Y-%m")}">{head}'
+        f'<div class="calgrid"><div class="calnames">{names}</div>'
+        f'<div class="caldays">{"".join(cells)}</div></div>'
+        '<div class="calfoot"><p class="muted small"><i class="dot" aria-hidden="true"></i>'
+        f' Logged <i class="star" aria-hidden="true">&#9733;</i> Within {within}% of every goal'
+        f'</p><a class="button ghost" href="{PREFIX}">Today</a></div></div>'
+    )
 
 
 @dataclass
@@ -1819,16 +1906,15 @@ def add_routes(
         head = [
             '<header class="daynav">',
             f'<a class="step" href="{day_url(prev_day)}" aria-label="Previous day">&lsaquo;</a>',
-            f'<div class="daytitle"><h1>{e(day_title(day, now))}</h1>'
+            # The title opens the month view (#71): a sheet with app.js, else its own page
+            f'<div class="daytitle"><h1><a class="opencal" data-calendar'
+            f' href="{calendar_url(month_start(day), day)}" aria-label="{e(day_title(day, now))},'
+            f' open the calendar">{e(day_title(day, now))}'
+            ' <span class="caret" aria-hidden="true">&#9662;</span></a></h1>'
             f'<p class="muted small">{e(long_date(day, now))}</p></div>',
             forward,
             "</header>",
             week_strip(day, now),
-            f'<div class="jump"><form method="get" action="{PREFIX}">'
-            f'<input type="date" name="date" value="{day.isoformat()}" max="{now.isoformat()}"'
-            ' aria-label="Pick a date" required><button type="submit">Go</button></form>',
-            f'<a href="{PREFIX}">Back to today</a>' if day != now else "",
-            "</div>",
             banner,
         ]
 
@@ -1937,6 +2023,43 @@ def add_routes(
         )
 
     # --- Day breakdown (#63) ---
+
+    @server.custom_route(f"{PREFIX}/calendar", methods=["GET"])
+    async def calendar_view(request: Request) -> Response:
+        """The month view. ?part=1 is just the calendar, for the sheet app.js opens on Today."""
+        if not signed_in(request):
+            return to_login(request)
+        now = today()
+        params = request.query_params
+        try:
+            shown = parse_day(params.get("date")) if params.get("date") else now
+            month = (
+                datetime.strptime(params["month"], "%Y-%m").date()
+                if params.get("month")
+                else month_start(shown)
+            )
+        except ValueError:
+            return message("Unknown date", "Months look like 2026-10.", 400, signed_in=True)
+        with connect(request) as conn:
+            started = store.first_meal_at(conn)
+            first = month_start(min(logic.local_date(started, tz), shown) if started else shown)
+            month = min(max(month, first), month_start(now))
+            end = add_months(month, 1) - timedelta(days=1)
+            lo, _ = logic.local_day_bounds(month, tz)
+            _, hi = logic.local_day_bounds(end, tz)
+            by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
+            targets = store.get_targets(conn)
+        body = month_calendar(month, shown, now, first, by_day, targets)
+        if params.get("part"):
+            return HTMLResponse(body, headers=SECURITY_HEADERS)
+        back = f'<p><a href="{day_url(shown)}">&lsaquo; Back to {e(day_title(shown, now))}</a></p>'
+        return render(
+            "Calendar",
+            f'{back}<section class="card calpage">{body}</section>',
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+        )
 
     @server.custom_route(f"{PREFIX}/breakdown", methods=["GET"])
     async def breakdown(request: Request) -> Response:
