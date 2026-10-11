@@ -143,20 +143,25 @@ Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It sho
 meals against your targets (the arrows, the row of days and the date box move between days),
 7/30/90-day history charts, and your saved meals and foods. It works without
 Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
-set), tapping an item gives a grams slider, a move to another meal and delete, **Edit meal…**
+set, by itself when fewer than 3 of your foods match), tapping an item gives a number of servings or a grams slider, a move to another meal and delete, **Edit meal…**
 changes a meal's name, time or date or combines it with another, **Edit goals** sets your
 daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
 five-wrong-passwords lockout applies.
 
-**Foods > Add a new food** adds a food three ways, all ending in the same form: scan its
+**Foods > Add a new food** starts with **Search for a food**: it looks a name up in USDA
+FoodData Central (including dishes as eaten, like "chicken burrito") and Open Food Facts.
+Tap a result to add it to your foods and open its page; a USDA food counts as confirmed, an
+Open Food Facts one stays unconfirmed (amber) until you check it against the label. It also
+adds a food three ways, all ending in the same form: scan its
 barcode with the phone camera (or type the number under it), take a photo of the Nutrition
 Facts label, or type the values in. A barcode is looked up in USDA and Open Food Facts; check
 the values and save, and it counts as confirmed. A label photo is read on the server
 (tesseract, no AI) and each value gets a tick box: fix anything misread, tick each value, and
 only a food with every value ticked counts as confirmed. Typed-in foods stay unconfirmed
-(amber). The camera needs the HTTPS address; the first scan asks for camera access. Press
-and hold a food to see its details or rename it; swipe it left and tap Delete to delete it (for everyone; meals already
-logged keep their numbers).
+(amber). The camera needs the HTTPS address; the first scan asks for camera access. Tap
+a food to open its page (nutrition facts, portions, Log it, Confirm, Edit, Rename, Delete).
+Press and hold it for a quick menu; swipe it left and tap Delete to delete it (for everyone;
+meals already logged keep their numbers), or swipe an amber one right and tap Confirm.
 
 On a phone, add it to the home screen so it opens like an app:
 
@@ -217,6 +222,9 @@ Migrations run automatically on start. Take a backup first if the release notes 
 
 The `backup` container copies the database every night at `BACKUP_AT` (local `TZ`) using
 SQLite's online backup, integrity-checks the copy, and keeps the newest `BACKUP_KEEP`.
+Food photos (kept in the data volume at `/data/photos`) go to a `photos/` folder beside the
+backups. A restore keeps photos only for foods in the restored database (taking any missing
+ones from the backup) and moves the old photo folder aside as `photos.pre-restore-<time>`.
 Back up right now with `docker compose exec backup chomp backup`.
 
 To restore (this replaces the whole database; the current one is kept as

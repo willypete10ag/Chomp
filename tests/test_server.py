@@ -24,7 +24,7 @@ async def test_lists_and_calls_server_info(server):
     assert result.structured_content == {
         "name": "chomp",
         "version": __version__,
-        "schema_version": 11,
+        "schema_version": 12,
         "tz": "America/New_York",
         "user": "owner",
     }
@@ -38,7 +38,7 @@ def test_health_route(server):
     with TestClient(server.streamable_http_app()) as http:
         r = http.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "schema_version": 11}
+    assert r.json() == {"status": "ok", "schema_version": 12}
 
 
 def test_health_route_reports_db_failure(settings, tmp_path):

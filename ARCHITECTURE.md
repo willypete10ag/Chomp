@@ -38,7 +38,9 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
-(any day via arrows, a seven-day strip or a date picker; calories remaining as the big number,
+(any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
+day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
+goal, months back to the first logged one and a year list; calories remaining as the big number,
 amber up to 100 kcal over the goal and red past that, then protein/carbs/fat with bars; goals
 not set count as 2,000 kcal split in even thirds, for the connector's progress too; plus fiber/sugar/sodium; meals led by their
 time; tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the
@@ -49,14 +51,21 @@ out), History (7/30/90-day averages and inline-SVG charts; each day links to its
 and Foods (one search over saved
 meals and used foods, most logged first, with filters for recent, newest,
 unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
-in the browser; tap a food for its per-serving values and
-source, or to give it a shorter name, and for your portions of it (#75): swipe one left to
-delete it, press and hold it to change its name or grams, or + Add portion). An entry whose
+in the browser. A tap opens a food's page (#72): name, brand and calories, protein, carbs
+and fat, nutrition facts per serving and per 100 g, vitamins and minerals folded away, your
+portions of it (#75: swipe one left to delete it, press and hold it to change its name or
+grams, or + Add portion), then Log it, Confirm, Edit (all values, `/foods/{id}/edit`, with
+Undo), Rename and Delete, and how often you've logged it. Press and hold a food in the list
+for a menu over the blurred page (Edit, Rename, Confirm on amber foods, Log it, Delete);
+swipe it left to Delete, or an amber one right to Confirm). An entry whose
 grams were estimated shows a muted "~" before them until new grams are saved, and Add food
-offers your portions as chips ("1 handful · 30 g") next to the gram chips.
+offers your portions as chips ("1 handful · 30 g") next to the gram chips. For a food with a serving
+size, Add food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
+stepper in whole servings (a typed 1.5 still counts) and the server logs servings × the serving size; it is picked when the
+amount is a whole or half number of servings, and a food without a serving size shows grams only.
 
 It also works without Claude (#54): Add food (search your foods, portions and saved meals, or
-USDA when `FDC_API_KEY` is set; log to a new meal at a time or into an existing one), change an
+USDA when `FDC_API_KEY` is set, on its own when fewer than 3 of your foods match (#88); log to a new meal at a time or into an existing one), change an
 entry's grams, move it to another meal, edit a meal's name, time, date and note, combine or
 delete meals, and set daily goals. Every edit is a form post through `store.py` like the
 tools, so macros still come only from the database. Each edit records the rows it touched
@@ -68,8 +77,12 @@ the day's total, and the goals page's calorie bar (drag the borders between prot
 and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
-New food (#59, Foods > Add a new food) adds a shared food three ways, all through one form of
-per-serving values: a barcode (scanned with the camera by `static/scan.js` and the vendored
+New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
+Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
+`/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run
+side by side and cached into `foods`. Tapping a result marks it saved and opens its page;
+a USDA food counts as confirmed once picked, an Open Food Facts one stays unconfirmed. Below
+that it adds a shared food three ways, all through one form of per-serving values: a barcode (scanned with the camera by `static/scan.js` and the vendored
 ZXing reader `static/zxing.min.js`, since the CSP allows only same-origin scripts; or typed),
 looked up through the same chain as `lookup_barcode` (`chomp/barcode.py`); a nutrition label
 photo, read on the server by `tesseract` (installed in the image) and parsed by
@@ -77,9 +90,22 @@ photo, read on the server by `tesseract` (installed in the image) and parsed by
 cached row (only values the person changed are rewritten); a label food is saved
 `source='label'`, confirmed only when every filled-in value was ticked; a typed one is
 `source='manual'`, confirmed only when its Verified box is ticked (#68). Any food can be
-confirmed by hand, or marked unconfirmed again, from its details on Foods (press and hold). A barcode given with a label or typed food moves to it, as
+confirmed by hand, or marked unconfirmed again, from its page, its hold menu, or a swipe right on Foods. A barcode given with a label or typed food moves to it, as
 with `save_food_from_label`. An Open Food Facts hit Claude looks up stays unconfirmed
 until `confirm_food`.
+
+Food photos (#74, `chomp/photos.py`): one picture per food, shown at the top of its page, as
+a small square on Foods, Today and Add food rows (a food without one shows its first letter),
+and added, replaced or removed from its page or its hold menu. A food with a barcode gets
+Open Food Facts' front-of-package photo in the background after any barcode lookup (tool or
+dashboard), and a one-time backfill (started by the first lookup or Foods page after a
+deploy, then marked done with `.off-backfill-done`) does the same for barcode foods saved
+earlier. Only images on Open Food Facts' own HTTPS hosts are downloaded. Label photos are
+never used as a food's picture. Photos are files, `PHOTOS_DIR/<food_id>.jpg` (default
+`photos/` next to the database), re-encoded on the way in: upright, at most 800 px, no EXIF.
+Removing one leaves `<food_id>.none` so Open Food Facts doesn't put it back. Chat can't hand
+Chomp a picture, so `save_food` and `save_food_from_label` return `add_photo_url` (the
+food's page) when it has none, and the server instructions tell Claude to send that link.
 
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
@@ -97,7 +123,7 @@ local-only mode everything is the owner's.
 ## MCP tools
 | Tool | Purpose | Key args |
 |---|---|---|
-| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
+| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (Foundation, SR Legacy, Survey (FNDDS) dishes as eaten (#88), and Branded; ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Survey, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
 | `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
@@ -134,7 +160,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   hidden from search and lists, its barcode released; everyone's portions of it go, and it
   leaves every saved meal (an emptied one goes too). If the same USDA or Open Food Facts
   record turns up again it comes back, barcode included.
-- Recipes (#82, migration 0011): each user's `recipes` (name, servings it makes, steps one
+- Recipes (#82, migration 0012): each user's `recipes` (name, servings it makes, steps one
   per line) and `recipe_ingredients` (food, grams for the whole recipe). Nutrition is the
   ingredients' sum (`logic.recipe_nutrition`); an optional nutrient counts only if every
   ingredient reports it. Each recipe keeps a confirmed food row (brand `Recipe`, source
@@ -145,8 +171,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
-  a `save_food` food saved with `confirmed`, a food confirmed by hand on the dashboard (Foods,
-  press and hold, Confirm), a typed-in food saved with Verified ticked, a barcode food saved on the
+  a `save_food` food saved with `confirmed`, a food confirmed by hand on the dashboard (Foods:
+  its page, hold menu or swipe right), a typed-in food saved with Verified ticked, a barcode food saved on the
   dashboard's New food page, or a label photo food whose every value was ticked there.
   Everything else is unconfirmed (amber on the dashboard). `confirm_food(confirmed=False)` or
   Mark unconfirmed on the dashboard takes an approval back.
@@ -156,20 +182,21 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 ## Gotchas
 - **UPC normalization:** UPC-A (12 digits) vs EAN-13 (leading 0) vs FDC's GTIN padding. Normalize to 14-digit GTIN for storage and try variants on lookup.
 - **FDC Branded data** is per serving in `labelNutrients` and per 100 g in `foodNutrients`; prefer per-100 g, but when a core value differs from the label by more than 10% (and past a small rounding floor), use the label values and flag it.
+- **FDC generic foods** (Foundation, SR Legacy) have no label serving. Their household measures (`foodMeasures` on search hits, `foodPortions` in details) give one: one of a thing ("1 large", medium before large) is preferred, else the first single measure ("1 cup"); bare weights never. A cached food without a serving gains one when its record comes back, and `serving_fill.py` (at most every 10 minutes, each food once per process) fetches details for the used FDC foods still missing one.
 - **FDC carbs "by difference"** can be slightly negative (seen: -0.104 g). Carbs down to -1 are stored as 0; any other negative value drops the record.
 - **Open Food Facts** quality varies; mark OFF-sourced foods unverified until I confirm one.
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 
 ## Security
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
-- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
+- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. Food photos are served only to signed-in people. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
 - The container runs as uid 10001 with a read-only root filesystem and no capabilities; the database lives in the `chomp-data` volume.
 
 ## Backup and export
-- `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one.
+- `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one. Food photos are copied to `BACKUP_HOST_DIR/photos` (new and changed files only; none deleted there), and a restore keeps photos only for foods the restored database has (a food added later could otherwise hand its id, and photo, to a new food), filling gaps from the backup and moving the old folder aside.
 - `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking

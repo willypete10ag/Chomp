@@ -16,7 +16,7 @@ def fdc_eggs(upstream):
     upstream.add(
         SEARCH,
         fixture_json("fdc/search_egg_white_generic.json"),
-        match={"dataType": "Foundation,SR Legacy"},
+        match={"dataType": "Foundation,SR Legacy,Survey (FNDDS)"},
     )
     upstream.add(
         SEARCH,

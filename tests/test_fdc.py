@@ -9,7 +9,7 @@ from chomp.sources import fdc as fdcmod
 from chomp.sources.fdc import FDCClient
 
 SEARCH = "/fdc/v1/foods/search"
-GENERIC = {"dataType": "Foundation,SR Legacy"}
+GENERIC = {"dataType": "Foundation,SR Legacy,Survey (FNDDS)"}
 BRANDED = {"dataType": "Branded"}
 
 

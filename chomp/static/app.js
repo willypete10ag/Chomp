@@ -26,13 +26,25 @@
     }
   }
 
+  // The grams a food form will log: its servings times the serving size when Servings is
+  // picked (#80), else its grams box
+  function amountGrams(form) {
+    var by = form.querySelector("input[name=by]:checked");
+    if (by && by.value === "servings") {
+      var box = form.querySelector("[data-servings]");
+      var n = parse(box.value);
+      return n !== null ? n * parse(box.closest("[data-serving]").dataset.serving) : null;
+    }
+    var field = form.querySelector("[data-amount]");
+    return field ? parse(field.value) : null;
+  }
+
   // Food previews: "= 214 kcal · P 18.9 C 1.1 F 14.3", and the day's calories after saving
   function foodPreview(form) {
     var per = json(form, "per100");
     var out = form.querySelector(".preview");
-    var field = form.querySelector("[data-amount]");
-    if (!per || !out || !field) return;
-    var grams = parse(field.value);
+    if (!per || !out || !form.querySelector("[data-amount]")) return;
+    var grams = amountGrams(form);
     var ok = grams !== null && grams > 0;
     Object.keys(PLACES).forEach(function (k) {
       var el = out.querySelector('[data-n="' + k + '"]');
@@ -199,6 +211,7 @@
     range.addEventListener("input", function () {
       field.value = range.value;
       if (estimated) estimated.value = "0";
+      syncServings(field.form, parse(range.value));
       changed(field.form);
     });
     field.addEventListener("input", function () {
@@ -208,17 +221,67 @@
         if (n > parse(range.max)) range.max = String(Math.ceil(n));
         range.value = String(n);
       }
+      syncServings(field.form, n);
       changed(field.form);
     });
+  });
+
+  // Servings (#80): the servings box and the grams box show the same amount, whichever is
+  // changed; the Servings / Grams toggle says which one gets logged
+  function countText(n) {
+    return String(Math.round(n * 100) / 100);
+  }
+  function syncServings(form, grams) {
+    var box = form && form.querySelector("[data-servings]");
+    if (!box || grams === null || grams <= 0) return;
+    box.value = countText(grams / parse(box.closest("[data-serving]").dataset.serving));
+  }
+  document.querySelectorAll("[data-servings]").forEach(function (box) {
+    var form = box.form;
+    var size = parse(box.closest("[data-serving]").dataset.serving);
+    var field = form.querySelector("[data-amount]");
+    var range = field.closest(".amount").querySelector("input[type=range]");
+    var estimated = form.querySelector("input[name=estimated]");
+    box.addEventListener("input", function () {
+      if (estimated) estimated.value = "0";
+      var n = parse(box.value);
+      if (n !== null && n > 0) {
+        var grams = Math.round(n * size * 10) / 10;
+        field.value = String(grams);
+        if (range) {
+          if (grams > parse(range.max)) range.max = String(Math.ceil(grams));
+          range.value = String(grams);
+        }
+      }
+      changed(form);
+    });
+    // − and + move to the next whole serving down or up (1.5 goes to 1 or 2), not under 1;
+    // a typed 1.5 still logs as typed
+    box.closest(".field").querySelectorAll("[data-step]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var n = parse(box.value) || 0;
+        var next = button.dataset.step === "1"
+          ? Math.floor(n + 1e-9) + 1
+          : Math.ceil(n - 1e-9) - 1;
+        if (next < 1) return;
+        box.value = countText(next);
+        box.dispatchEvent(new Event("input"));
+      });
+    });
+  });
+  document.addEventListener("change", function (event) {
+    if (event.target.name === "by") changed(event.target.form);
   });
 
   // Quick picks: "1 serving · 46 g", "1 handful · ~30 g", "100 g"
   document.addEventListener("click", function (event) {
     var chip = event.target.closest("[data-set]");
     if (!chip) return;
-    var box = chip.closest(".goal, form").querySelector(".amount");
-    var field = box.querySelector("[data-amount]");
+    var field = chip.closest(".goal, form").querySelector("[data-amount]");
     field.value = chip.dataset.set;
+    // Chips are weights, so a tap on one while Servings is picked switches to Grams
+    var grams = field.form && field.form.querySelector("input[name=by][value=grams]");
+    if (grams) grams.checked = true;
     field.dispatchEvent(new Event("input"));
     var estimated = field.form && field.form.querySelector("input[name=estimated]");
     if (estimated && chip.dataset.estimated) estimated.value = "1";
@@ -317,15 +380,17 @@
   reveal();
   window.addEventListener("hashchange", reveal);
 
-  // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
-  // another to hide it again. Only one shows at a time. Press and hold a food to open it
-  // (details and Rename); a plain tap only closes an open one. Portions in a food's
-  // details work the same way: swipe to delete, press and hold to edit.
+  // Foods (#72): a tap opens a food's page. Swipe a food left to show its Delete button,
+  // or an unconfirmed one right to show Confirm; swipe back, tap it or swipe another to hide
+  // it again. Only one shows at a time. Press and hold a food for a menu (Edit, Rename,
+  // Confirm, Log it, Delete) over the blurred page. Portions on a food's page swipe left to
+  // delete and open with a press and hold to edit.
   var OPEN = 96;
   var HOLD_MS = 450;
   var shown = null;
   function slide(body, x) {
     body.style.transform = x ? "translateX(" + x + "px)" : "";
+    body.dataset.x = String(x || 0);
   }
   function hide() {
     if (shown) slide(shown, 0);
@@ -335,42 +400,60 @@
     if (shown && !shown.parentNode.contains(event.target)) hide();
   });
   document.querySelectorAll("[data-swipe]").forEach(function (body) {
+    var li = body.parentNode;
+    var left = null; // Confirm, behind the food's left edge
+    var right = null; // Delete, behind its right edge
+    Array.prototype.forEach.call(li.children, function (child) {
+      if (!child.classList.contains("swipe-action")) return;
+      if (child.classList.contains("confirm")) left = child;
+      else right = child;
+    });
+    var details = body.querySelector(":scope > details");
+    var summary = details && details.querySelector("summary");
+    var press = summary || body.querySelector(".food-link");
     var start = null;
     var dx = 0;
     var sliding = false;
-    var details = body.querySelector("details");
-    var summary = details.querySelector("summary");
     var timer = null;
     var held = false;
     function unhold() {
       clearTimeout(timer);
       timer = null;
-      summary.classList.remove("holding");
+      press.classList.remove("holding");
+    }
+    function onHold() {
+      unhold();
+      held = true;
+      if (navigator.vibrate) navigator.vibrate(15);
+      if (details) details.open = true;
+      else holdMenu(li);
     }
     body.addEventListener("pointerdown", function (event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       // A portion inside an open food swipes and holds on its own, not the food with it
       if (event.target.closest("[data-swipe]") !== body) return;
-      start = { x: event.clientX, y: event.clientY, base: body === shown ? -OPEN : 0 };
-      dx = 0;
+      start = { x: event.clientX, y: event.clientY, base: parseFloat(body.dataset.x) || 0 };
+      dx = start.base;
       sliding = false;
       held = false;
       unhold();
-      if (body !== shown && !details.open && summary.contains(event.target)) {
-        summary.classList.add("holding");
-        timer = setTimeout(function () {
-          unhold();
-          held = true;
-          details.open = true;
-          var rename = details.querySelector("details.sub.rename");
-          if (rename) rename.open = true;
-          if (navigator.vibrate) navigator.vibrate(15);
-        }, HOLD_MS);
+      if (body !== shown && !(details && details.open) && press.contains(event.target)) {
+        press.classList.add("holding");
+        timer = setTimeout(onHold, HOLD_MS);
       }
     });
-    // A long press shouldn't select text or pop up the phone's menu
-    summary.addEventListener("contextmenu", function (event) {
-      if (timer || held) event.preventDefault();
+    // A long press shouldn't select text or pop up the phone's menu; a right click on a
+    // computer opens the hold menu
+    press.addEventListener("contextmenu", function (event) {
+      if (timer || held) {
+        event.preventDefault();
+        return;
+      }
+      if (!details && event.pointerType !== "touch") {
+        event.preventDefault();
+        hide();
+        holdMenu(li);
+      }
     });
     body.addEventListener("pointermove", function (event) {
       if (!start) return;
@@ -391,7 +474,9 @@
           // capture is a nicety
         }
       }
-      dx = Math.max(-OPEN - 24, Math.min(0, start.base + mx));
+      var lo = right ? -OPEN - 24 : 0;
+      var hi = left ? OPEN + 24 : 0;
+      dx = Math.max(lo, Math.min(hi, start.base + mx));
       slide(body, dx);
     });
     function end() {
@@ -399,20 +484,17 @@
       if (!start) return;
       body.classList.remove("dragging");
       if (sliding) {
-        if (dx < -OPEN / 2) {
-          slide(body, -OPEN);
-          shown = body;
-        } else {
-          slide(body, 0);
-          if (shown === body) shown = null;
-        }
+        var to = dx < -OPEN / 2 ? -OPEN : dx > OPEN / 2 ? OPEN : 0;
+        slide(body, to);
+        if (to) shown = body;
+        else if (shown === body) shown = null;
       }
       start = null;
     }
     body.addEventListener("pointerup", end);
     body.addEventListener("pointercancel", end);
-    // The tap that ends a swipe, or a tap on a food showing Delete, doesn't open it. Nor
-    // does a plain tap (only a long press does), though the keyboard's Enter still does.
+    // The tap that ends a swipe or a hold, or a tap on a food showing an action, doesn't
+    // open it. A portion opens only with a press and hold, though Enter still opens it.
     body.addEventListener("click", function (event) {
       if (sliding || body === shown) {
         event.preventDefault();
@@ -422,23 +504,355 @@
         held = false;
         return;
       }
-      if (!summary.contains(event.target)) return;
-      if (held || (!details.open && event.detail > 0)) event.preventDefault();
+      if (!press.contains(event.target)) return;
+      if (held || (summary && !details.open && event.detail > 0)) event.preventDefault();
       held = false;
     }, true);
-    // Tabbing onto Delete slides the food aside so the button is seen before it's pressed
-    var action = body.parentNode.querySelector(".swipe-action");
-    if (action) {
+    // Tabbing onto Delete or Confirm slides the food aside so the button is seen first
+    [[right, -OPEN], [left, OPEN]].forEach(function (pair) {
+      var action = pair[0];
+      if (!action) return;
       action.addEventListener("focusin", function () {
         if (shown && shown !== body) hide();
-        slide(body, -OPEN);
+        slide(body, pair[1]);
         shown = body;
       });
       action.addEventListener("focusout", function () {
         if (shown === body) hide();
       });
-    }
+    });
   });
+
+  // The hold menu: the food lifts out of the list, a little larger, over the blurred and
+  // dimmed page, with its actions underneath (above it near the bottom of the screen).
+  // A tap outside, Escape or the back button closes it.
+  function holdMenu(li) {
+    var url = li.dataset.food;
+    var name = li.dataset.name;
+    var back = li.dataset.back;
+    var body = li.querySelector("[data-swipe]");
+    var rect = body.getBoundingClientRect();
+    var layer = document.createElement("div");
+    layer.className = "hold-layer";
+    var lifted = body.cloneNode(true);
+    lifted.removeAttribute("data-swipe");
+    lifted.removeAttribute("style");
+    lifted.className = "swipe-body lifted" + (li.classList.contains("unconfirmed") ? " unconfirmed" : "");
+    lifted.style.top = rect.top + "px";
+    lifted.style.left = rect.left + "px";
+    lifted.style.width = rect.width + "px";
+    var menu = document.createElement("div");
+    menu.className = "hold-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", name);
+
+    function post(action, fields) {
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + action;
+      Object.keys(fields).forEach(function (k) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = k;
+        input.value = fields[k];
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    }
+    function item(label, run, cls, stay) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "item" + (cls ? " " + cls : "");
+      b.setAttribute("role", "menuitem");
+      b.textContent = label;
+      b.addEventListener("click", function (event) {
+        if (!armed && event.detail !== 0) return;
+        if (stay) run();
+        else leave(run);
+      });
+      menu.appendChild(b);
+      return b;
+    }
+    // Drop the menu's own history entry before acting, so Back after an action goes where
+    // it would have without the menu
+    function leave(run) {
+      if (!(history.state && history.state.holdMenu)) return run();
+      window.removeEventListener("popstate", onBack);
+      window.addEventListener("popstate", function once() {
+        window.removeEventListener("popstate", once);
+        run();
+      });
+      history.back();
+    }
+    function go(href) {
+      return function () {
+        location.href = href;
+      };
+    }
+    item("Edit", go(url + "/edit?back=" + encodeURIComponent(back)));
+    item("Rename", rename, "", true);
+    var hasPhoto = li.dataset.photo === "1";
+    // The file picker has to open from the tap itself, so the menu stays until a photo is
+    // chosen (#74)
+    item(hasPhoto ? "Change photo" : "Add photo", choosePhoto, "", true);
+    if (hasPhoto) {
+      item("Remove photo", function () {
+        post("/photo/delete", { back: back });
+      });
+    }
+    if (li.dataset.confirmed !== "1") {
+      item("Confirm", function () {
+        post("/confirm", { back: back, confirmed: "1" });
+      }, "ok");
+    }
+    if (li.dataset.log) item("Log it", go(li.dataset.log));
+    item("Delete", function () {
+      post("/delete", { back: back });
+    }, "danger");
+
+    function choosePhoto() {
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + "/photo";
+      form.enctype = "multipart/form-data";
+      form.hidden = true;
+      var keep = document.createElement("input");
+      keep.type = "hidden";
+      keep.name = "back";
+      keep.value = back;
+      var file = document.createElement("input");
+      file.type = "file";
+      file.name = "photo";
+      file.accept = "image/*";
+      file.addEventListener("change", function () {
+        if (!file.files.length) return;
+        leave(function () {
+          form.submit();
+        });
+      });
+      form.append(keep, file);
+      document.body.appendChild(form);
+      file.click();
+    }
+
+    // Rename in place: the menu turns into the name box
+    function rename() {
+      menu.textContent = "";
+      menu.classList.add("renaming");
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + "/rename";
+      form.className = "stack";
+      var keep = document.createElement("input");
+      keep.type = "hidden";
+      keep.name = "back";
+      keep.value = back;
+      var label = document.createElement("label");
+      label.textContent = "Name";
+      var box = document.createElement("input");
+      box.name = "name";
+      box.value = name;
+      box.required = true;
+      box.maxLength = 120;
+      label.appendChild(box);
+      var save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save name";
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        leave(function () {
+          form.submit();
+        });
+      });
+      form.append(keep, label, save);
+      menu.appendChild(form);
+      place();
+      box.focus();
+      box.select();
+    }
+
+    function place() {
+      var gap = 10;
+      var margin = 12;
+      var h = menu.offsetHeight;
+      var top = rect.top;
+      var below = top + rect.height + gap + h <= innerHeight - margin;
+      if (!below && top - gap - h < margin) {
+        // No room either side: move the food up so the menu fits under it
+        top = Math.max(margin, innerHeight - margin - h - gap - rect.height);
+        below = true;
+      }
+      lifted.style.top = top + "px";
+      menu.style.left = rect.left - 6 + "px"; // under the lifted food's rounded edge
+      menu.style.width = Math.min(rect.width, 280) + "px";
+      menu.style.top = (below ? top + rect.height + gap : top - gap - h) + "px";
+      menu.classList.toggle("above", !below);
+    }
+
+    function close() {
+      layer.classList.remove("on");
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("popstate", onBack);
+      li.classList.remove("held");
+      setTimeout(function () {
+        layer.remove();
+      }, 160);
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        close();
+        if (history.state && history.state.holdMenu) history.back();
+      }
+    }
+    function onBack() {
+      close();
+    }
+    // The finger that held the food is still down when the menu opens: only a new touch
+    // (or a key) picks something, so lifting it can't
+    var armed = false;
+    layer.addEventListener("pointerdown", function () {
+      armed = true;
+    });
+    layer.addEventListener("click", function (event) {
+      if (armed && event.target === layer) {
+        close();
+        if (history.state && history.state.holdMenu) history.back();
+      }
+    });
+    lifted.addEventListener("click", function (event) {
+      var link = event.target.closest("a");
+      if (!link) return;
+      event.preventDefault();
+      if (armed) leave(go(link.href));
+    });
+    layer.append(lifted, menu);
+    document.body.appendChild(layer);
+    li.classList.add("held");
+    place();
+    // Let the browser draw the start state, then lift
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        layer.classList.add("on");
+      });
+    });
+    try {
+      history.pushState({ holdMenu: true }, "");
+      window.addEventListener("popstate", onBack);
+    } catch (err) {
+      // the back button just leaves the page then
+    }
+    document.addEventListener("keydown", onKey);
+    menu.querySelector("button").focus({ preventScroll: true });
+  }
+
+  // A food's photo (#74): choosing a picture sends it, no Save button needed
+  document.querySelectorAll("input[type=file][data-autosubmit]").forEach(function (file) {
+    file.addEventListener("change", function () {
+      if (!file.files.length) return;
+      file.closest("label").classList.add("busy");
+      file.form.submit();
+    });
+  });
+
+  // The month view (#71): tapping the day's title opens it as a sheet over the page. Month
+  // arrows and the year list load the next month into the sheet; a day opens that day.
+  // A tap outside, Escape or the back button closes it. Without this, the title opens
+  // the month view as its own page.
+  var opener = document.querySelector("[data-calendar]");
+  if (opener && window.fetch) {
+    opener.addEventListener("click", function (event) {
+      event.preventDefault();
+      openCalendar(opener.href);
+    });
+  }
+  function openCalendar(href) {
+    var layer = document.createElement("div");
+    layer.className = "cal-layer";
+    var sheet = document.createElement("div");
+    sheet.className = "cal-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.setAttribute("aria-label", "Calendar");
+    var grab = document.createElement("div");
+    grab.className = "grab";
+    var body = document.createElement("div");
+    sheet.append(grab, body);
+    layer.appendChild(sheet);
+
+    function load(url, focus) {
+      return fetch(url + (url.indexOf("?") < 0 ? "?" : "&") + "part=1", {
+        credentials: "same-origin",
+      }).then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      }).then(function (html) {
+        body.innerHTML = html;
+        var target = focus && body.querySelector(focus);
+        (target || body.querySelector("[aria-current=date], .caldays a, a")).focus({
+          preventScroll: true,
+        });
+      });
+    }
+    body.addEventListener("click", function (event) {
+      var link = event.target.closest("a[href]");
+      if (!link) return;
+      event.preventDefault();
+      if (!link.hasAttribute("data-cal")) {
+        // A day (or Today): take the sheet's history entry's place, so Back returns to the
+        // page the sheet opened over
+        if (history.state && history.state.calendar) location.replace(link.href);
+        else location.href = link.href;
+        return;
+      }
+      var label = link.getAttribute("aria-label");
+      load(link.href, label ? '[aria-label="' + label + '"]' : null).catch(function () {
+        location.href = link.href;
+      });
+    });
+
+    function close() {
+      layer.classList.remove("on");
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("popstate", close);
+      setTimeout(function () {
+        layer.remove();
+      }, 220);
+      opener.focus({ preventScroll: true });
+    }
+    function dismiss() {
+      if (history.state && history.state.calendar) history.back();
+      else close();
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        var years = body.querySelector(".years[open]");
+        if (years) years.open = false;
+        else dismiss();
+      }
+    }
+    layer.addEventListener("click", function (event) {
+      if (event.target === layer) dismiss();
+    });
+
+    load(href).then(function () {
+      document.body.appendChild(layer);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          layer.classList.add("on");
+        });
+      });
+      try {
+        history.pushState({ calendar: true }, "");
+        window.addEventListener("popstate", close);
+      } catch (err) {
+        // the back button just leaves the page then
+      }
+      document.addEventListener("keydown", onKey);
+    }).catch(function () {
+      location.href = href;
+    });
+  }
 
   document.querySelectorAll("form").forEach(changed);
 })();

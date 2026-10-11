@@ -1,4 +1,4 @@
-"""Open Food Facts client (barcode lookups only).
+"""Open Food Facts client (barcode lookups, name search for #88, and product photos for #74).
 
 OFF data is crowd-sourced, so every OFF food is cached unverified until the user confirms
 it with `confirm_food`.
@@ -11,12 +11,15 @@ from typing import Any
 
 import httpx
 
-from chomp import logic
-from chomp.sources import FoodRecord
+from chomp import logic, text
+from chomp.sources import FoodRecord, SourceError
 from chomp.sources import gtin as gtins
 from chomp.sources.http import TTLCache, get_json
 
 BASE_URL = "https://world.openfoodfacts.org/api/v2/product"
+# Full-text search lives on the older endpoint; v2 has no text query. OFF allows about 10
+# searches a minute, so results are cached and a refused search isn't retried.
+SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 FIELDS = ",".join(
     (
         "code",
@@ -28,8 +31,11 @@ FIELDS = ",".join(
         "serving_size",
         "serving_quantity",
         "serving_quantity_unit",
+        "image_front_url",
+        "image_url",
     )
 )
+IMAGE_MAX = 10 * 1024 * 1024  # a product photo bigger than this isn't worth keeping
 
 
 def _num(nutriments: Mapping[str, Any], key: str) -> float | None:
@@ -99,7 +105,7 @@ def parse_nutrients(nutriments: Mapping[str, Any]) -> logic.Nutrients | None:
     return out
 
 
-def to_record(product: Mapping[str, Any], gtin14: str) -> FoodRecord | None:
+def to_record(product: Mapping[str, Any], gtin14: str | None) -> FoodRecord | None:
     nutrients = parse_nutrients(product.get("nutriments") or {})
     name = (
         product.get("product_name_en") or product.get("product_name") or product.get("generic_name")
@@ -113,7 +119,7 @@ def to_record(product: Mapping[str, Any], gtin14: str) -> FoodRecord | None:
         serving_g = q
     return FoodRecord(
         source="off",
-        source_id=str(product.get("code") or gtin14),
+        source_id=str(product.get("code") or gtin14),  # a search hit always has a code
         name=name.strip(),
         brand=brand,
         gtin=gtin14,
@@ -121,6 +127,31 @@ def to_record(product: Mapping[str, Any], gtin14: str) -> FoodRecord | None:
         serving_g=serving_g,
         serving_desc=(product.get("serving_size") or "").strip() or None,
         flags=["unverified: Open Food Facts data is crowd-sourced; confirm against the label"],
+        image_url=image_url(product),
+    )
+
+
+def image_url(product: Mapping[str, Any]) -> str | None:
+    """The product's front photo (else its main photo), only when it is served from Open
+    Food Facts' own image host over HTTPS: Chomp downloads it, so it never follows a URL
+    to anywhere else."""
+    for key in ("image_front_url", "image_url"):
+        url = product.get(key)
+        if isinstance(url, str) and is_off_image(url):
+            return url
+    return None
+
+
+def is_off_image(url: str) -> bool:
+    try:
+        u = httpx.URL(url)
+    except (httpx.InvalidURL, TypeError):
+        return False
+    host = u.host or ""
+    return (
+        u.scheme == "https"
+        and u.port in (None, 443)
+        and (host == "openfoodfacts.org" or host.endswith(".openfoodfacts.org"))
     )
 
 
@@ -166,3 +197,71 @@ class OFFClient:
             if product:
                 return to_record(product, gtin14)
         return None
+
+    async def search(self, query: str, limit: int) -> list[FoodRecord]:
+        """Products whose name matches `query`, best word match first, up to `limit`.
+        Products without usable per-100 g nutrition are dropped. Raises SourceError."""
+        key = ("search", query.lower(), limit)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        data = await get_json(
+            self._http,
+            "Open Food Facts",
+            SEARCH_URL,
+            params={
+                "search_terms": query,
+                "search_simple": 1,
+                "action": "process",
+                "json": 1,
+                "page_size": max(limit * 3, 24),
+                "fields": FIELDS,
+            },
+            headers=self._headers,
+            attempts=1,
+            backoff_s=self._backoff_s,
+        )
+        records = []
+        for product in (data or {}).get("products") or []:
+            if not product.get("code"):
+                continue
+            rec = to_record(product, gtins.lenient(str(product["code"])))
+            if rec is not None:
+                records.append(rec)
+        order = {id(r): i for i, r in enumerate(records)}
+        records.sort(
+            key=lambda r: (
+                -text.match_score(query, f"{r.name} {r.brand or ''}"),
+                -text.head_score(query, r.name),
+                order[id(r)],
+            )
+        )
+        records = records[:limit]
+        self._cache.put(key, records)
+        return records
+
+    async def image_url(self, gtin14: str) -> str | None:
+        """The product photo for a barcode, even when OFF's nutrition for it is unusable
+        (the food may have come from FoodData Central)."""
+        for code in gtins.variants(gtin14):
+            product = await self._product(code)
+            if product:
+                return image_url(product)
+        return None
+
+    async def fetch_image(self, url: str) -> bytes:
+        """Download a product photo found by image_url. Raises SourceError."""
+        if not is_off_image(url):
+            raise SourceError("Open Food Facts photo URL is not on its image host")
+        try:
+            async with self._http.stream("GET", url, headers=self._headers) as r:
+                if r.status_code != 200:
+                    raise SourceError(f"Open Food Facts photo: HTTP {r.status_code}")
+                data = bytearray()
+                async for chunk in r.aiter_bytes():
+                    data += chunk
+                    if len(data) > IMAGE_MAX:
+                        raise SourceError("Open Food Facts photo is too large")
+        except httpx.HTTPError as e:
+            raise SourceError(f"Open Food Facts photo: {type(e).__name__}") from e
+        return bytes(data)

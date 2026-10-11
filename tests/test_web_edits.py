@@ -265,7 +265,7 @@ def test_add_page_searches_usda_when_configured(public_settings, conn, logged, f
     upstream.add(
         SEARCH,
         fixture_json("fdc/search_egg_white_generic.json"),
-        match={"dataType": "Foundation,SR Legacy"},
+        match={"dataType": "Foundation,SR Legacy,Survey (FNDDS)"},
     )
     upstream.add(
         SEARCH,
@@ -277,9 +277,9 @@ def test_add_page_searches_usda_when_configured(public_settings, conn, logged, f
     )
     with TestClient(app, base_url=PUBLIC, follow_redirects=False) as client:
         sign_in(client)
+        # none of your foods match, so USDA is searched without the button (#88)
         text = client.get("/app/add", params={"date": today(), "q": "egg white"}).text
-        assert "Search USDA for" in text
-        text = client.get("/app/add", params={"date": today(), "q": "egg white", "usda": 1}).text
+        assert "Search USDA for" not in text
         assert "USDA FoodData Central" in text and "Unconfirmed" in text
     assert upstream.requests
 
@@ -481,7 +481,8 @@ def test_goals_undo(http, conn, logged):
 def test_rename_food(http, conn, logged):
     eggs, _, _ = logged
     sign_in(http)
-    assert "Rename…" in http.get("/app/foods").text
+    assert f'data-food="/app/foods/{eggs}" data-name="Egg, whole"' in http.get("/app/foods").text
+    assert "Rename…" in http.get(f"/app/foods/{eggs}").text
     r = http.post(
         f"/app/foods/{eggs}/rename", data={"name": "  Eggs  ", "back": "/app/foods"}, headers=ORIGIN
     )
@@ -512,20 +513,20 @@ def test_estimated_entries_show_a_tilde_until_new_grams(http, conn, logged):
 def test_portions_in_food_details_add_edit_delete(http, conn, logged):
     eggs, _, _ = logged
     sign_in(http)
-    page = http.get("/app/foods").text
+    here = f"/app/foods/{eggs}?back=%2Fapp%2Ffoods"
+    page = http.get(here).text
     assert "Your portions" in page and "+ Add portion" in page and "None yet" in page
-    back = {"back": "/app/foods"}
+    assert f'name="back" value="{here}"' in page
+    back = {"back": here}
     r = http.post(
         f"/app/foods/{eggs}/portions", data={"name": "1 Egg", "grams": "50", **back}, headers=ORIGIN
     )
-    assert r.headers["location"].endswith(f"#food-{eggs}")
+    assert r.headers["location"].startswith(here) and r.headers["location"].endswith("#portions")
     page = follow(http, r)
-    assert "Saved 1 Egg = 50 g." in page
-    assert f'<li id="food-{eggs}" class="swipe unconfirmed"><form' in page
-    assert f'id="food-{eggs}"' in page and "<details open>" in page  # back where it was
+    assert "Saved 1 Egg = 50 g." in page and 'id="portions"' in page  # back where it was
     # An estimated portion shows its "~"; saving a weight renames it and makes it exact
     store.save_portion(conn, eggs, "Egg", 48, estimated=True)
-    page = http.get("/app/foods").text.replace("\xa0", " ")
+    page = http.get(here).text.replace("\xa0", " ")
     assert "Estimated, not weighed" in page and "~</span>48 g" in page
     r = http.post(
         f"/app/foods/{eggs}/portions",

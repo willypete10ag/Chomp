@@ -356,6 +356,23 @@ def with_default_targets(targets: Mapping[str, float | None]) -> dict[str, float
     return out
 
 
+# A star on the calendar (#71): calories, protein, carbs and fat each within this share of
+# their goals
+STAR_WITHIN = 0.10
+
+
+def near_goals(totals: Mapping[str, float | None], targets: Mapping[str, float | None]) -> bool:
+    """True when calories and each macro land within STAR_WITHIN of their goals. Goals not
+    set count as the defaults (with_default_targets), as on Today."""
+    goals = with_default_targets(targets)
+    for k in CORE:
+        goal = goals[k]
+        eaten = totals.get(k) or 0.0
+        if not goal or abs(eaten - goal) > STAR_WITHIN * goal:
+            return False
+    return True
+
+
 def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:
     """Each macro's percent of the calories protein, carbs and fat give together (4/4/9 kcal
     per g). None when there is none of any."""

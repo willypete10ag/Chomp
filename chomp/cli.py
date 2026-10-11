@@ -126,9 +126,20 @@ def main(argv: list[str] | None = None) -> int:
             server.main()
         elif args.command == "backup":
             if args.daily:
-                backup.run_daily(settings.db_path, args.dest, args.keep, args.at, settings.tz)
+                backup.run_daily(
+                    settings.db_path,
+                    args.dest,
+                    args.keep,
+                    args.at,
+                    settings.tz,
+                    settings.photos_path,
+                )
             else:
-                print(backup.backup(settings.db_path, args.dest, args.keep))
+                print(
+                    backup.backup(
+                        settings.db_path, args.dest, args.keep, photos_dir=settings.photos_path
+                    )
+                )
         elif args.command == "restore":
             if not args.yes:
                 print(
@@ -137,7 +148,9 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 2
-            saved = backup.restore(args.file, settings.db_path, settings.migrations_dir)
+            saved = backup.restore(
+                args.file, settings.db_path, settings.migrations_dir, settings.photos_path
+            )
             if saved:
                 print(f"previous database saved as {saved}")
             print(f"restored {args.file}; start the server to apply any newer migrations")

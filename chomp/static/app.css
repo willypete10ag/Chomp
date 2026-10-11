@@ -137,12 +137,71 @@ a.step:active { background: var(--track); }
 .week a.is-today { border-color: var(--accent); }
 .week a[aria-current] { background: var(--accent); color: var(--on-accent); }
 .week a[aria-current] span { color: inherit; }
-.jump {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: .5rem; margin-bottom: 1rem;
+.week { margin-bottom: 1rem; }
+.opencal { color: inherit; text-decoration: none; }
+.opencal .caret { font-size: .9rem; color: var(--muted); vertical-align: middle; }
+
+/* Month view (#71): ‹ month › and a year box, then the days with dots and stars */
+.calhead { display: flex; align-items: center; gap: .25rem; margin-bottom: .5rem; }
+.calhead h2 { margin: 0; min-width: 7.5rem; text-align: center; font-size: 1.15rem; }
+.years { position: relative; margin-left: auto; }
+.years summary {
+  list-style: none; cursor: pointer; padding: .4rem .75rem; border-radius: 10px;
+  border: 1px solid var(--line); font-weight: 600;
 }
-.jump form { display: flex; gap: .5rem; }
-.jump input { width: auto; }
+.years summary::-webkit-details-marker { display: none; }
+.years[open] summary { border-color: var(--accent); }
+.yearlist {
+  position: absolute; right: 0; top: calc(100% + .25rem); z-index: 5; min-width: 6rem;
+  max-height: 13rem; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / .2);
+}
+.yearlist a {
+  display: block; padding: .6rem 1rem; text-decoration: none; color: var(--text); text-align: center;
+}
+.yearlist a + a { border-top: 1px solid var(--line); }
+.yearlist a[aria-current] { color: var(--accent); font-weight: 700; }
+.calnames, .caldays { display: grid; grid-template-columns: repeat(7, 1fr); gap: .2rem; }
+.calnames span { text-align: center; color: var(--muted); font-size: .8rem; padding: .25rem 0; }
+.caldays > * {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  min-height: 2.9rem; padding-top: .35rem; border-radius: 10px; text-decoration: none;
+  color: var(--text); border: 1px solid transparent;
+}
+.caldays b { font-weight: 500; }
+.caldays .future { color: var(--line); }
+.caldays a.is-today { border-color: var(--accent); }
+.caldays a[aria-current] { background: var(--accent); color: var(--on-accent); }
+.caldays a:active { background: var(--track); }
+.calendar .dot {
+  display: inline-block; width: .38rem; height: .38rem; border-radius: 50%;
+  background: var(--accent); margin-top: .2rem;
+}
+.calendar .star { font-style: normal; color: var(--carbs); font-size: .8rem; line-height: 1; margin-top: .1rem; }
+.caldays a[aria-current] .dot { background: var(--on-accent); }
+.caldays a[aria-current] .star { color: var(--on-accent); }
+.calfoot { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .75rem; }
+.calfoot p { margin: 0; }
+.calfoot .dot, .calfoot .star { vertical-align: middle; margin: 0 .1rem 0 .4rem; }
+.calfoot .dot:first-child { margin-left: 0; }
+
+/* The month view as a sheet over Today */
+.cal-layer {
+  position: fixed; inset: 0; z-index: 100; background: rgb(0 0 0 / 0);
+  transition: background .2s ease;
+}
+.cal-layer.on { background: rgb(0 0 0 / .3); }
+.cal-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; max-width: 40rem; margin: 0 auto;
+  background: var(--card); border-radius: 18px 18px 0 0; padding: .5rem 1rem;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -10px 30px rgb(0 0 0 / .2); transform: translateY(100%);
+  transition: transform .22s ease;
+}
+.cal-layer.on .cal-sheet { transform: none; }
+.cal-sheet .grab {
+  width: 2.5rem; height: .3rem; border-radius: 3px; background: var(--line); margin: 0 auto .5rem;
+}
 
 /* Summary: one big calorie figure, then protein, carbs and fat side by side */
 .hero { margin: 0; }
@@ -230,6 +289,28 @@ h2.section small { font-size: .8rem; font-weight: 400; color: var(--muted); floa
   width: 7.5rem; font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums;
 }
 .amount .unit { color: var(--muted); font-size: .95rem; }
+/* Servings / Grams (#80): a two-way toggle over the amount; only the picked box shows */
+.by { display: flex; gap: .4rem; }
+.by label {
+  flex: 1; display: flex; align-items: center; justify-content: center; min-height: 2.5rem;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer;
+  font-size: .9rem; font-weight: 600; color: var(--muted);
+}
+.by input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.by label:has(input:checked) {
+  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+}
+.by label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+form:has(input[name=by][value=servings]:checked) .amount:has([data-amount]),
+form:has(input[name=by][value=grams]:checked) .amount.servings { display: none; }
+.amount .lead { font-size: .85rem; color: var(--muted); }
+.amount .field input[data-servings] { width: 4.5rem; text-align: center; }
+.stepper {
+  width: 2.75rem; height: 2.75rem; min-height: 0; padding: 0; border-radius: 50%;
+  font-size: 1.4rem; line-height: 1; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line);
+}
+.stepper:active { background: var(--track); }
 input[type=range] {
   -webkit-appearance: none; appearance: none; width: 100%; height: 2.25rem; padding: 0;
   margin: 0; border: 0; background: transparent; min-height: 0; accent-color: var(--accent);
@@ -417,8 +498,72 @@ button.wide { width: 100%; margin-bottom: .75rem; }
 .swipe-action button {
   flex: 1; border-radius: 0; background: var(--over); color: #fff; font-weight: 600;
 }
-.js .swipe-body > details > summary { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-.swipe-body > details > summary.holding { background: var(--line); transition: background .45s ease; }
+.swipe-action.confirm button { background: var(--accent); color: var(--on-accent); }
+.js .swipe-action.confirm { inset: 0 auto 0 0; }
+.js .swipe-body > details > summary, .js .food-link {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none;
+}
+.swipe-body > details > summary.holding, .food-link.holding {
+  background: var(--line); transition: background .45s ease;
+}
+.food-link { display: block; color: inherit; text-decoration: none; }
+.entries li.held .swipe-body { visibility: hidden; }
+
+/* Foods (#72): press and hold a food for its menu. The food lifts over the blurred page */
+.hold-layer {
+  position: fixed; inset: 0; z-index: 100; touch-action: none;
+  background: rgb(0 0 0 / 0); transition: background .16s ease, backdrop-filter .16s ease;
+}
+.hold-layer.on {
+  background: rgb(0 0 0 / .22); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.hold-layer .lifted {
+  position: fixed; margin: 0; border-radius: 4px; transform-origin: center;
+  box-shadow: 0 0 0 .6rem var(--card); transition: transform .16s ease, box-shadow .16s ease;
+}
+.hold-layer.on .lifted {
+  transform: scale(1.04);
+  box-shadow: 0 0 0 .6rem var(--card), 0 14px 36px .6rem rgb(0 0 0 / .28);
+}
+.hold-layer .lifted.unconfirmed { border-left: 3px solid var(--carbs); padding-left: .6rem; }
+.hold-menu {
+  position: fixed; background: var(--card); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 10px 30px rgb(0 0 0 / .25); border: 1px solid var(--line);
+  opacity: 0; transform: scale(.85); transform-origin: top left;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.hold-menu.above { transform-origin: bottom left; }
+.hold-layer.on .hold-menu { opacity: 1; transform: none; }
+.hold-menu .item {
+  display: block; width: 100%; text-align: left; border-radius: 0; background: transparent;
+  color: var(--text); padding: .75rem 1rem; min-height: 2.9rem; font-weight: 500;
+}
+.hold-menu .item + .item { border-top: 1px solid var(--line); }
+.hold-menu .item:active { background: var(--track); }
+.hold-menu .item.ok { color: var(--accent); }
+.hold-menu .item.danger { color: var(--over); border: 0; border-top: 6px solid var(--bg); }
+.hold-menu.renaming { padding: .75rem; }
+
+/* A food's page (#72) */
+.food-hero .food-name { margin: 0; font-size: 1.45rem; line-height: 1.25; overflow-wrap: anywhere; }
+.food-hero .brand { margin: .15rem 0 0; }
+.food-hero .badges { margin: .5rem 0 .75rem; }
+.food-hero.unconfirmed { border-left: 4px solid var(--carbs); }
+.food-hero .hero .muted { font-weight: 400; }
+.label-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.label-table th, .label-table td { padding: .45rem 0; border-top: 1px solid var(--line); }
+.label-table thead th { border-top: 0; color: var(--muted); font-weight: 400; font-size: .85rem; }
+.label-table td, .label-table thead th + th { text-align: right; padding-left: .75rem; white-space: nowrap; }
+.label-table tbody th { text-align: left; font-weight: 600; }
+.label-table tr.top th, .label-table tr.top td { font-size: 1.1rem; font-weight: 700; border-top: 0; }
+.label-table tr.indent th { padding-left: 1rem; font-weight: 400; color: var(--muted); }
+.label-table tr.indent td { color: var(--muted); }
+.actions { display: grid; gap: .5rem; }
+.actions form, .actions button, .actions .button { width: 100%; margin: 0; }
+.actions details.sub { justify-self: start; width: 100%; }
+.actions details.confirm > summary { color: var(--over); }
+#portions { scroll-margin-top: 1rem; }
+#portions .portions-block { margin: 0; }
 .fold > .hint { margin: .25rem 0 0; }
 
 /* Day breakdown (#63): the calorie figure and macro tiles on Today open it */
@@ -472,3 +617,42 @@ a.macro:active, a.hero:active { background: var(--track); }
 .entries.portions details { margin-top: 0; }
 .entries li.swipe:target { margin: 0; padding: 0; background: none; border-radius: 0; }
 .swipe-body { display: flow-root; } /* keep inner margins from exposing the Delete behind it */
+
+/* Food photos (#74): a small square beside each food, and the photo on top of its page */
+.with-thumb { display: flex; align-items: center; gap: .7rem; }
+.with-thumb > .grow { flex: 1; min-width: 0; }
+.thumb {
+  width: 2.75rem; height: 2.75rem; flex-shrink: 0; border-radius: 10px; object-fit: cover;
+  background: var(--track);
+}
+.thumb.none {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-weight: 600; font-size: 1.05rem;
+}
+.food-photo { margin: -.25rem 0 .9rem; scroll-margin-top: 1rem; }
+.food-photo img {
+  display: block; width: 100%; max-height: 18rem; object-fit: cover; border-radius: 10px;
+  background: var(--track);
+}
+.photo-tools { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; flex-wrap: wrap; }
+.photo-tools .photo-form { margin: 0; }
+.photo-tools details.sub { margin: 0; }
+.photo-form label { cursor: pointer; }
+.js .photo-form input[type=file] {
+  position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
+}
+.photo-add {
+  display: flex; align-items: center; justify-content: center; gap: .4rem;
+  min-height: 7rem; border: 2px dashed var(--line); border-radius: 10px;
+  color: var(--accent); font-weight: 600;
+}
+.photo-add b { font-size: 1.4rem; line-height: 1; }
+.food-photo.none p { margin: .4rem 0 0; text-align: center; }
+.photo-form label.busy { opacity: .6; pointer-events: none; }
+.photo-form label.busy > span::after { content: "…"; }
+.photo-form label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* New food search results (#88): the whole row is the button */
+button.found {
+  display: block; width: 100%; text-align: left; background: none; color: inherit;
+  padding: 0; min-height: 0; border-radius: 0; font-weight: inherit;
+}

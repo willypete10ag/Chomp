@@ -24,6 +24,8 @@ chomp/
     gtin.py        # UPC/EAN normalization
   barcode.py       # barcode chain (saved -> FDC -> OFF), shared by the tool and dashboard
   label.py         # nutrition label photo OCR (tesseract) and its text parser
+  photos.py        # food photos: files, Open Food Facts fill and backfill
+  serving_fill.py  # serving sizes for used USDA generic foods from household measures
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
   web.py           # /app web dashboard (server-rendered, sign-in, entry edits)
@@ -33,7 +35,7 @@ tests/             # fixtures/ holds recorded upstream responses
 .github/workflows/ # CI: pytest on push
 Dockerfile         # slim, non-root (uid 10001)
 docker-compose.yml # chomp + nightly backup + cloudflared
-.env.example       # FDC_API_KEY, PUBLIC_URL + auth secrets, TUNNEL_TOKEN, backups, DB_PATH, TZ
+.env.example       # FDC_API_KEY, PUBLIC_URL + auth secrets, TUNNEL_TOKEN, backups, DB_PATH, PHOTOS_DIR, TZ
 .gitignore         # .env, *.db*, .venv/, __pycache__/
 README.md
 ```

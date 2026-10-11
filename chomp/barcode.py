@@ -23,6 +23,7 @@ class Lookup:
     flags: list[str] = field(default_factory=list)  # data-quality notes from the source
     warnings: list[str] = field(default_factory=list)  # sources that couldn't be reached
     unreachable: bool = False  # every source failed, so a miss may not be a real miss
+    image_url: str | None = None  # the source's product photo, when it gave one (#74)
 
 
 async def lookup(conn: sqlite3.Connection, gtin14: str, fdc: FDCClient, off: OFFClient) -> Lookup:
@@ -44,5 +45,6 @@ async def lookup(conn: sqlite3.Connection, gtin14: str, fdc: FDCClient, off: OFF
             continue
         if rec is not None:
             row, _ = store.cache_record(conn, rec)
-            return Lookup(name, store.mark_saved(conn, row["id"]), list(rec.flags), warnings)
+            row = store.mark_saved(conn, row["id"])
+            return Lookup(name, row, list(rec.flags), warnings, image_url=rec.image_url)
     return Lookup(None, None, warnings=warnings, unreachable=len(warnings) == tried)

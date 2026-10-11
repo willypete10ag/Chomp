@@ -104,7 +104,9 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
                     (rec.gtin if free else row["gtin"], row["id"]),
                 )
                 row = get_food(conn, row["id"])
-            return (_fill_micros(conn, row, n) if same else row), False
+            if same:
+                row = fill_serving(conn, _fill_micros(conn, row, n), rec)
+            return row, False
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS},"
             f" serving_g, serving_desc) VALUES (?, ?, ?, ?, ?, 0, {NUTRIENT_MARKS}, ?, ?)",
@@ -120,6 +122,18 @@ def cache_record(conn: sqlite3.Connection, rec: FoodRecord) -> tuple[sqlite3.Row
             ),
         )
         return get_food(conn, cur.lastrowid), True
+
+
+def fill_serving(conn: sqlite3.Connection, row: sqlite3.Row, rec: FoodRecord) -> sqlite3.Row:
+    """Give a food with no serving size the one its upstream record now has (USDA household
+    measures for generic foods, after they were cached without one)."""
+    if row["serving_g"] is not None or rec.serving_g is None:
+        return row
+    conn.execute(
+        "UPDATE foods SET serving_g = ?, serving_desc = ? WHERE id = ? AND serving_g IS NULL",
+        (rec.serving_g, rec.serving_desc, row["id"]),
+    )
+    return get_food(conn, row["id"])
 
 
 def _fill_micros(conn: sqlite3.Connection, row: sqlite3.Row, n: logic.Nutrients) -> sqlite3.Row:
@@ -299,10 +313,10 @@ def search_portions(conn: sqlite3.Connection, query: str, limit: int) -> list[sq
 
 
 # Foods someone has chosen: verified, added from a label or barcode, logged, with a portion, or in
-# a template. FDC search hits are cached in foods too, but only as a lookup cache. Foods are
-# shared, so one person's saved foods are found by everyone.
+# a template. FDC and Open Food Facts search hits (#88) are cached in foods too, but only as a
+# lookup cache. Foods are shared, so one person's saved foods are found by everyone.
 USED_FOOD = (
-    "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source != 'fdc'"
+    "f.deleted = 0 AND (f.verified = 1 OR f.saved = 1 OR f.source NOT IN ('fdc', 'off')"
     " OR EXISTS (SELECT 1 FROM entries e WHERE e.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM portions p WHERE p.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
@@ -368,6 +382,15 @@ def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") ->
         f" ORDER BY {order or MOST_USED} LIMIT ?",
         (user, user, limit),
     ).fetchall()
+
+
+def food_usage(conn: sqlite3.Connection, food_id: int) -> tuple[int, str | None]:
+    """How many of this user's entries log the food, and when they last logged it (UTC)."""
+    user = user_of(conn)
+    row = conn.execute(
+        f"SELECT {USES}, {LAST_USED} FROM foods f WHERE f.id = ?", (user, user, food_id)
+    ).fetchone()
+    return (row["uses"], row["last_used"]) if row else (0, None)
 
 
 def set_food_confirmed(conn: sqlite3.Connection, food_id: int, confirmed: bool) -> sqlite3.Row:
@@ -1001,6 +1024,13 @@ def entries_between(
         (user_of(conn), start_utc, end_utc),
     ).fetchall()
     return [(r["eaten_at"], nutrients_of(r)) for r in rows]
+
+
+def first_meal_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest meal was eaten (UTC), or None before anything is logged."""
+    return conn.execute(
+        "SELECT min(eaten_at) FROM meals WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()[0]
 
 
 # --- Targets --------------------------------------------------------------------------------
