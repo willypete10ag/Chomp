@@ -154,9 +154,10 @@ Facts label, or type the values in. A barcode is looked up in USDA and Open Food
 the values and save, and it counts as confirmed. A label photo is read on the server
 (tesseract, no AI) and each value gets a tick box: fix anything misread, tick each value, and
 only a food with every value ticked counts as confirmed. Typed-in foods stay unconfirmed
-(amber). The camera needs the HTTPS address; the first scan asks for camera access. Press
-and hold a food to see its details or rename it; swipe it left and tap Delete to delete it (for everyone; meals already
-logged keep their numbers).
+(amber). The camera needs the HTTPS address; the first scan asks for camera access. Tap
+a food to open its page (nutrition facts, portions, Log it, Confirm, Edit, Rename, Delete).
+Press and hold it for a quick menu; swipe it left and tap Delete to delete it (for everyone;
+meals already logged keep their numbers), or swipe an amber one right and tap Confirm.
 
 On a phone, add it to the home screen so it opens like an app:
 

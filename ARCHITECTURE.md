@@ -49,9 +49,13 @@ out), History (7/30/90-day averages and inline-SVG charts; each day links to its
 and Foods (one search over saved
 meals and used foods, most logged first, with filters for recent, newest,
 unconfirmed and confirmed foods (`store.FOOD_VIEWS`) and sections that fold away, remembered
-in the browser; tap a food for its per-serving values and
-source, or to give it a shorter name, and for your portions of it (#75): swipe one left to
-delete it, press and hold it to change its name or grams, or + Add portion). An entry whose
+in the browser. A tap opens a food's page (#72): name, brand and calories, protein, carbs
+and fat, nutrition facts per serving and per 100 g, vitamins and minerals folded away, your
+portions of it (#75: swipe one left to delete it, press and hold it to change its name or
+grams, or + Add portion), then Log it, Confirm, Edit (all values, `/foods/{id}/edit`, with
+Undo), Rename and Delete, and how often you've logged it. Press and hold a food in the list
+for a menu over the blurred page (Edit, Rename, Confirm on amber foods, Log it, Delete);
+swipe it left to Delete, or an amber one right to Confirm). An entry whose
 grams were estimated shows a muted "~" before them until new grams are saved, and Add food
 offers your portions as chips ("1 handful · 30 g") next to the gram chips. For a food with a serving
 size, Add food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
@@ -80,7 +84,7 @@ photo, read on the server by `tesseract` (installed in the image) and parsed by
 cached row (only values the person changed are rewritten); a label food is saved
 `source='label'`, confirmed only when every filled-in value was ticked; a typed one is
 `source='manual'`, confirmed only when its Verified box is ticked (#68). Any food can be
-confirmed by hand, or marked unconfirmed again, from its details on Foods (press and hold). A barcode given with a label or typed food moves to it, as
+confirmed by hand, or marked unconfirmed again, from its page, its hold menu, or a swipe right on Foods. A barcode given with a label or typed food moves to it, as
 with `save_food_from_label`. An Open Food Facts hit Claude looks up stays unconfirmed
 until `confirm_food`.
 
@@ -139,8 +143,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
-  a `save_food` food saved with `confirmed`, a food confirmed by hand on the dashboard (Foods,
-  press and hold, Confirm), a typed-in food saved with Verified ticked, a barcode food saved on the
+  a `save_food` food saved with `confirmed`, a food confirmed by hand on the dashboard (Foods:
+  its page, hold menu or swipe right), a typed-in food saved with Verified ticked, a barcode food saved on the
   dashboard's New food page, or a label photo food whose every value was ticked there.
   Everything else is unconfirmed (amber on the dashboard). `confirm_food(confirmed=False)` or
   Mark unconfirmed on the dashboard takes an approval back.

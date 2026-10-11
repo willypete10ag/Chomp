@@ -378,15 +378,17 @@
   reveal();
   window.addEventListener("hashchange", reveal);
 
-  // Foods: swipe a food left to show its Delete button; swipe back, tap it or open
-  // another to hide it again. Only one shows at a time. Press and hold a food to open it
-  // (details and Rename); a plain tap only closes an open one. Portions in a food's
-  // details work the same way: swipe to delete, press and hold to edit.
+  // Foods (#72): a tap opens a food's page. Swipe a food left to show its Delete button,
+  // or an unconfirmed one right to show Confirm; swipe back, tap it or swipe another to hide
+  // it again. Only one shows at a time. Press and hold a food for a menu (Edit, Rename,
+  // Confirm, Log it, Delete) over the blurred page. Portions on a food's page swipe left to
+  // delete and open with a press and hold to edit.
   var OPEN = 96;
   var HOLD_MS = 450;
   var shown = null;
   function slide(body, x) {
     body.style.transform = x ? "translateX(" + x + "px)" : "";
+    body.dataset.x = String(x || 0);
   }
   function hide() {
     if (shown) slide(shown, 0);
@@ -396,42 +398,60 @@
     if (shown && !shown.parentNode.contains(event.target)) hide();
   });
   document.querySelectorAll("[data-swipe]").forEach(function (body) {
+    var li = body.parentNode;
+    var left = null; // Confirm, behind the food's left edge
+    var right = null; // Delete, behind its right edge
+    Array.prototype.forEach.call(li.children, function (child) {
+      if (!child.classList.contains("swipe-action")) return;
+      if (child.classList.contains("confirm")) left = child;
+      else right = child;
+    });
+    var details = body.querySelector(":scope > details");
+    var summary = details && details.querySelector("summary");
+    var press = summary || body.querySelector(".food-link");
     var start = null;
     var dx = 0;
     var sliding = false;
-    var details = body.querySelector("details");
-    var summary = details.querySelector("summary");
     var timer = null;
     var held = false;
     function unhold() {
       clearTimeout(timer);
       timer = null;
-      summary.classList.remove("holding");
+      press.classList.remove("holding");
+    }
+    function onHold() {
+      unhold();
+      held = true;
+      if (navigator.vibrate) navigator.vibrate(15);
+      if (details) details.open = true;
+      else holdMenu(li);
     }
     body.addEventListener("pointerdown", function (event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       // A portion inside an open food swipes and holds on its own, not the food with it
       if (event.target.closest("[data-swipe]") !== body) return;
-      start = { x: event.clientX, y: event.clientY, base: body === shown ? -OPEN : 0 };
-      dx = 0;
+      start = { x: event.clientX, y: event.clientY, base: parseFloat(body.dataset.x) || 0 };
+      dx = start.base;
       sliding = false;
       held = false;
       unhold();
-      if (body !== shown && !details.open && summary.contains(event.target)) {
-        summary.classList.add("holding");
-        timer = setTimeout(function () {
-          unhold();
-          held = true;
-          details.open = true;
-          var rename = details.querySelector("details.sub.rename");
-          if (rename) rename.open = true;
-          if (navigator.vibrate) navigator.vibrate(15);
-        }, HOLD_MS);
+      if (body !== shown && !(details && details.open) && press.contains(event.target)) {
+        press.classList.add("holding");
+        timer = setTimeout(onHold, HOLD_MS);
       }
     });
-    // A long press shouldn't select text or pop up the phone's menu
-    summary.addEventListener("contextmenu", function (event) {
-      if (timer || held) event.preventDefault();
+    // A long press shouldn't select text or pop up the phone's menu; a right click on a
+    // computer opens the hold menu
+    press.addEventListener("contextmenu", function (event) {
+      if (timer || held) {
+        event.preventDefault();
+        return;
+      }
+      if (!details && event.pointerType !== "touch") {
+        event.preventDefault();
+        hide();
+        holdMenu(li);
+      }
     });
     body.addEventListener("pointermove", function (event) {
       if (!start) return;
@@ -452,7 +472,9 @@
           // capture is a nicety
         }
       }
-      dx = Math.max(-OPEN - 24, Math.min(0, start.base + mx));
+      var lo = right ? -OPEN - 24 : 0;
+      var hi = left ? OPEN + 24 : 0;
+      dx = Math.max(lo, Math.min(hi, start.base + mx));
       slide(body, dx);
     });
     function end() {
@@ -460,20 +482,17 @@
       if (!start) return;
       body.classList.remove("dragging");
       if (sliding) {
-        if (dx < -OPEN / 2) {
-          slide(body, -OPEN);
-          shown = body;
-        } else {
-          slide(body, 0);
-          if (shown === body) shown = null;
-        }
+        var to = dx < -OPEN / 2 ? -OPEN : dx > OPEN / 2 ? OPEN : 0;
+        slide(body, to);
+        if (to) shown = body;
+        else if (shown === body) shown = null;
       }
       start = null;
     }
     body.addEventListener("pointerup", end);
     body.addEventListener("pointercancel", end);
-    // The tap that ends a swipe, or a tap on a food showing Delete, doesn't open it. Nor
-    // does a plain tap (only a long press does), though the keyboard's Enter still does.
+    // The tap that ends a swipe or a hold, or a tap on a food showing an action, doesn't
+    // open it. A portion opens only with a press and hold, though Enter still opens it.
     body.addEventListener("click", function (event) {
       if (sliding || body === shown) {
         event.preventDefault();
@@ -483,23 +502,191 @@
         held = false;
         return;
       }
-      if (!summary.contains(event.target)) return;
-      if (held || (!details.open && event.detail > 0)) event.preventDefault();
+      if (!press.contains(event.target)) return;
+      if (held || (summary && !details.open && event.detail > 0)) event.preventDefault();
       held = false;
     }, true);
-    // Tabbing onto Delete slides the food aside so the button is seen before it's pressed
-    var action = body.parentNode.querySelector(".swipe-action");
-    if (action) {
+    // Tabbing onto Delete or Confirm slides the food aside so the button is seen first
+    [[right, -OPEN], [left, OPEN]].forEach(function (pair) {
+      var action = pair[0];
+      if (!action) return;
       action.addEventListener("focusin", function () {
         if (shown && shown !== body) hide();
-        slide(body, -OPEN);
+        slide(body, pair[1]);
         shown = body;
       });
       action.addEventListener("focusout", function () {
         if (shown === body) hide();
       });
-    }
+    });
   });
+
+  // The hold menu: the food lifts out of the list, a little larger, over the blurred and
+  // dimmed page, with its actions underneath (above it near the bottom of the screen).
+  // A tap outside, Escape or the back button closes it.
+  function holdMenu(li) {
+    var url = li.dataset.food;
+    var name = li.dataset.name;
+    var back = li.dataset.back;
+    var body = li.querySelector("[data-swipe]");
+    var rect = body.getBoundingClientRect();
+    var layer = document.createElement("div");
+    layer.className = "hold-layer";
+    var lifted = body.cloneNode(true);
+    lifted.removeAttribute("data-swipe");
+    lifted.removeAttribute("style");
+    lifted.className = "swipe-body lifted" + (li.classList.contains("unconfirmed") ? " unconfirmed" : "");
+    lifted.style.top = rect.top + "px";
+    lifted.style.left = rect.left + "px";
+    lifted.style.width = rect.width + "px";
+    var menu = document.createElement("div");
+    menu.className = "hold-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", name);
+
+    function post(action, fields) {
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + action;
+      Object.keys(fields).forEach(function (k) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = k;
+        input.value = fields[k];
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    }
+    function item(label, run, cls) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "item" + (cls ? " " + cls : "");
+      b.setAttribute("role", "menuitem");
+      b.textContent = label;
+      b.addEventListener("click", function (event) {
+        if (armed || event.detail === 0) run();
+      });
+      menu.appendChild(b);
+      return b;
+    }
+    function go(href) {
+      return function () {
+        location.href = href;
+      };
+    }
+    item("Edit", go(url + "/edit?back=" + encodeURIComponent(back)));
+    item("Rename", rename);
+    if (li.dataset.confirmed !== "1") {
+      item("Confirm", function () {
+        post("/confirm", { back: back, confirmed: "1" });
+      }, "ok");
+    }
+    if (li.dataset.log) item("Log it", go(li.dataset.log));
+    item("Delete", function () {
+      post("/delete", { back: back });
+    }, "danger");
+
+    // Rename in place: the menu turns into the name box
+    function rename() {
+      menu.textContent = "";
+      menu.classList.add("renaming");
+      var form = document.createElement("form");
+      form.method = "post";
+      form.action = url + "/rename";
+      form.className = "stack";
+      var keep = document.createElement("input");
+      keep.type = "hidden";
+      keep.name = "back";
+      keep.value = back;
+      var label = document.createElement("label");
+      label.textContent = "Name";
+      var box = document.createElement("input");
+      box.name = "name";
+      box.value = name;
+      box.required = true;
+      box.maxLength = 120;
+      label.appendChild(box);
+      var save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save name";
+      form.append(keep, label, save);
+      menu.appendChild(form);
+      place();
+      box.focus();
+      box.select();
+    }
+
+    function place() {
+      var gap = 10;
+      var margin = 12;
+      var h = menu.offsetHeight;
+      var top = rect.top;
+      var below = top + rect.height + gap + h <= innerHeight - margin;
+      if (!below && top - gap - h < margin) {
+        // No room either side: move the food up so the menu fits under it
+        top = Math.max(margin, innerHeight - margin - h - gap - rect.height);
+        below = true;
+      }
+      lifted.style.top = top + "px";
+      menu.style.left = rect.left - 6 + "px"; // under the lifted food's rounded edge
+      menu.style.width = Math.min(rect.width, 280) + "px";
+      menu.style.top = (below ? top + rect.height + gap : top - gap - h) + "px";
+      menu.classList.toggle("above", !below);
+    }
+
+    function close() {
+      layer.classList.remove("on");
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("popstate", onBack);
+      li.classList.remove("held");
+      setTimeout(function () {
+        layer.remove();
+      }, 160);
+    }
+    function onKey(event) {
+      if (event.key === "Escape") {
+        close();
+        if (history.state && history.state.holdMenu) history.back();
+      }
+    }
+    function onBack() {
+      close();
+    }
+    // The finger that held the food is still down when the menu opens: only a new touch
+    // (or a key) picks something, so lifting it can't
+    var armed = false;
+    layer.addEventListener("pointerdown", function () {
+      armed = true;
+    });
+    layer.addEventListener("click", function (event) {
+      if (armed && event.target === layer) {
+        close();
+        if (history.state && history.state.holdMenu) history.back();
+      }
+    });
+    lifted.addEventListener("click", function (event) {
+      if (!armed) event.preventDefault();
+    });
+    layer.append(lifted, menu);
+    document.body.appendChild(layer);
+    li.classList.add("held");
+    place();
+    // Let the browser draw the start state, then lift
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        layer.classList.add("on");
+      });
+    });
+    try {
+      history.pushState({ holdMenu: true }, "");
+      window.addEventListener("popstate", onBack);
+    } catch (err) {
+      // the back button just leaves the page then
+    }
+    document.addEventListener("keydown", onKey);
+    menu.querySelector("button").focus({ preventScroll: true });
+  }
 
   document.querySelectorAll("form").forEach(changed);
 })();

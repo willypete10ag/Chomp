@@ -362,7 +362,7 @@ def test_foods_and_templates(http, conn, logged):
     r = http.get("/app/foods")
     text = r.text.replace("\xa0", " ")
     assert "Egg white" in text and "Confirmed" in text
-    assert "logged 1&times;" in text
+    assert "logged 1&times;" not in text  # on the food's page now (#72)
     assert "Cached FDC hit" not in text
     assert "<strong>Usual breakfast</strong>" in text and "143 kcal" in text
     assert '<h2 class="section">Saved meals</h2>' in text
@@ -400,8 +400,14 @@ def test_food_details_show_serving_and_extra_nutrients(http, conn, logged):
         (whites,),
     )
     sign_in(http)
-    text = http.get("/app/foods").text.replace("\xa0", " ")
+    text = http.get("/app/foods").text
+    link = f'href="/app/foods/{whites}?back=%2Fapp%2Ffoods"'
+    assert link in text  # a tap opens the food's page (#72)
+    text = http.get(f"/app/foods/{whites}?back=/app/foods").text.replace("\xa0", " ")
     # 52 kcal per 100 g -> 23.92 kcal in a 46 g serving
-    assert "<b>Per serving</b> (3 tbsp): 24 kcal" in text
-    assert "Sodium 166 mg" in text
-    assert "Mark unconfirmed" in text and "Not confirmed yet" in text
+    assert '<span class="big kcal">24</span> kcal' in text
+    assert "per serving · 3 tbsp (46 g)" in text
+    assert '<th scope="row">Sodium</th><td>76 mg</td><td>166 mg</td>' in text
+    assert "Mark unconfirmed" in text and "Logged 1 time, last" in text
+    assert "Source: " in text and 'href="/app/foods"' in text
+    assert http.get("/app/foods/9999").status_code == 404

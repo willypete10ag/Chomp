@@ -358,6 +358,15 @@ def list_used_foods(conn: sqlite3.Connection, limit: int, view: str = "most") ->
     ).fetchall()
 
 
+def food_usage(conn: sqlite3.Connection, food_id: int) -> tuple[int, str | None]:
+    """How many of this user's entries log the food, and when they last logged it (UTC)."""
+    user = user_of(conn)
+    row = conn.execute(
+        f"SELECT {USES}, {LAST_USED} FROM foods f WHERE f.id = ?", (user, user, food_id)
+    ).fetchone()
+    return (row["uses"], row["last_used"]) if row else (0, None)
+
+
 def set_food_confirmed(conn: sqlite3.Connection, food_id: int, confirmed: bool) -> sqlite3.Row:
     """Mark a food confirmed (the person vouches for its numbers) or back to unconfirmed,
     leaving its values alone."""
