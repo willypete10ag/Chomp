@@ -25,3 +25,4 @@ class FoodRecord:
     serving_g: float | None = None
     serving_desc: str | None = None
     flags: list[str] = field(default_factory=list)
+    image_url: str | None = None  # product photo (OFF only), for the food's picture (#74)

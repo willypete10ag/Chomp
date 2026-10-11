@@ -218,6 +218,8 @@ Migrations run automatically on start. Take a backup first if the release notes 
 
 The `backup` container copies the database every night at `BACKUP_AT` (local `TZ`) using
 SQLite's online backup, integrity-checks the copy, and keeps the newest `BACKUP_KEEP`.
+Food photos (kept in the data volume at `/data/photos`) go to a `photos/` folder beside the
+backups; a restore copies back any that are missing.
 Back up right now with `docker compose exec backup chomp backup`.
 
 To restore (this replaces the whole database; the current one is kept as

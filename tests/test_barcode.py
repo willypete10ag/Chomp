@@ -8,6 +8,7 @@ from conftest import fixture_json
 from mcp import Client
 
 from chomp import store
+from chomp.photos import Photos
 from chomp.server import build_server
 from chomp.sources import off as offmod
 from chomp.sources.off import OFFClient
@@ -26,7 +27,8 @@ def off(upstream):
 
 @pytest.fixture
 def server(settings, conn, fdc, off):
-    return build_server(settings, fdc=fdc, off=off)
+    # No product photos here: these tests count the lookup chain's requests (see test_photos)
+    return build_server(settings, fdc=fdc, off=off, photos=Photos(settings.photos_path))
 
 
 @pytest.fixture

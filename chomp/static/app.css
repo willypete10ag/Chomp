@@ -558,3 +558,37 @@ a.macro:active, a.hero:active { background: var(--track); }
 .entries.portions details { margin-top: 0; }
 .entries li.swipe:target { margin: 0; padding: 0; background: none; border-radius: 0; }
 .swipe-body { display: flow-root; } /* keep inner margins from exposing the Delete behind it */
+
+/* Food photos (#74): a small square beside each food, and the photo on top of its page */
+.with-thumb { display: flex; align-items: center; gap: .7rem; }
+.with-thumb > .grow { flex: 1; min-width: 0; }
+.thumb {
+  width: 2.75rem; height: 2.75rem; flex-shrink: 0; border-radius: 10px; object-fit: cover;
+  background: var(--track);
+}
+.thumb.none {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-weight: 600; font-size: 1.05rem;
+}
+.food-photo { margin: -.25rem 0 .9rem; scroll-margin-top: 1rem; }
+.food-photo img {
+  display: block; width: 100%; max-height: 18rem; object-fit: cover; border-radius: 10px;
+  background: var(--track);
+}
+.photo-tools { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; flex-wrap: wrap; }
+.photo-tools .photo-form { margin: 0; }
+.photo-tools details.sub { margin: 0; }
+.photo-form label { cursor: pointer; }
+.js .photo-form input[type=file] {
+  position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
+}
+.photo-add {
+  display: flex; align-items: center; justify-content: center; gap: .4rem;
+  min-height: 7rem; border: 2px dashed var(--line); border-radius: 10px;
+  color: var(--accent); font-weight: 600;
+}
+.photo-add b { font-size: 1.4rem; line-height: 1; }
+.food-photo.none p { margin: .4rem 0 0; text-align: center; }
+.photo-form label.busy { opacity: .6; pointer-events: none; }
+.photo-form label.busy > span::after { content: "…"; }
+.photo-form label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -88,6 +88,19 @@ confirmed by hand, or marked unconfirmed again, from its page, its hold menu, or
 with `save_food_from_label`. An Open Food Facts hit Claude looks up stays unconfirmed
 until `confirm_food`.
 
+Food photos (#74, `chomp/photos.py`): one picture per food, shown at the top of its page, as
+a small square on Foods, Today and Add food rows (a food without one shows its first letter),
+and added, replaced or removed from its page or its hold menu. A food with a barcode gets
+Open Food Facts' front-of-package photo in the background after any barcode lookup (tool or
+dashboard), and a one-time backfill (started by the first lookup or Foods page after a
+deploy, then marked done with `.off-backfill-done`) does the same for barcode foods saved
+earlier. Only images on Open Food Facts' own HTTPS hosts are downloaded. Label photos are
+never used as a food's picture. Photos are files, `PHOTOS_DIR/<food_id>.jpg` (default
+`photos/` next to the database), re-encoded on the way in: upright, at most 800 px, no EXIF.
+Removing one leaves `<food_id>.none` so Open Food Facts doesn't put it back. Chat can't hand
+Chomp a picture, so `save_food` and `save_food_from_label` return `add_photo_url` (the
+food's page) when it has none, and the server instructions tell Claude to send that link.
+
 ### Users
 Each person has their own log (#46, migration 0006): `meals` (and so entries), `targets`,
 `portions`, `meal_templates`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
@@ -160,14 +173,14 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Security
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
-- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
+- Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. Food photos are served only to signed-in people. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
 - The container runs as uid 10001 with a read-only root filesystem and no capabilities; the database lives in the `chomp-data` volume.
 
 ## Backup and export
-- `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one.
+- `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one. Food photos are copied to `BACKUP_HOST_DIR/photos` (new and changed files only; none deleted there), and a restore copies back any the photos folder lacks.
 - `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking

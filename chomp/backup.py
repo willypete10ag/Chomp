@@ -2,12 +2,15 @@
 
 Backups use SQLite's online backup API (what `sqlite3 .backup` uses), so they are consistent
 while the server is running. Each copy is integrity-checked before it gets its final name.
+Food photos (#74) are copied alongside into one photos/ folder: new and changed files only,
+and none are deleted there, so a photo removed today is still there for an older backup.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import shutil
 import sqlite3
 import time as _time
 from contextlib import closing
@@ -42,10 +45,38 @@ def backups(dest_dir: Path) -> list[Path]:
     return sorted(p for p in dest_dir.iterdir() if NAME_RE.match(p.name))
 
 
+def copy_photos(src_dir: str | Path, dest_dir: str | Path, *, only_missing: bool = False) -> int:
+    """Copy food photos (and their removal markers) from src_dir to dest_dir: files that are
+    new or changed there, or with only_missing, files dest_dir lacks. Returns how many."""
+    src, dest = Path(src_dir), Path(dest_dir)
+    if not src.is_dir():
+        return 0
+    copied = 0
+    for f in src.iterdir():
+        if not f.is_file() or f.name.startswith(".") or f.suffix not in (".jpg", ".none"):
+            continue
+        target = dest / f.name
+        if target.exists():
+            same = target.stat().st_size == f.stat().st_size
+            if only_missing or (same and target.stat().st_mtime_ns >= f.stat().st_mtime_ns):
+                continue
+        dest.mkdir(parents=True, exist_ok=True)
+        partial = dest / f".{f.name}.partial"
+        shutil.copy2(f, partial)
+        partial.replace(target)
+        copied += 1
+    return copied
+
+
 def backup(
-    db_path: str | Path, dest_dir: str | Path, keep: int, now: datetime | None = None
+    db_path: str | Path,
+    dest_dir: str | Path,
+    keep: int,
+    now: datetime | None = None,
+    photos_dir: str | Path | None = None,
 ) -> Path:
-    """Copy the live database to dest_dir/chomp-YYYYMMDD-HHMMSS.db and keep the newest `keep`."""
+    """Copy the live database to dest_dir/chomp-YYYYMMDD-HHMMSS.db and keep the newest `keep`.
+    Food photos in photos_dir go to dest_dir/photos."""
     if keep < 1:
         raise BackupError("keep must be at least 1")
     src_path = Path(db_path)
@@ -68,14 +99,26 @@ def backup(
         old.unlink()
         log.info("pruned %s", old.name)
     log.info("backed up to %s", final)
+    if photos_dir is not None:
+        try:
+            if n := copy_photos(photos_dir, dest_dir / "photos"):
+                log.info("copied %d food photo file(s) to %s", n, dest_dir / "photos")
+        except OSError:
+            log.exception("copying food photos failed; the database backup is fine")
     return final
 
 
-def restore(backup_file: str | Path, db_path: str | Path, migrations_dir: Path) -> Path | None:
+def restore(
+    backup_file: str | Path,
+    db_path: str | Path,
+    migrations_dir: Path,
+    photos_dir: str | Path | None = None,
+) -> Path | None:
     """Replace the database at db_path with backup_file. Stop the server first.
 
     The current database is first saved next to it as <name>.pre-restore-<time>; that path
-    is returned (None if there was no database)."""
+    is returned (None if there was no database). Food photos saved beside the backup that
+    photos_dir lacks are copied back; photos already there stay."""
     src_path = Path(backup_file)
     if not src_path.is_file():
         raise BackupError(f"{src_path} not found")
@@ -95,6 +138,9 @@ def restore(backup_file: str | Path, db_path: str | Path, migrations_dir: Path) 
     with closing(sqlite3.connect(src_path)) as src, closing(db.connect(target)) as dst:
         src.backup(dst)
     log.info("restored %s into %s (schema version %d)", src_path.name, target, version)
+    if photos_dir is not None:
+        n = copy_photos(src_path.parent / "photos", photos_dir, only_missing=True)
+        log.info("restored %d food photo file(s)", n)
     return saved
 
 
@@ -108,7 +154,9 @@ def next_run(at: time, tz: str, now: datetime) -> datetime:
     return candidate
 
 
-def run_daily(db_path: str, dest_dir: str, keep: int, at: time, tz: str) -> None:
+def run_daily(
+    db_path: str, dest_dir: str, keep: int, at: time, tz: str, photos_dir: str | Path | None = None
+) -> None:
     """Back up once a day at local time `at`, forever. Failures are logged and retried
     the next day, so one bad night never stops the schedule."""
     zone = ZoneInfo(tz)
@@ -118,6 +166,6 @@ def run_daily(db_path: str, dest_dir: str, keep: int, at: time, tz: str) -> None
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
             _time.sleep(min(wait, 300))  # wake periodically so clock changes can't strand us
         try:
-            backup(db_path, dest_dir, keep, now=datetime.now(zone))
+            backup(db_path, dest_dir, keep, now=datetime.now(zone), photos_dir=photos_dir)
         except Exception:
             log.exception("backup failed; will retry at the next scheduled time")
