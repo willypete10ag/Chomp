@@ -553,15 +553,16 @@ def build_server(
 
         Results are ranked: foods with one of the user's portions named by the phrase first
         ("birria taco"), then foods the user has used before (logged, saved from a label or
-        barcode, verified first), then USDA FoodData Central (closest name match first,
-        generic Foundation and SR Legacy foods before Branded products). Every result has a
-        food_id, per-100 g nutrients from the database, serving_g, and the user's remembered
-        `portions` (e.g. handful = 30 g) for turning counts into grams. Prefer portion and
-        saved matches; prefer generic FDC foods unless the user named a brand. If
-        `templates` names a saved meal template, the user means that meal: log it with
-        log_meal_template. Show the user which food you picked. If nothing fits, say so and
-        ask for a barcode or label photo rather than guessing; for a restaurant dish, use
-        save_food with the restaurant's published nutrition instead of a generic FDC food.
+        barcode, verified first), then USDA FoodData Central (closest name match first;
+        generic Foundation, SR Legacy and Survey (dishes as eaten) foods before Branded
+        products). Every result has a food_id, per-100 g nutrients from the database,
+        serving_g, and the user's remembered `portions` (e.g. handful = 30 g) for turning
+        counts into grams. Prefer portion and saved matches; prefer generic FDC foods
+        unless the user named a brand. If `templates` names a saved meal template, the user
+        means that meal: log it with log_meal_template. Show the user which food you picked.
+        If nothing fits, say so and ask for a barcode or label photo rather than guessing;
+        for a restaurant dish, use save_food with the restaurant's published nutrition
+        instead of a generic FDC food.
         """
         notes: list[str] = []
         hits: list[SearchHit] = []

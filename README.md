@@ -143,12 +143,16 @@ Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It sho
 meals against your targets (the arrows, the row of days and the date box move between days),
 7/30/90-day history charts, and your saved meals and foods. It works without
 Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
-set), tapping an item gives a number of servings or a grams slider, a move to another meal and delete, **Edit meal…**
+set, by itself when fewer than 3 of your foods match), tapping an item gives a number of servings or a grams slider, a move to another meal and delete, **Edit meal…**
 changes a meal's name, time or date or combines it with another, **Edit goals** sets your
 daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
 five-wrong-passwords lockout applies.
 
-**Foods > Add a new food** adds a food three ways, all ending in the same form: scan its
+**Foods > Add a new food** starts with **Search for a food**: it looks a name up in USDA
+FoodData Central (including dishes as eaten, like "chicken burrito") and Open Food Facts.
+Tap a result to add it to your foods and open its page; a USDA food counts as confirmed, an
+Open Food Facts one stays unconfirmed (amber) until you check it against the label. It also
+adds a food three ways, all ending in the same form: scan its
 barcode with the phone camera (or type the number under it), take a photo of the Nutrition
 Facts label, or type the values in. A barcode is looked up in USDA and Open Food Facts; check
 the values and save, and it counts as confirmed. A label photo is read on the server

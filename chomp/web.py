@@ -66,6 +66,8 @@ LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
 PORTION_NAME_MAX = 40
 ADD_LIMIT = 30  # foods listed on the Add food page
 USDA_LIMIT = 10
+AUTO_USDA_BELOW = 3  # Add food searches USDA by itself when fewer of your foods match (#88)
+FOUND_LIMIT = 8  # results per source in New food's search (#88)
 UNDO_SHOW_S = 30 * 60  # how long a confirmation keeps its Undo button
 TIME_RE = re.compile(r"(\d{2}):(\d{2})(:\d{2})?")
 MIN_YEAR, MAX_YEAR = 1900, 2999
@@ -1421,6 +1423,32 @@ def pick_item(
     )
 
 
+def found_item(row, back: str, photo: str = "") -> str:
+    """A New food search result (#88): tapping it adds the food to Foods and opens its page.
+    A USDA food counts as confirmed once picked; an Open Food Facts one stays unconfirmed."""
+    n = logic.round_for_display(store.nutrients_of(row))
+    meta = [e(row["brand"])] if row["brand"] else []
+    if row["verified"]:
+        meta.append('<span class="badge ok">Confirmed</span>')
+    elif row["source"] == "off":
+        meta.append('<span class="badge unsure">Unconfirmed</span>')
+    return (
+        f'<li><form method="post" action="{PREFIX}/foods/found">'
+        f'<input type="hidden" name="food_id" value="{row["id"]}">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        f'<button type="submit" class="found" aria-label="Add {e(row["name"])}">'
+        + with_thumb(
+            photo,
+            row["name"],
+            f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
+            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+            f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+        )
+        + "</button></form></li>"
+    )
+
+
 def template_pick(t, items, ctx: DayContext, meal_id: int | None, default_time: str) -> str:
     """A saved meal on the Add food page: its items and totals, logged in one tap."""
     snaps = [logic.snapshot(store.nutrients_of(i), i["grams"]) for i in items]
@@ -1491,8 +1519,8 @@ def add_routes(
     photos: Photos | None = None,
 ) -> None:
     """Register the dashboard. provider is None in local-only mode (no sign-in). With fdc
-    configured, Add food can also search USDA FoodData Central. New food looks barcodes up
-    through fdc and off."""
+    configured, Add food can also search USDA FoodData Central. New food searches both by
+    name and looks barcodes up through them."""
     tz = settings.tz
     sessions = Sessions(settings.db_path)
     secure = bool(settings.public_url)
@@ -2092,7 +2120,6 @@ def add_routes(
             return message("Unknown date", "Pick a day up to today.", 400, signed_in=True)
         q = params.get("q", "").strip()[:100]
         meal_id = int_param(params.get("meal"))
-        want_usda = bool(params.get("usda")) and bool(q) and usda
         usda_rows, usda_note = [], ""
         with connect(request) as conn:
             meals, _, _, ctx = load_day(conn, day)
@@ -2110,6 +2137,10 @@ def add_routes(
                 templates = store.list_templates(conn)
             seen = {r["id"] for r in rows} | {a["id"] for a in portioned}
             portions = store.portions_of(conn, seen)
+            # On its own when few of your foods match (#88), else behind the button
+            want_usda = (
+                usda and bool(q) and (bool(params.get("usda")) or len(seen) < AUTO_USDA_BELOW)
+            )
             if want_usda:
                 try:
                     records = await fdc.search_ranked(q, USDA_LIMIT)
@@ -2619,6 +2650,74 @@ def add_routes(
             ' aria-label="Label photo"><button type="submit">Read label</button></form></section>'
         )
 
+    def search_card(q: str = "", results: str = "") -> str:
+        """New food's search (#88): USDA FoodData Central and Open Food Facts by name."""
+        where = "USDA FoodData Central and Open Food Facts" if usda else "Open Food Facts"
+        clear = f'<a class="clear" href="{PREFIX}/foods/new">Clear</a>' if q else ""
+        return (
+            '<section class="card"><h2>Search for a food</h2>'
+            f'<form class="search" method="get" action="{PREFIX}/foods/new">'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="e.g. chicken burrito"'
+            ' aria-label="Search USDA and Open Food Facts" maxlength="100">'
+            f'<button type="submit">Search</button>{clear}</form>'
+            f'<p class="small muted">Looks in {where}. Tap a food to add it to your'
+            " foods.</p></section>" + results
+        )
+
+    async def search_online(conn, q: str) -> str:
+        """Both sources at once, cached into foods so every result has an id."""
+        found: dict[str, list] = {"fdc": [], "off": []}
+        failed: set[str] = set()
+
+        async def run(name: str, search) -> None:
+            try:
+                found[name] = await search(q, FOUND_LIMIT)
+            except SourceError as err:
+                log.warning("dashboard: %s search failed: %s", name, err)
+                failed.add(name)
+
+        async with anyio.create_task_group() as tg:
+            if usda:
+                tg.start_soon(run, "fdc", fdc.search_ranked)
+            tg.start_soon(run, "off", off.search)
+        back = new_food_url(q=q)
+        seen: set[int] = set()
+        out = []
+        for source, title, note in (
+            ("fdc", "USDA FoodData Central", ""),
+            (
+                "off",
+                "Open Food Facts",
+                "Crowd-sourced, so these stay unconfirmed until you check one against its label.",
+            ),
+        ):
+            if source == "fdc" and not usda:
+                continue
+            items = []
+            for rec in found[source]:
+                try:
+                    row, _ = store.cache_record(conn, rec)
+                except ValueError:  # one bad upstream record mustn't sink the search
+                    continue
+                if row["id"] in seen:
+                    continue
+                seen.add(row["id"])
+                items.append(found_item(row, back, photo_src(row["id"])))
+            if source in failed:
+                note = f"{title} isn't reachable right now. Try again in a minute."
+            elif not items:
+                note = f"No matches in {title}."
+            out.append(
+                f'<section class="card"><h2 class="section">{title}<small>per 100 g</small>'
+                "</h2>"
+                + (f'<p class="muted small">{e(note)}</p>' if note else "")
+                + (f'<ul class="entries">{"".join(items)}</ul>' if items else "")
+                + "</section>"
+            )
+        if not usda:
+            out.append('<p class="muted small center">Set FDC_API_KEY to search USDA here too.</p>')
+        return "".join(out)
+
     def type_card(code: str = "") -> str:
         return (
             '<section class="card"><h2>Type it in</h2><p class="small muted">For a restaurant'
@@ -2639,8 +2738,15 @@ def add_routes(
         if params.get("how") == "type":
             form = FoodForm("manual", {}, barcode=typed)
             return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
+        q = " ".join(params.get("q", "").split())[:100]
+        if q:
+            with connect(request) as conn:
+                results = await search_online(conn, q)
+            body = search_card(q, results) + barcode_card() + label_card() + type_card()
+            return new_food_page(request, body)
         if not typed:
-            return new_food_page(request, barcode_card() + label_card() + type_card())
+            body = search_card() + barcode_card() + label_card() + type_card()
+            return new_food_page(request, body)
         try:
             code = gtins.normalize(typed)
         except gtins.InvalidBarcode:
@@ -2691,6 +2797,28 @@ def add_routes(
         status = "Confirmed" if row["verified"] else "Not confirmed yet"
         head = f'<p class="muted small">{e(FOUND_IN[hit.found_in])} · {status}</p>'
         return new_food_page(request, f'<section class="card">{head}{food_form(form)}</section>')
+
+    @server.custom_route(f"{PREFIX}/foods/found", methods=["POST"])
+    async def add_found_food(request: Request) -> Response:
+        """A New food search result was tapped (#88): add it to Foods and open its page.
+        Picking a USDA food confirms it; Open Food Facts data is crowd-sourced, so that
+        stays unconfirmed until the person checks it."""
+        if (no := refused(request, "Add foods")) is not None:
+            return no
+        form = await request.form()
+        food_id = int_param(str(form.get("food_id", "")))
+        back = safe_next(str(form.get("back", ""))) or f"{PREFIX}/foods/new"
+        with connect(request) as conn:
+            try:
+                row = store.get_food(conn, food_id or 0, live=True)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+            row = store.mark_saved(conn, row["id"])
+            if row["source"] == "fdc" and not row["verified"]:
+                row = store.set_food_confirmed(conn, row["id"], True)
+        photos.fill_soon(row["id"], row["gtin"])
+        log.info("dashboard: food %d added from search", row["id"])
+        return go(with_params(food_url(row["id"], back), found=row["name"][:FOOD_NAME_MAX]))
 
     @server.custom_route(f"{PREFIX}/foods/label", methods=["POST"])
     async def read_label(request: Request) -> Response:
@@ -2899,6 +3027,8 @@ def add_routes(
             out += toast(f"<span>Deleted {e(removed)}.{e(left)}</span>", "status")
         if said := params.get("portion", "")[: PORTION_NAME_MAX + 40]:
             out += toast(f"<span>{e(said)}</span>", "status")
+        if found := params.get("found", "")[:FOOD_NAME_MAX]:
+            out += toast(f"<span>Added {e(found)} to your foods.</span>", "status")
         if pic := PHOTO_TOASTS.get(params.get("pic", "")):
             out += toast(f"<span>{pic}</span>", "status")
         return out
