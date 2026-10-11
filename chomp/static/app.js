@@ -755,5 +755,12 @@
     });
   });
 
+  // Foods (#91): picking per 100 g / per serving or a sort shows it, no Go button needed
+  document.querySelectorAll("select[data-autosubmit]").forEach(function (select) {
+    select.addEventListener("change", function () {
+      select.form.submit();
+    });
+  });
+
   document.querySelectorAll("form").forEach(changed);
 })();

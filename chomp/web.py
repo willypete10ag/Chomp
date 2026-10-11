@@ -31,6 +31,7 @@ import math
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -813,14 +814,68 @@ def entry_item(
     )
 
 
-# Foods page filters: view -> chip label, and the note beside the food list's heading
-FOOD_VIEWS = {
-    "most": ("Most used", "most logged first"),
-    "recent": ("Recent", "last logged first"),
-    "new": ("Newest", "newest added first"),
-    "unconfirmed": ("Unconfirmed", "not yet checked against a label"),
-    "confirmed": ("Confirmed", "checked against a label or scanned"),
+# Foods page sorts (#91): sort -> its name in the Sort by menu (store.FOOD_SORTS orders them)
+FOOD_SORTS = {
+    "most": "Most logged",
+    "recent": "Recent",
+    "new": "Newest",
+    "unconfirmed": "Unconfirmed first",
+    "kcal": "Calories",
+    "protein": "Protein",
+    "fat": "Fat",
+    "carbs": "Carbs",
 }
+# The Foods list's sort, direction and per 100 g / per serving, remembered on this device
+FOODS_COOKIE = "chomp_foods"
+
+
+def foods_order(params: Mapping[str, str], cookie: str) -> tuple[str, bool, bool]:
+    """The Foods list's (sort, high to low, per serving): from the page's query when it
+    sets any of them, else as last chosen on this device (`cookie`, "sort.dir.per")."""
+    if not any(k in params for k in ("sort", "dir", "per")):
+        sort, _, rest = cookie.partition(".")
+        direction, _, per = rest.partition(".")
+        params = {"sort": sort, "dir": direction, "per": per}
+    sort = params.get("sort", "most")
+    if sort not in FOOD_SORTS:
+        sort = "most"
+    return sort, params.get("dir") != "up", params.get("per") == "serving"
+
+
+def sort_bar(q: str, sort: str, desc: bool, per_serving: bool) -> str:
+    """The row under "Your foods" (#91): per 100 g / per serving on the left, Sort by and an
+    arrow that flips high to low on the right. Changing either menu sends it (the script); a
+    new sort starts high to low."""
+
+    def hidden(**fields: str) -> str:
+        return "".join(
+            f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in fields.items() if v
+        )
+
+    def options(choices: dict[str, str], current: str) -> str:
+        return "".join(
+            f'<option value="{k}"{" selected" if k == current else ""}>{label}</option>'
+            for k, label in choices.items()
+        )
+
+    per = "serving" if per_serving else "100g"
+    direction = "" if desc else "up"
+    flip = {k: v for k, v in (("q", q), ("sort", sort), ("per", per)) if v}
+    flip["dir"] = "down" if not desc else "up"
+    arrow = "↓" if desc else "↑"
+    told = "highest first" if desc else "lowest first"
+    go = '<button class="no-js" type="submit">Go</button>'
+    return (
+        '<div class="sortbar">'
+        f'<form method="get" action="{PREFIX}/foods">{hidden(q=q, sort=sort, dir=direction)}'
+        f'<select name="per" aria-label="Show values" data-autosubmit>'
+        f"{options({'100g': 'per 100 g', 'serving': 'per serving'}, per)}</select>{go}</form>"
+        f'<form method="get" action="{PREFIX}/foods">{hidden(q=q, per=per)}'
+        '<label>Sort by <select name="sort" data-autosubmit>'
+        f"{options(FOOD_SORTS, sort)}</select></label>{go}"
+        f'<a class="arrow" href="{PREFIX}/foods?{e(urlencode(flip))}" role="button"'
+        f' aria-label="Sorted {told}; tap to flip">{arrow}</a></form></div>'
+    )
 
 
 def fold(name: str, heading: str, body: str, note: str = "", *, opened: bool = True) -> str:
@@ -893,14 +948,27 @@ def food_url(food_id: int, back: str) -> str:
     return f"{PREFIX}/foods/{food_id}?{urlencode({'back': back})}"
 
 
-def food_item(row, back: str, last_logged: str = "", log_url: str = "", photo: str = "") -> str:
-    """A saved food: name (two lines at most), kcal and macros per 100 g. A tap opens its
+def food_item(
+    row,
+    back: str,
+    last_logged: str = "",
+    log_url: str = "",
+    photo: str = "",
+    per_serving: bool = False,
+) -> str:
+    """A saved food: name (two lines at most), kcal and macros per 100 g, or per serving
+    (`per_serving`; a food with no serving size keeps per 100 g, tagged). A tap opens its
     details page (#72). With the script, press and hold it for a menu (Edit, Rename,
     Confirm, Log it, Delete), swipe it left to delete it, and swipe an unconfirmed one right
     to confirm it. `last_logged` says when it was last logged; `log_url` logs it; `photo`
     is its picture's URL, if it has one."""
-    n = logic.round_for_display(store.nutrients_of(row))
+    n = store.nutrients_of(row)
+    if per_serving and row["serving_g"]:
+        n = logic.scale(n, row["serving_g"])
+    n = logic.round_for_display(n)
     meta = []
+    if per_serving and not row["serving_g"]:
+        meta.append('<span class="badge">100 g</span>')
     if row["brand"]:
         meta.append(e(row["brand"]))
     if last_logged:
@@ -3413,12 +3481,9 @@ def add_routes(
         photos.backfill_soon(settings.db_path)  # once: photos for barcode foods saved before #74
         serving_fill.backfill_soon(settings.db_path, fdc)
         q = request.query_params.get("q", "").strip()[:100]
-        view = request.query_params.get("view", "most")
-        if view not in FOOD_VIEWS:
-            view = "most"
-        query = {k: v for k, v in (("q", q), ("view", view)) if v and v != "most"}
-        back = f"{PREFIX}/foods" + (f"?{urlencode(query)}" if query else "")
-        everything = view == "most"  # a filter narrows the list to foods only
+        params = request.query_params
+        sort, desc, per_serving = foods_order(params, request.cookies.get(FOODS_COOKIE, ""))
+        back = f"{PREFIX}/foods" + (f"?{urlencode({'q': q})}" if q else "")
         with connect(request) as conn:
             banner = notice(conn, request.query_params, back)
             if (added := int_param(request.query_params.get("added"))) is not None:
@@ -3426,31 +3491,21 @@ def add_routes(
         banner += food_toasts(request.query_params)
         with connect(request) as conn:
             if q:
-                rows = store.search_foods(conn, q, FOODS_LIMIT, view)
-                names = set(store.templates_matching(conn, q)) if everything else set()
+                rows = store.search_foods(conn, q, FOODS_LIMIT, sort, desc, per_serving)
+                names = set(store.templates_matching(conn, q))
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
-                rows = store.list_used_foods(conn, FOODS_LIMIT, view)
-                templates = store.list_templates(conn) if everything else []
+                rows = store.list_used_foods(conn, FOODS_LIMIT, sort, desc, per_serving)
+                templates = store.list_templates(conn)
 
-        def view_url(v: str) -> str:
-            params = {k: val for k, val in (("q", q), ("view", v)) if val and val != "most"}
-            return f"{PREFIX}/foods" + (f"?{urlencode(params)}" if params else "")
-
-        clear = f'<a class="clear" href="{e(view_url(view))}">Clear</a>' if q else ""
-        keep_view = f'<input type="hidden" name="view" value="{view}">' if view != "most" else ""
-        chips = "".join(
-            f'<a href="{e(view_url(v))}"{" aria-current=page" if v == view else ""}>{label}</a>'
-            for v, (label, _) in FOOD_VIEWS.items()
-        )
+        clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
         parts = [
             "<h1>Foods</h1>",
             banner,
-            f'<form class="search" method="get" action="{PREFIX}/foods">{keep_view}'
+            f'<form class="search" method="get" action="{PREFIX}/foods">'
             f'<input type="search" name="q" value="{e(q)}" placeholder="Foods and meals"'
             ' aria-label="Search foods and saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
-            f'<nav class="segment filters" aria-label="Show">{chips}</nav>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
         if q and not (rows or templates):
@@ -3476,32 +3531,35 @@ def add_routes(
                 )
             parts.append(fold("meals", "Saved meals", "".join(cards)))
         if rows:
-            heading = "Foods" if q or not everything else "Your foods"
-            note = f"{FOOD_VIEWS[view][1]}, " if not q or not everything else ""
+            heading = "Foods" if q else "Your foods"
             day = today()
 
             def last(row) -> str:
-                if view != "recent" or not row["last_used"]:
+                if sort != "recent" or not row["last_used"]:
                     return ""
                 title = day_title(logic.local_date(row["last_used"], tz), day)
                 return title.lower() if title in ("Today", "Yesterday") else title
 
             items = "".join(
-                food_item(r, back, last(r), add_url(day, None, r["name"]), photo_src(r["id"]))
+                food_item(
+                    r, back, last(r), add_url(day, None, r["name"]), photo_src(r["id"]), per_serving
+                )
                 for r in rows
             )
             hint = (
                 '<p class="small muted js-only hint">Tap a food to see it; press and hold it'
                 " for more. Swipe left to delete, or right to confirm an amber one.</p>"
             )
-            parts.append(
-                fold(
-                    "foods", heading, f'{hint}<ul class="entries">{items}</ul>', f"{note}per 100 g"
-                )
-            )
+            bar = sort_bar(q, sort, desc, per_serving)
+            parts.append(fold("foods", heading, f'{bar}{hint}<ul class="entries">{items}</ul>'))
         elif not q:
-            empty = "No saved foods yet." if everything else "No foods here."
-            parts.append(f'<section class="card empty"><p>{empty}</p></section>')
-        return render(
+            parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+        response = render(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
         )
+        if any(k in params for k in ("sort", "dir", "per")):
+            choice = f"{sort}.{'down' if desc else 'up'}.{'serving' if per_serving else '100g'}"
+            response.set_cookie(
+                FOODS_COOKIE, choice, 365 * 86400, path=PREFIX, secure=secure, samesite="lax"
+            )
+        return response
