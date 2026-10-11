@@ -2756,7 +2756,8 @@ def add_routes(
                 "brand": f.brand or None,
                 "serving_desc": f.serving_desc or None,
             }
-            if restated or row["serving_g"]:
+            # A food with no serving size shows 100 g; describing that serving keeps it
+            if restated or row["serving_g"] or f.serving_desc:
                 details["serving_g"] = serving
             before = store.capture(conn, foods=[food_id])
             store.confirm_food(conn, food_id, corrections, details, confirmed=f.verified)

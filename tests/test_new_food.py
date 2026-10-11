@@ -307,6 +307,13 @@ def test_edit_a_food_from_its_page(app, conn):
     assert after["name"] == "Trail mix, salty" and after["kcal"] == 525 and not after["verified"]
     assert after["protein_g"] == row["protein_g"] and after["serving_g"] == 40
     assert "Edited Trail mix, salty." in app.get(r.headers["location"]).text
+    # A food with no serving size shows 100 g; describing it keeps that serving
+    conn.execute("UPDATE foods SET serving_g = NULL WHERE id = ?", (row["id"],))
+    bare = food_form(mode="edit", food_id=row["id"], back=here, serving_g="100", kcal="525")
+    r = app.post("/app/foods/new", data=bare | {"protein_g": "15", "carbs_g": "45", "fat_g": "30"})
+    assert r.status_code == 303 and store.get_food(conn, row["id"])["serving_g"] is None
+    r = app.post("/app/foods/new", data=bare | {"serving_desc": "1 cup"})
+    assert store.get_food(conn, row["id"])["serving_g"] == 100
     # A bad value comes back on the edit form
     r = app.post("/app/foods/new", data=form | {"kcal": "lots"})
     assert r.status_code == 400 and "<h1>Edit food</h1>" in r.text

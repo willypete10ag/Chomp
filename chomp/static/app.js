@@ -558,17 +558,30 @@
       document.body.appendChild(form);
       form.submit();
     }
-    function item(label, run, cls) {
+    function item(label, run, cls, stay) {
       var b = document.createElement("button");
       b.type = "button";
       b.className = "item" + (cls ? " " + cls : "");
       b.setAttribute("role", "menuitem");
       b.textContent = label;
       b.addEventListener("click", function (event) {
-        if (armed || event.detail === 0) run();
+        if (!armed && event.detail !== 0) return;
+        if (stay) run();
+        else leave(run);
       });
       menu.appendChild(b);
       return b;
+    }
+    // Drop the menu's own history entry before acting, so Back after an action goes where
+    // it would have without the menu
+    function leave(run) {
+      if (!(history.state && history.state.holdMenu)) return run();
+      window.removeEventListener("popstate", onBack);
+      window.addEventListener("popstate", function once() {
+        window.removeEventListener("popstate", once);
+        run();
+      });
+      history.back();
     }
     function go(href) {
       return function () {
@@ -576,7 +589,7 @@
       };
     }
     item("Edit", go(url + "/edit?back=" + encodeURIComponent(back)));
-    item("Rename", rename);
+    item("Rename", rename, "", true);
     if (li.dataset.confirmed !== "1") {
       item("Confirm", function () {
         post("/confirm", { back: back, confirmed: "1" });
@@ -610,6 +623,12 @@
       var save = document.createElement("button");
       save.type = "submit";
       save.textContent = "Save name";
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        leave(function () {
+          form.submit();
+        });
+      });
       form.append(keep, label, save);
       menu.appendChild(form);
       place();
@@ -666,7 +685,10 @@
       }
     });
     lifted.addEventListener("click", function (event) {
-      if (!armed) event.preventDefault();
+      var link = event.target.closest("a");
+      if (!link) return;
+      event.preventDefault();
+      if (armed) leave(go(link.href));
     });
     layer.append(lifted, menu);
     document.body.appendChild(layer);
