@@ -588,8 +588,8 @@ def servings_text(count: float) -> str:
 
 def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = "") -> str:
     """How much to log: the grams box, and for a food with a serving size a Servings / Grams
-    toggle (#80) with a minus / plus stepper in half servings. Servings is picked when the amount is
-    a whole or half number of servings. Both boxes are submitted and the toggle says which
+    toggle (#80) with a minus / plus stepper in whole servings. Servings is picked when the amount
+    is a whole or half number of servings. Both boxes are submitted and the toggle says which
     counts; the script keeps them showing the same amount. by and typed put a rejected value
     back the way it was typed."""
     value = num(grams, 1).replace(",", "")
@@ -617,11 +617,11 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
         f'<div class="amount servings" data-serving="{size}">'
         '<span class="lead">Servings</span><span class="field">'
         '<button type="button" class="stepper js-only" data-step="-1"'
-        ' aria-label="Half a serving less">&minus;</button>'
+        ' aria-label="One serving less">&minus;</button>'
         f'<input name="servings" data-servings inputmode="decimal" autocomplete="off"'
         f' aria-label="Servings" value="{e(servings)}">'
         '<button type="button" class="stepper js-only" data-step="1"'
-        ' aria-label="Half a serving more">+</button>'
+        ' aria-label="One serving more">+</button>'
         f'<span class="unit">&times; {num(serving, 1)}{NBSP}g</span></span></div>'
         + amount_field("grams", value, label="Grams", unit="g", top=top, required=False)
     )

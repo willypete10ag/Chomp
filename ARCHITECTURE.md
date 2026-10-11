@@ -59,7 +59,7 @@ swipe it left to Delete, or an amber one right to Confirm). An entry whose
 grams were estimated shows a muted "~" before them until new grams are saved, and Add food
 offers your portions as chips ("1 handful · 30 g") next to the gram chips. For a food with a serving
 size, Add food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
-stepper in half servings and the server logs servings × the serving size; it is picked when the
+stepper in whole servings (a typed 1.5 still counts) and the server logs servings × the serving size; it is picked when the
 amount is a whole or half number of servings, and a food without a serving size shows grams only.
 
 It also works without Claude (#54): Add food (search your foods, portions and saved meals, or

@@ -255,14 +255,16 @@
       }
       changed(form);
     });
-    // − and + move to the next half serving down or up (1.76 goes to 1.5 or 2), not under ½
+    // − and + move to the next whole serving down or up (1.5 goes to 1 or 2), not under 1;
+    // a typed 1.5 still logs as typed
     box.closest(".field").querySelectorAll("[data-step]").forEach(function (button) {
       button.addEventListener("click", function () {
         var n = parse(box.value) || 0;
         var next = button.dataset.step === "1"
-          ? Math.floor(n * 2 + 1e-9) / 2 + 0.5
-          : Math.ceil(n * 2 - 1e-9) / 2 - 0.5;
-        box.value = countText(Math.max(next, 0.5));
+          ? Math.floor(n + 1e-9) + 1
+          : Math.ceil(n - 1e-9) - 1;
+        if (next < 1) return;
+        box.value = countText(next);
         box.dispatchEvent(new Event("input"));
       });
     });
