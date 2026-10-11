@@ -208,7 +208,8 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert r.status_code == 200
     assert "\xa0g" in r.text  # numbers never wrap away from their units
     text = r.text.replace("\xa0", " ")
-    assert "<h1>Today</h1>" in text
+    assert 'data-calendar href="/app/calendar?month=' in text  # the title opens the month
+    assert 'Today <span class="caret"' in text
     assert "Egg, whole" in text and "Kirkland" in text
     # the meal header leads with the time, then the label
     assert '<span class="label">Breakfast</span></h2>' in text
@@ -225,8 +226,8 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert '<span class="sr">Protein</span>' in text  # full names for screen readers
     assert 'aria-label="Next day"' not in text  # no stepping into the future
     assert 'class="week"' in text and 'aria-current="date"' in text
-    assert 'type="date"' in text and "Page loaded at" in text
-    assert "Back to today" not in text
+    assert "Page loaded at" in text
+    assert 'aria-label="Pick a date"' not in text and ">Go</button>" not in text  # #71
     assert f"/app/static/app.css?v={web.CSS_VERSION}" in text  # phones fetch new CSS
 
 
@@ -271,11 +272,69 @@ def test_other_days_and_bad_dates(http, logged):
     r = http.get("/app?date=2020-01-01")
     assert r.status_code == 200
     assert "Nothing logged on this day" in r.text
-    assert "Back to today" in r.text
+    assert "/app/calendar?month=2020-01&amp;date=2020-01-01" in r.text.replace("&", "&amp;")
     assert http.get("/app?date=yesterday").status_code == 200
     assert http.get("/app?date=13/2").status_code == 400
     for edge in ("9999-12-31", "0001-01-01"):
         assert http.get(f"/app?date={edge}").status_code == 400
+
+
+def test_month_view_marks_logged_and_near_goal_days(http, conn, logged):
+    eggs, _, _ = logged
+    now = logic.parse_local_date(None, "America/New_York")
+    month = now.replace(day=1)
+    sign_in(http)
+    r = http.get(f"/app/calendar?month={month:%Y-%m}")
+    assert r.status_code == 200
+    text = r.text
+    assert f"<h2>{month:%B}</h2>" in text and 'class="years"' in text
+    today = text[text.index('class="is-today"') :]
+    today = today[: today.index("</a>")]
+    assert 'aria-current="date"' in today and 'class="dot"' in today  # logged, not near goals
+    assert 'aria-label="Next month"' not in text  # no months past this one
+    assert 'aria-label="Previous month"' not in text  # nothing logged before this month
+    assert ">Today</a>" in text and 'href="/app"' in text
+
+    # With the goals set to the day's own totals, it is within 10% of each: a star
+    totals = logic.sum_nutrients(
+        x.nutrients
+        for m in store.meals_between(conn, *logic.local_day_bounds(now, "America/New_York"))
+        for x in store.meal_entries(conn, m["id"])
+    )
+    store.set_targets(conn, {k: round(totals[k]) for k in logic.CORE})
+    text = http.get(f"/app/calendar?month={month:%Y-%m}&part=1").text
+    assert text.startswith('<div class="calendar"')  # just the calendar, for the sheet
+    today = text[text.index('class="is-today"') :]
+    today = today[: today.index("</a>")]
+    assert 'class="star"' in today and "near your goals" in today
+
+    # An older meal opens earlier months; the year box lists each year back to it
+    old = logic.format_utc(datetime(2024, 3, 5, 17, tzinfo=UTC))
+    store.log_meal(conn, [(eggs, 100)], old, None)
+    text = http.get(f"/app/calendar?month={month:%Y-%m}").text
+    assert 'aria-label="Previous month"' in text
+    for y in range(2024, now.year + 1):
+        assert f">{y}</a>" in text
+    text = http.get("/app/calendar?month=2024-03&date=2024-03-05").text
+    assert 'aria-label="Previous month"' not in text  # the first logged month
+    assert '<a href="/app?date=2024-03-05" aria-current="date"' in text
+    assert "Tuesday, March 5, 2024, logged" in text
+    # Out of range months clamp; bad ones are refused; future days can't be picked
+    assert "<h2>March</h2>" in http.get("/app/calendar?month=1999-01").text
+    assert http.get("/app/calendar?month=nope").status_code == 400
+    future = http.get(f"/app/calendar?month={now.year + 3}-01").text
+    assert f"<h2>{month:%B}</h2>" in future
+
+
+def test_near_goals():
+    goals = {"kcal": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 70}
+    day = {"kcal": 1850, "protein_g": 160, "carbs_g": 185, "fat_g": 75}
+    assert logic.near_goals(day, goals)
+    assert not logic.near_goals({**day, "fat_g": 78}, goals)  # 11% over
+    assert not logic.near_goals({**day, "kcal": 1790}, goals)  # 10.5% under
+    # No goals set: measured against 2,000 kcal and thirds, like Today
+    thirds = logic.with_default_targets({})
+    assert logic.near_goals(thirds, {}) and not logic.near_goals({"kcal": 2000}, {})
 
 
 def test_edit_grams_resnapshots_from_the_food(http, conn, logged):

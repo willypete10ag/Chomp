@@ -211,6 +211,39 @@ def sum_nutrients(rows: Iterable[Mapping[str, float | None]]) -> Nutrients:
     return totals
 
 
+def recipe_nutrition(
+    ingredients: Iterable[tuple[Mapping[str, float | None], float]], servings: float
+) -> dict:
+    """Nutrition of a recipe (#82) from its ingredients' per-100 g values and grams.
+
+    Returns `total` (whole recipe), `per_serving`, `per_100g` (of the raw ingredient weight,
+    for the food row that logs it), `total_g` and `serving_g`. An optional nutrient is kept
+    only when every ingredient reports it, so a recipe never claims a partial sum as its
+    whole amount.
+    """
+    _check_amount("servings", servings)
+    items = [(_clean(n), g) for n, g in ingredients]
+    if not items:
+        raise ValueError("a recipe needs at least one ingredient")
+    snaps = [scale(n, g) for n, g in items]
+    total_g = sum(g for _, g in items)
+    total = sum_nutrients(snaps)
+    for k in NUTRIENTS:
+        if k not in CORE and any(s[k] is None for s in snaps):
+            total[k] = None
+    per_serving = {k: None if v is None else v / servings for k, v in total.items()}
+    per_100g = {
+        k: None if v is None else round(v * 100.0 / total_g, STORE_PLACES) for k, v in total.items()
+    }
+    return {
+        "total": total,
+        "per_serving": per_serving,
+        "per_100g": per_100g,
+        "total_g": total_g,
+        "serving_g": total_g / servings,
+    }
+
+
 def partial_micros(rows: Iterable[Mapping[str, float | None]]) -> list[str]:
     """Vitamins and minerals that some rows report and others don't, so their sum covers
     only part of what was eaten (a floor, not the whole amount)."""
@@ -321,6 +354,23 @@ def with_default_targets(targets: Mapping[str, float | None]) -> dict[str, float
         v = targets.get(k)
         out[k] = float(v) if v is not None else fitted[k]
     return out
+
+
+# A star on the calendar (#71): calories, protein, carbs and fat each within this share of
+# their goals
+STAR_WITHIN = 0.10
+
+
+def near_goals(totals: Mapping[str, float | None], targets: Mapping[str, float | None]) -> bool:
+    """True when calories and each macro land within STAR_WITHIN of their goals. Goals not
+    set count as the defaults (with_default_targets), as on Today."""
+    goals = with_default_targets(targets)
+    for k in CORE:
+        goal = goals[k]
+        eaten = totals.get(k) or 0.0
+        if not goal or abs(eaten - goal) > STAR_WITHIN * goal:
+            return False
+    return True
 
 
 def macro_split(totals: Mapping[str, float | None]) -> dict[str, float] | None:

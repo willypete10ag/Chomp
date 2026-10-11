@@ -137,12 +137,71 @@ a.step:active { background: var(--track); }
 .week a.is-today { border-color: var(--accent); }
 .week a[aria-current] { background: var(--accent); color: var(--on-accent); }
 .week a[aria-current] span { color: inherit; }
-.jump {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: .5rem; margin-bottom: 1rem;
+.week { margin-bottom: 1rem; }
+.opencal { color: inherit; text-decoration: none; }
+.opencal .caret { font-size: .9rem; color: var(--muted); vertical-align: middle; }
+
+/* Month view (#71): ‹ month › and a year box, then the days with dots and stars */
+.calhead { display: flex; align-items: center; gap: .25rem; margin-bottom: .5rem; }
+.calhead h2 { margin: 0; min-width: 7.5rem; text-align: center; font-size: 1.15rem; }
+.years { position: relative; margin-left: auto; }
+.years summary {
+  list-style: none; cursor: pointer; padding: .4rem .75rem; border-radius: 10px;
+  border: 1px solid var(--line); font-weight: 600;
 }
-.jump form { display: flex; gap: .5rem; }
-.jump input { width: auto; }
+.years summary::-webkit-details-marker { display: none; }
+.years[open] summary { border-color: var(--accent); }
+.yearlist {
+  position: absolute; right: 0; top: calc(100% + .25rem); z-index: 5; min-width: 6rem;
+  max-height: 13rem; overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / .2);
+}
+.yearlist a {
+  display: block; padding: .6rem 1rem; text-decoration: none; color: var(--text); text-align: center;
+}
+.yearlist a + a { border-top: 1px solid var(--line); }
+.yearlist a[aria-current] { color: var(--accent); font-weight: 700; }
+.calnames, .caldays { display: grid; grid-template-columns: repeat(7, 1fr); gap: .2rem; }
+.calnames span { text-align: center; color: var(--muted); font-size: .8rem; padding: .25rem 0; }
+.caldays > * {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  min-height: 2.9rem; padding-top: .35rem; border-radius: 10px; text-decoration: none;
+  color: var(--text); border: 1px solid transparent;
+}
+.caldays b { font-weight: 500; }
+.caldays .future { color: var(--line); }
+.caldays a.is-today { border-color: var(--accent); }
+.caldays a[aria-current] { background: var(--accent); color: var(--on-accent); }
+.caldays a:active { background: var(--track); }
+.calendar .dot {
+  display: inline-block; width: .38rem; height: .38rem; border-radius: 50%;
+  background: var(--accent); margin-top: .2rem;
+}
+.calendar .star { font-style: normal; color: var(--carbs); font-size: .8rem; line-height: 1; margin-top: .1rem; }
+.caldays a[aria-current] .dot { background: var(--on-accent); }
+.caldays a[aria-current] .star { color: var(--on-accent); }
+.calfoot { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .75rem; }
+.calfoot p { margin: 0; }
+.calfoot .dot, .calfoot .star { vertical-align: middle; margin: 0 .1rem 0 .4rem; }
+.calfoot .dot:first-child { margin-left: 0; }
+
+/* The month view as a sheet over Today */
+.cal-layer {
+  position: fixed; inset: 0; z-index: 100; background: rgb(0 0 0 / 0);
+  transition: background .2s ease;
+}
+.cal-layer.on { background: rgb(0 0 0 / .3); }
+.cal-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; max-width: 40rem; margin: 0 auto;
+  background: var(--card); border-radius: 18px 18px 0 0; padding: .5rem 1rem;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -10px 30px rgb(0 0 0 / .2); transform: translateY(100%);
+  transition: transform .22s ease;
+}
+.cal-layer.on .cal-sheet { transform: none; }
+.cal-sheet .grab {
+  width: 2.5rem; height: .3rem; border-radius: 3px; background: var(--line); margin: 0 auto .5rem;
+}
 
 /* Summary: one big calorie figure, then protein, carbs and fat side by side */
 .hero { margin: 0; }
@@ -612,3 +671,54 @@ button.found {
   display: block; width: 100%; text-align: left; background: none; color: inherit;
   padding: 0; min-height: 0; border-radius: 0; font-weight: inherit;
 }
+
+/* Recipes (#82): a book in the bottom corner of Today opens them */
+.fab {
+  position: fixed; z-index: 5; right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(4.4rem + env(safe-area-inset-bottom));
+  width: 3.25rem; height: 3.25rem; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; background: var(--card); color: var(--accent);
+  border: 1px solid var(--line); box-shadow: 0 4px 14px rgb(0 0 0 / .18);
+}
+.fab:active { background: var(--track); }
+body:has(.toast) .fab { display: none; }
+.step.edit-link { width: auto; padding: 0 .75rem; font-size: 1rem; font-weight: 600; }
+.ingredients li { display: flex; justify-content: space-between; gap: .75rem; }
+ul.ingredients:not(.plain) { margin-bottom: .5rem; }
+ul.ingredients:not(.plain) li {
+  display: grid; grid-template-columns: 1fr 6.5rem 4.2rem 2.75rem; align-items: center;
+  gap: .4rem; padding: .35rem 0; border-top: 1px solid var(--line);
+}
+ul.ingredients:not(.plain) li:first-child { border-top: 0; }
+.ingredient .field { display: flex; align-items: center; gap: .3rem; }
+.ingredient .field input { min-width: 0; text-align: right; }
+.ingredient .unit { color: var(--muted); font-size: .9rem; }
+.ingredient .kcal { font-weight: 400; text-align: right; }
+button.remove {
+  background: transparent; color: var(--muted); font-size: 1.4rem; padding: 0; min-width: 2.75rem;
+}
+.recipe-form .search { margin: .5rem 0 0; }
+.picks { margin-top: .5rem; }
+.picks li { border-top: 1px solid var(--line); }
+.picks li:first-child { border-top: 0; }
+button.pick {
+  display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; width: 100%;
+  text-align: left; background: transparent; color: var(--text); padding: .5rem 0; gap: 0 .75rem;
+}
+button.pick .muted { grid-column: 1; }
+button.pick .plus {
+  grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--accent);
+  font-size: 1.5rem; font-weight: 600;
+}
+textarea {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: .55rem .7rem; width: 100%; resize: vertical;
+}
+ol.steps { margin: 0; padding-left: 1.4rem; }
+ol.steps li { padding: .3rem 0; }
+/* Log it stays in reach at the bottom of a recipe, above the tab bar */
+.log-recipe {
+  position: sticky; bottom: calc(4.2rem + env(safe-area-inset-bottom)); z-index: 4;
+  box-shadow: 0 -4px 16px rgb(0 0 0 / .12); max-height: 70vh; overflow-y: auto;
+}
+.log-recipe .fold:not([open]) > summary h2 { margin: 0; }

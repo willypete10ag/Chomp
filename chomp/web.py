@@ -33,7 +33,7 @@ import secrets
 import time
 from collections.abc import Mapping
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -94,7 +94,7 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self';"
-        " manifest-src 'self'; media-src 'self' blob: mediastream:;"
+        " connect-src 'self'; manifest-src 'self'; media-src 'self' blob: mediastream:;"
         " form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     ),
     "X-Frame-Options": "DENY",
@@ -520,6 +520,93 @@ def week_strip(day: date, today: date) -> str:
             f"<b>{d.day}</b></a>"
         )
     return f'<nav class="week" aria-label="Nearby days">{"".join(links)}</nav>'
+
+
+def month_start(day: date) -> date:
+    return day.replace(day=1)
+
+
+def add_months(month: date, n: int) -> date:
+    """The first of the month n months after `month`'s."""
+    i = month.year * 12 + month.month - 1 + n
+    return date(i // 12, i % 12 + 1, 1)
+
+
+def calendar_url(month: date, shown: date) -> str:
+    return f"{PREFIX}/calendar?{urlencode({'month': month.strftime('%Y-%m'), 'date': shown})}"
+
+
+def month_calendar(
+    month: date,
+    shown: date,
+    today: date,
+    first: date,
+    by_day: dict[date, logic.Nutrients],
+    targets: dict[str, float | None],
+) -> str:
+    """The month view (#71): the month between arrows, a year box, then the days. A dot under
+    days with anything logged, a star instead on days within STAR_WITHIN of every goal. Months
+    run from the first logged one to this one; future days can't be picked."""
+    last = month_start(today)
+    prev_month, next_month = add_months(month, -1), add_months(month, 1)
+    prev = (
+        f'<a class="step" href="{calendar_url(prev_month, shown)}" data-cal'
+        ' aria-label="Previous month">&lsaquo;</a>'
+        if prev_month >= first
+        else '<span class="step off" aria-hidden="true">&lsaquo;</span>'
+    )
+    forward = (
+        f'<a class="step" href="{calendar_url(next_month, shown)}" data-cal'
+        ' aria-label="Next month">&rsaquo;</a>'
+        if next_month <= last
+        else '<span class="step off" aria-hidden="true">&rsaquo;</span>'
+    )
+    years = []
+    for y in range(last.year, first.year - 1, -1):
+        target = min(max(month.replace(year=y), first), last)
+        current = ' aria-current="true"' if y == month.year else ""
+        years.append(f'<a href="{calendar_url(target, shown)}" data-cal{current}>{y}</a>')
+    year_box = (
+        f'<details class="years"><summary aria-label="Pick a year">{month.year}'
+        f' <span aria-hidden="true">&#9662;</span></summary>'
+        f'<div class="yearlist">{"".join(years)}</div></details>'
+    )
+    head = f'<div class="calhead">{prev}<h2>{month.strftime("%B")}</h2>{forward}{year_box}</div>'
+    names = "".join(f'<span aria-hidden="true">{d}</span>' for d in "SMTWTFS")
+    cells = ['<span class="pad"></span>'] * ((month.weekday() + 1) % 7)  # Sunday first
+    d = month
+    while d.month == month.month:
+        n = by_day.get(d)
+        star = n is not None and logic.near_goals(n, targets)
+        mark = (
+            '<i class="star" aria-hidden="true">&#9733;</i>'
+            if star
+            else '<i class="dot" aria-hidden="true"></i>'
+            if n is not None
+            else ""
+        )
+        said = long_date(d, today) + (
+            ", near your goals" if star else ", logged" if n is not None else ""
+        )
+        cls = ' class="is-today"' if d == today else ""
+        current = ' aria-current="date"' if d == shown else ""
+        if d <= today:
+            cells.append(
+                f'<a href="{PREFIX}?date={d.isoformat()}"{cls}{current}'
+                f' aria-label="{e(said)}"><b>{d.day}</b>{mark}</a>'
+            )
+        else:
+            cells.append(f'<span class="future" aria-hidden="true"><b>{d.day}</b></span>')
+        d += timedelta(days=1)
+    within = round(logic.STAR_WITHIN * 100)
+    return (
+        f'<div class="calendar" data-month="{month.strftime("%Y-%m")}">{head}'
+        f'<div class="calgrid"><div class="calnames">{names}</div>'
+        f'<div class="caldays">{"".join(cells)}</div></div>'
+        '<div class="calfoot"><p class="muted small"><i class="dot" aria-hidden="true"></i>'
+        f' Logged <i class="star" aria-hidden="true">&#9733;</i> Within {within}% of every goal'
+        f'</p><a class="button ghost" href="{PREFIX}">Today</a></div></div>'
+    )
 
 
 @dataclass
@@ -1578,6 +1665,63 @@ MANIFEST = json.dumps(
 )
 
 
+# --- Recipes (#82) --------------------------------------------------------------------------
+
+RECIPE_NAME_MAX, STEPS_MAX, MAX_SERVINGS = 80, 5000, 100
+RECIPE_PICKS = 12  # foods listed when searching for an ingredient
+# An open book, for the button on Today that opens Recipes
+BOOK_ICON = (
+    '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none"'
+    ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M12 6.5C10.3 5.2 7.9 4.6 4 4.6v13.2c3.9 0 6.3.6 8 1.9 1.7-1.3 4.1-1.9 8-1.9V4.6'
+    'c-3.9 0-6.3.6-8 1.9Z"/><path d="M12 6.5v13.2"/></svg>'
+)
+
+
+@dataclass
+class RecipeDraft:
+    """A recipe being written in the editor, as typed: it goes back and forth with the
+    server while ingredients are searched for, added and removed, and is saved at the end."""
+
+    recipe_id: int | None = None
+    name: str = ""
+    servings: str = ""
+    steps: str = ""
+    items: list[tuple[int, str]] = field(default_factory=list)  # (food_id, grams as typed)
+    q: str = ""
+
+
+def recipe_numbers(recipe: store.Recipe) -> dict:
+    """logic.recipe_nutrition for a stored recipe."""
+    return logic.recipe_nutrition(
+        [(store.nutrients_of(i), i["grams"]) for i in recipe.ingredients], recipe.servings
+    )
+
+
+def recipe_url(recipe_id: int) -> str:
+    return f"{PREFIX}/recipes/{recipe_id}"
+
+
+def recipe_item(recipe: store.Recipe) -> str:
+    """A recipe in the Recipes list: name and calories per serving. Tap opens it; with the
+    script, swipe it left to delete it and press and hold it to edit it."""
+    n = logic.round_for_display(recipe_numbers(recipe)["per_serving"])
+    url = recipe_url(recipe.id)
+    delete = (
+        f'<form class="swipe-action js-only" method="post" action="{url}/delete">'
+        f'<button type="submit" aria-label="Delete {e(recipe.name)}">Delete</button></form>'
+    )
+    return (
+        f'<li id="recipe-{recipe.id}" class="swipe" data-hold="{url}/edit">{delete}'
+        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}"'
+        ' draggable="false">'
+        f'<div class="row"><span class="name clamp">{e(recipe.name)}</span>'
+        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+        f'<div class="row small muted"><span>Makes {count_text(recipe.servings)}'
+        f" · per serving</span><span>{macros_line(n)}</span></div></a></div></li>"
+    )
+
+
 def add_routes(
     server: MCPServer,
     settings: Settings,
@@ -1887,16 +2031,15 @@ def add_routes(
         head = [
             '<header class="daynav">',
             f'<a class="step" href="{day_url(prev_day)}" aria-label="Previous day">&lsaquo;</a>',
-            f'<div class="daytitle"><h1>{e(day_title(day, now))}</h1>'
+            # The title opens the month view (#71): a sheet with app.js, else its own page
+            f'<div class="daytitle"><h1><a class="opencal" data-calendar'
+            f' href="{calendar_url(month_start(day), day)}" aria-label="{e(day_title(day, now))},'
+            f' open the calendar">{e(day_title(day, now))}'
+            ' <span class="caret" aria-hidden="true">&#9662;</span></a></h1>'
             f'<p class="muted small">{e(long_date(day, now))}</p></div>',
             forward,
             "</header>",
             week_strip(day, now),
-            f'<div class="jump"><form method="get" action="{PREFIX}">'
-            f'<input type="date" name="date" value="{day.isoformat()}" max="{now.isoformat()}"'
-            ' aria-label="Pick a date" required><button type="submit">Go</button></form>',
-            f'<a href="{PREFIX}">Back to today</a>' if day != now else "",
-            "</div>",
             banner,
         ]
 
@@ -1991,6 +2134,11 @@ def add_routes(
                 '<p class="muted small">Add food above, or tell Claude what you ate.</p>'
                 "</section>"
             )
+        # Recipes (#82) open from a book in the bottom corner, above the tab bar
+        cards.append(
+            f'<a class="fab" href="{PREFIX}/recipes" aria-label="Recipes" title="Recipes">'
+            f"{BOOK_ICON}</a>"
+        )
         loaded = clock(datetime.now(ZoneInfo(tz)).isoformat())
         cards.append(
             f'<p class="fresh muted small">Page loaded at {loaded}.'
@@ -2005,6 +2153,43 @@ def add_routes(
         )
 
     # --- Day breakdown (#63) ---
+
+    @server.custom_route(f"{PREFIX}/calendar", methods=["GET"])
+    async def calendar_view(request: Request) -> Response:
+        """The month view. ?part=1 is just the calendar, for the sheet app.js opens on Today."""
+        if not signed_in(request):
+            return to_login(request)
+        now = today()
+        params = request.query_params
+        try:
+            shown = parse_day(params.get("date")) if params.get("date") else now
+            month = (
+                datetime.strptime(params["month"], "%Y-%m").date()
+                if params.get("month")
+                else month_start(shown)
+            )
+        except ValueError:
+            return message("Unknown date", "Months look like 2026-10.", 400, signed_in=True)
+        with connect(request) as conn:
+            started = store.first_meal_at(conn)
+            first = month_start(min(logic.local_date(started, tz), shown) if started else shown)
+            month = min(max(month, first), month_start(now))
+            end = add_months(month, 1) - timedelta(days=1)
+            lo, _ = logic.local_day_bounds(month, tz)
+            _, hi = logic.local_day_bounds(end, tz)
+            by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
+            targets = store.get_targets(conn)
+        body = month_calendar(month, shown, now, first, by_day, targets)
+        if params.get("part"):
+            return HTMLResponse(body, headers=SECURITY_HEADERS)
+        back = f'<p><a href="{day_url(shown)}">&lsaquo; Back to {e(day_title(shown, now))}</a></p>'
+        return render(
+            "Calendar",
+            f'{back}<section class="card calpage">{body}</section>',
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+        )
 
     @server.custom_route(f"{PREFIX}/breakdown", methods=["GET"])
     async def breakdown(request: Request) -> Response:
@@ -3034,6 +3219,20 @@ def add_routes(
             restated
         )
 
+    def recipe_instead(conn, food_id: int, page: str = "") -> Response | None:
+        """A recipe's food row (#82) is shown and changed as its recipe."""
+        recipe = store.recipe_of_food(conn, food_id)
+        if recipe is None:
+            return None
+        if recipe["user_id"] == store.user_of(conn):
+            return go(recipe_url(recipe["id"]) + page)
+        return message(
+            "A recipe",
+            f"{recipe['name']} is someone else's recipe; it changes only with its recipe.",
+            403,
+            signed_in=True,
+        )
+
     async def save_edited_food(request: Request, f: FoodForm, parsed: dict, serving: float):
         food_id = f.food_id or 0
         back = f.back or food_url(food_id, f"{PREFIX}/foods")
@@ -3070,6 +3269,8 @@ def add_routes(
                 row = store.get_food(conn, food_id, live=True)
             except store.NotFound:
                 return message("Not found", "That food no longer exists.", 404, signed_in=True)
+            if (to := recipe_instead(conn, food_id, "/edit")) is not None:
+                return to
         f = FoodForm(
             "edit",
             scanned_values(row),
@@ -3116,6 +3317,8 @@ def add_routes(
                 row = store.get_food(conn, food_id, live=True)
             except store.NotFound:
                 return message("Not found", "That food no longer exists.", 404, signed_in=True)
+            if (to := recipe_instead(conn, food_id)) is not None:
+                return to
             uses, last_used = store.food_usage(conn, food_id)
             portions = store.portions_of(conn, [food_id])[food_id]
             banner = notice(conn, request.query_params, here)
@@ -3381,6 +3584,374 @@ def add_routes(
 
     # --- History ---
 
+    # --- Recipes (#82): a book button on Today opens them ---
+
+    def recipe_page(title: str, body: str, request: Request, status: int = 200) -> Response:
+        return render(
+            title,
+            body,
+            "today",
+            signed_in=provider is not None,
+            user=account(request),
+            status=status,
+        )
+
+    @server.custom_route(f"{PREFIX}/recipes", methods=["GET"])
+    async def recipes_list(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        with connect(request) as conn:
+            recipes = store.list_recipes(conn)
+        banner = ""
+        if removed := params.get("removed", "")[:RECIPE_NAME_MAX]:
+            banner = toast(f"<span>Deleted {e(removed)}.</span>", "status")
+        parts = [
+            '<header class="daynav">'
+            f'<a class="step" href="{PREFIX}" aria-label="Back to Today">&lsaquo;</a>'
+            '<div class="daytitle"><h1>Recipes</h1></div>'
+            '<span class="step off" aria-hidden="true"></span></header>',
+            banner,
+            f'<a class="button add" href="{PREFIX}/recipes/new">+ New recipe</a>',
+        ]
+        if recipes:
+            hint = (
+                '<p class="small muted js-only hint">Tap a recipe to see it; press and hold it'
+                " to edit. Swipe left to delete.</p>"
+            )
+            items = "".join(recipe_item(r) for r in recipes)
+            parts.append(
+                f'<section class="card">{hint}<ul class="entries recipes">{items}</ul></section>'
+            )
+        else:
+            parts.append(
+                '<section class="card empty"><p>No recipes yet.</p><p class="muted small">'
+                "Add one here, or tell Claude “save this as my chili recipe”.</p></section>"
+            )
+        return recipe_page("Recipes", "".join(parts), request)
+
+    @server.custom_route(PREFIX + "/recipes/{recipe_id:int}", methods=["GET"])
+    async def recipe_view(request: Request) -> Response:
+        """One recipe: calories and macros per serving, ingredients, steps, and a Log
+        card pinned to the bottom that logs it in servings like any food."""
+        if not signed_in(request):
+            return to_login(request)
+        recipe_id = request.path_params["recipe_id"]
+        day = today()
+        with connect(request) as conn:
+            try:
+                recipe = store.get_recipe_by_id(conn, recipe_id)
+                food = store.get_food(conn, recipe.food_id)
+            except store.NotFound:
+                return message("Not found", "That recipe no longer exists.", 404, signed_in=True)
+            _, _, _, ctx = load_day(conn, day)
+        numbers = recipe_numbers(recipe)
+        per = logic.round_for_display(numbers["per_serving"])
+        total = logic.round_for_display(numbers["total"])
+        params = request.query_params
+        banner = (
+            toast(f"<span>Saved {e(recipe.name)}.</span>", "status") if params.get("saved") else ""
+        )
+        split = logic.macro_split(numbers["per_serving"])
+        rects, tiles, x = [], [], 0.0
+        for key, cls, _ in MACROS:
+            share = split[key] if split else 0.0
+            rects.append(
+                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
+            )
+            x += share
+            tiles.append(
+                f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                f"<div><strong>{amount(key, per[key])}</strong></div>"
+                f'<div class="muted small">{round(share)}% of kcal</div></div>'
+            )
+        ingredients = "".join(
+            f'<li class="row"><span class="name">{e(i["name"])}'
+            + (f' <span class="muted small">{e(i["brand"])}</span>' if i["brand"] else "")
+            + f'</span><span class="muted">{num(i["grams"], 1)}{NBSP}g</span></li>'
+            for i in recipe.ingredients
+        )
+        whole = (
+            f'<p class="small muted">Whole recipe: {num(total["kcal"])}{NBSP}kcal ·'
+            f" {macros_line(total)} · {num(numbers['total_g'], 0)}{NBSP}g of ingredients</p>"
+        )
+        steps = (
+            '<ol class="steps">' + "".join(f"<li>{e(s)}</li>" for s in recipe.steps) + "</ol>"
+            if recipe.steps
+            else '<p class="muted small">No steps yet. Press Edit to add them.</p>'
+        )
+        now_local = datetime.now(ZoneInfo(tz))
+        log_form = (
+            f'<form class="stack edit" method="post" action="{PREFIX}/log"'
+            f' data-per100="{per100_attr(store.nutrients_of(food))}"{day_attrs(ctx, ctx.kcal)}>'
+            f'<input type="hidden" name="food_id" value="{food["id"]}">'
+            f'<input type="hidden" name="date" value="{day.isoformat()}">'
+            '<input type="hidden" name="estimated" value="0">'
+            + amount_picker(food, food["serving_g"], slider_top(food["serving_g"]), by="servings")
+            + preview(store.nutrients_of(food), food["serving_g"], ctx, ctx.kcal)
+            + meal_menu(ctx, None, "Add to", now_local.strftime("%H:%M"), with_name=True)
+            + '<button type="submit">Log it</button></form>'
+        )
+        parts = [
+            '<header class="daynav">'
+            f'<a class="step" href="{PREFIX}/recipes" aria-label="Back to Recipes">&lsaquo;</a>'
+            f'<a class="step edit-link" href="{recipe_url(recipe.id)}/edit">Edit</a></header>',
+            banner,
+            '<section class="card summary food-hero">'
+            f'<h1 class="food-name">{e(recipe.name)}</h1>'
+            f'<p class="muted brand">Makes {servings_text(recipe.servings)}</p>'
+            f'<p class="hero"><span class="big kcal">{num(per["kcal"])}</span> kcal'
+            ' <span class="muted small">per serving</span></p>'
+            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
+            f' aria-hidden="true">{"".join(rects)}</svg>'
+            f'<div class="macros">{"".join(tiles)}</div></section>',
+            fold(
+                "recipe-ingredients",
+                "Ingredients",
+                f'<ul class="plain ingredients">{ingredients}</ul>{whole}',
+            ),
+            fold("recipe-steps", "Steps", steps),
+            '<section class="card log-recipe"><details class="fold">'
+            '<summary><h2 class="section">Log it<small>in servings</small></h2></summary>'
+            f"{log_form}</details></section>",
+        ]
+        return recipe_page(recipe.name, "".join(parts), request)
+
+    def recipe_editor(conn, draft: RecipeDraft, error: str = "") -> str:
+        """The recipe form: name, servings, ingredients with grams (search your foods to add
+        one), steps, and what a serving comes to so far."""
+        foods = store.get_foods(conn, (f for f, _ in draft.items)) if draft.items else {}
+        results = []
+        if draft.q:
+            own = store.get_recipe_by_id(conn, draft.recipe_id).food_id if draft.recipe_id else 0
+            results = [r for r in store.search_foods(conn, draft.q, RECIPE_PICKS) if r["id"] != own]
+        rows, picked = [], []
+        for index, (food_id, grams) in enumerate(draft.items):
+            food = foods[food_id]
+            kcal = ""
+            try:
+                g = parse_grams(grams.replace(",", ""))
+                picked.append((store.nutrients_of(food), g))
+                n = logic.scale(store.nutrients_of(food), g)
+                kcal = f"{num(n['kcal'])}{NBSP}kcal"
+            except ValueError:
+                pass
+            rows.append(
+                f'<li class="ingredient"><input type="hidden" name="food_id" value="{food_id}">'
+                f'<span class="name clamp">{e(food["name"])}</span>'
+                f'<span class="field"><input name="grams" value="{e(grams)}" inputmode="decimal"'
+                f' autocomplete="off" aria-label="Grams of {e(food["name"])}" required>'
+                f'<span class="unit">g</span></span><span class="muted small kcal">{kcal}</span>'
+                f'<button class="remove" type="submit" name="remove" value="{index}"'
+                f' formaction="{PREFIX}/recipes/draft" formnovalidate'
+                f' aria-label="Remove {e(food["name"])}">&times;</button></li>'
+            )
+        so_far = ""
+        try:
+            servings = float(draft.servings)
+            if picked and len(picked) == len(draft.items) and 0 < servings <= MAX_SERVINGS:
+                n = logic.round_for_display(logic.recipe_nutrition(picked, servings)["per_serving"])
+                so_far = (
+                    f'<p class="small">Per serving: <span class="kcal">{num(n["kcal"])}'
+                    f"{NBSP}kcal</span> · {macros_line(n)}</p>"
+                )
+        except ValueError:
+            pass
+        found = ""
+        if draft.q:
+            picks = "".join(
+                f'<li><button class="pick" type="submit" name="add" value="{r["id"]}"'
+                f' formaction="{PREFIX}/recipes/draft" formnovalidate>'
+                f'<span class="name clamp">{e(r["name"])}</span><span class="muted small">'
+                + (f"{e(r['brand'])} · " if r["brand"] else "")
+                + f"{num(logic.round_for_display(store.nutrients_of(r))['kcal'])}{NBSP}kcal"
+                ' per 100 g</span><span class="plus" aria-hidden="true">+</span>'
+                "</button></li>"
+                for r in results
+            )
+            found = (
+                f'<ul class="picks">{picks}</ul>'
+                if picks
+                else f'<p class="muted small">None of your foods match “{e(draft.q)}”. Add it'
+                f' from <a href="{PREFIX}/foods/new">New food</a> first, or ask Claude.</p>'
+            )
+        title = "Edit recipe" if draft.recipe_id else "New recipe"
+        back = recipe_url(draft.recipe_id) if draft.recipe_id else f"{PREFIX}/recipes"
+        keep = (
+            f'<input type="hidden" name="recipe_id" value="{draft.recipe_id}">'
+            if draft.recipe_id
+            else ""
+        )
+        return (
+            '<header class="daynav">'
+            f'<a class="step" href="{back}" aria-label="Back">&lsaquo;</a>'
+            f'<div class="daytitle"><h1>{title}</h1></div>'
+            '<span class="step off" aria-hidden="true"></span></header>'
+            + (toast(f"<span>{e(error)}</span>", "alert", " bad") if error else "")
+            + f'<form class="recipe-form" method="post" action="{PREFIX}/recipes/save"'
+            " data-draft>"
+            # Enter in a box searches (or refreshes the totals) rather than saving
+            f'<button class="sr" type="submit" name="do" value="search" tabindex="-1"'
+            f' formaction="{PREFIX}/recipes/draft" formnovalidate aria-hidden="true"></button>'
+            + keep
+            + '<section class="card stack">'
+            f'<label>Name<input name="name" value="{e(draft.name)}" required'
+            f' maxlength="{RECIPE_NAME_MAX}" placeholder="Like Chili"></label>'
+            '<label>Servings it makes<input name="servings" inputmode="decimal"'
+            f' autocomplete="off" value="{e(draft.servings)}" required placeholder="Like 6">'
+            "</label></section>"
+            '<section class="card" id="ingredients"><h2 class="section">Ingredients'
+            "<small>grams in the whole recipe</small></h2>"
+            + (f'<ul class="ingredients">{"".join(rows)}</ul>' if rows else "")
+            + so_far
+            + '<div class="search"><input type="search" name="q"'
+            f' value="{e(draft.q)}" placeholder="Search your foods to add one"'
+            ' aria-label="Search your foods for an ingredient" data-draft-search>'
+            f'<button type="submit" name="do" value="search" formaction="{PREFIX}/recipes/draft"'
+            " formnovalidate>Search</button></div>" + found + "</section>"
+            '<section class="card"><h2 class="section">Steps<small>one per line</small></h2>'
+            f'<textarea name="steps" rows="8" maxlength="{STEPS_MAX}"'
+            ' placeholder="Brown the beef&#10;Add the beans and simmer 30 minutes"'
+            f' aria-label="Steps, one per line">{e(draft.steps)}</textarea></section>'
+            '<button class="wide" type="submit">Save recipe</button></form>'
+        )
+
+    def read_draft(form) -> RecipeDraft:
+        ids = [int_param(str(v)) for v in form.getlist("food_id")]
+        grams = [str(v).strip()[:20] for v in form.getlist("grams")]
+        items = [(i, g) for i, g in zip(ids, grams, strict=False) if i is not None]
+        return RecipeDraft(
+            recipe_id=int_param(str(form.get("recipe_id", ""))),
+            name=" ".join(str(form.get("name", "")).split())[:RECIPE_NAME_MAX],
+            servings=str(form.get("servings", "")).strip()[:20],
+            steps=str(form.get("steps", ""))[:STEPS_MAX],
+            items=items,
+            q=str(form.get("q", "")).strip()[:100],
+        )
+
+    @server.custom_route(f"{PREFIX}/recipes/new", methods=["GET"])
+    async def recipe_new(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            body = recipe_editor(conn, RecipeDraft())
+        return recipe_page("New recipe", body, request)
+
+    @server.custom_route(PREFIX + "/recipes/{recipe_id:int}/edit", methods=["GET"])
+    async def recipe_edit(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            try:
+                recipe = store.get_recipe_by_id(conn, request.path_params["recipe_id"])
+            except store.NotFound:
+                return message("Not found", "That recipe no longer exists.", 404, signed_in=True)
+            draft = RecipeDraft(
+                recipe_id=recipe.id,
+                name=recipe.name,
+                servings=count_text(recipe.servings),
+                steps="\n".join(recipe.steps),
+                items=[(i["id"], num(i["grams"], 1).replace(",", "")) for i in recipe.ingredients],
+            )
+            body = recipe_editor(conn, draft)
+        return recipe_page("Edit recipe", body, request)
+
+    @server.custom_route(f"{PREFIX}/recipes/draft", methods=["POST"])
+    async def recipe_draft(request: Request) -> Response:
+        """The editor again after searching for, adding or removing an ingredient. The
+        script swaps the new form in place; without it this is a fresh page."""
+        if (no := refused(request, "Edit recipes")) is not None:
+            return no
+        form = await request.form()
+        draft = read_draft(form)
+        with connect(request) as conn:
+            index = int_param(str(form.get("remove", "")))
+            if index is not None and 0 <= index < len(draft.items):
+                del draft.items[index]
+            if (food_id := int_param(str(form.get("add", "")))) is not None:
+                try:
+                    food = store.get_food(conn, food_id, live=True)
+                except store.NotFound:
+                    food = None
+                if food is not None:
+                    grams = num(food["serving_g"] or 100, 1).replace(",", "")
+                    draft.items.append((food["id"], grams))
+                    draft.q = ""
+            try:
+                body = recipe_editor(conn, draft)
+            except store.NotFound:  # an ingredient was deleted meanwhile
+                draft.items = [(f, g) for f, g in draft.items if _food_exists(conn, f)]
+                body = recipe_editor(conn, draft)
+        return recipe_page("Edit recipe" if draft.recipe_id else "New recipe", body, request)
+
+    def _food_exists(conn, food_id: int) -> bool:
+        try:
+            store.get_food(conn, food_id)
+        except store.NotFound:
+            return False
+        return True
+
+    @server.custom_route(f"{PREFIX}/recipes/save", methods=["POST"])
+    async def recipe_save(request: Request) -> Response:
+        if (no := refused(request, "Save recipes")) is not None:
+            return no
+        form = await request.form()
+        draft = read_draft(form)
+        title = "Edit recipe" if draft.recipe_id else "New recipe"
+        with connect(request) as conn:
+            problem = ""
+            ingredients = []
+            try:
+                servings = float(draft.servings.replace(",", ""))
+                if not math.isfinite(servings) or not 0 < servings <= MAX_SERVINGS:
+                    raise ValueError
+            except ValueError:
+                problem = f"Servings must be a number more than 0 and at most {MAX_SERVINGS}."
+            for food_id, grams in draft.items:
+                try:
+                    ingredients.append((food_id, parse_grams(grams.replace(",", ""))))
+                except ValueError:
+                    problem = problem or PROBLEMS["grams"]
+            if not draft.name:
+                problem = "A recipe needs a name."
+            elif not draft.items:
+                problem = "Add at least one ingredient: search your foods above."
+            if not problem:
+                try:
+                    recipe, _ = store.save_recipe(
+                        conn,
+                        draft.name,
+                        servings,
+                        ingredients,
+                        draft.steps,
+                        recipe_id=draft.recipe_id,
+                    )
+                except store.NotFound:
+                    problem = PROBLEMS["gone"]
+                except ValueError as err:
+                    problem = capitalized(str(err)) + "."
+            if problem:
+                try:
+                    body = recipe_editor(conn, draft, problem)
+                except store.NotFound:
+                    draft.items = [(f, g) for f, g in draft.items if _food_exists(conn, f)]
+                    body = recipe_editor(conn, draft, problem)
+                return recipe_page(title, body, request, status=400)
+        log.info("dashboard: saved recipe %d", recipe.id)
+        return go(f"{recipe_url(recipe.id)}?saved=1")
+
+    @server.custom_route(PREFIX + "/recipes/{recipe_id:int}/delete", methods=["POST"])
+    async def recipe_delete(request: Request) -> Response:
+        if (no := refused(request, "Delete recipes")) is not None:
+            return no
+        with connect(request) as conn:
+            try:
+                recipe = store.delete_recipe(conn, request.path_params["recipe_id"])
+            except store.NotFound:
+                return go(f"{PREFIX}/recipes")
+        log.info("dashboard: deleted recipe %d", recipe.id)
+        return go(f"{PREFIX}/recipes?{urlencode({'removed': recipe.name})}")
+
     @server.custom_route(f"{PREFIX}/history", methods=["GET"])
     async def history(request: Request) -> Response:
         if not signed_in(request):
@@ -3497,6 +4068,9 @@ def add_routes(
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, sort, desc, per_serving)
                 templates = store.list_templates(conn)
+            # Recipes (#82) have their own page; their food rows are only for logging
+            recipe_foods = store.recipe_food_ids(conn)
+            rows = [r for r in rows if r["id"] not in recipe_foods]
 
         clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
         parts = [
