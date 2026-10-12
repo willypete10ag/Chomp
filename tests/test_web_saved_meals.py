@@ -129,3 +129,27 @@ def test_delete_saved_meal(http, conn, foods):
     r = http.post(f"/app/saved-meals/{template_id}/delete", headers=ORIGIN)
     assert r.status_code == 303  # already gone: back to the list
     assert http.get(f"/app/saved-meals/{template_id}").status_code == 404
+
+
+def test_a_food_deleted_while_editing_drops_out(http, conn, foods):
+    _, milk, _ = foods
+    honey = add_food(conn, "Honey", 304, 0.3, 82, 0)
+    store.delete_food(conn, honey)  # deleted for everyone while the editor was open
+    sign_in(http)
+    data = {
+        "name": "Sweet milk",
+        "food_id": [milk, honey],
+        "amount": ["200", "20"],
+        "unit": ["g", "g"],
+        "est": ["", ""],
+    }
+    r = http.post("/app/saved-meals/save", data=data, headers=ORIGIN)
+    assert r.status_code == 400 and "deleted in the meantime" in r.text
+    assert r.text.count('name="amount"') == 1 and "Honey" not in r.text
+
+
+def test_today_note_is_marked_for_the_script(http, conn, foods):
+    _, _, template_id = foods
+    sign_in(http)
+    page = http.get(f"/app/saved-meals/{template_id}").text
+    assert f'data-today="{today()}"' in page

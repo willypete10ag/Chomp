@@ -877,6 +877,17 @@
     box.value = String(Math.round(next * 100) / 100);
   });
 
+  // A saved meal's "Today after this" (#60) only shows while the new meal is on today
+  document.querySelectorAll("[data-today]").forEach(function (note) {
+    var date = note.closest("form").querySelector('input[name="date"]');
+    if (!date) return;
+    function sync() {
+      note.hidden = date.value !== note.dataset.today;
+    }
+    date.addEventListener("input", sync);
+    date.addEventListener("change", sync);
+  });
+
   // Deleting a saved meal (#60) asks first
   document.addEventListener("submit", function (event) {
     var ask = event.target.getAttribute("data-confirm");

@@ -4151,7 +4151,9 @@ def add_routes(
             + meal_menu(
                 ctx, None, "Add to", datetime.now(ZoneInfo(tz)).strftime("%H:%M"), with_date=True
             )
-            + f'<p class="preview small muted">Today after this: {num(after)}{goal} kcal</p>'
+            # Only true for today, so the script hides it while another date is picked
+            + f'<p class="preview small muted" data-today="{day.isoformat()}">'
+            f"Today after this: {num(after)}{goal} kcal</p>"
             '<button type="submit">Log this meal</button></form>'
         )
         parts = [
@@ -4300,7 +4302,14 @@ def add_routes(
 
     def known_items(conn, draft: TemplateDraft) -> None:
         """Drop items whose food was deleted while the editor was open."""
-        draft.items = [i for i in draft.items if _food_exists(conn, i[0])]
+        live = []
+        for item in draft.items:
+            try:
+                store.get_food(conn, item[0], live=True)
+            except store.NotFound:
+                continue
+            live.append(item)
+        draft.items = live
 
     @server.custom_route(SAVED + "/new", methods=["GET"])
     async def saved_meal_new(request: Request) -> Response:
@@ -4377,7 +4386,7 @@ def add_routes(
             problem = ""
             items: list[store.Item] = []
             try:
-                foods = store.get_foods(conn, (i[0] for i in draft.items))
+                foods = store.get_foods(conn, (i[0] for i in draft.items), live=True)
             except store.NotFound:
                 known_items(conn, draft)
                 foods = store.get_foods(conn, (i[0] for i in draft.items))
