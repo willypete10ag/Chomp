@@ -78,7 +78,7 @@ the day's total, and the goals page's calorie bar (drag the borders between prot
 and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
-Recipes (#82) open from a book button in Today's bottom corner (`/app/recipes`): a list with
+Recipes (#82) open from a book button in the bottom corner of Foods (`/app/recipes`): a list with
 calories per serving (tap to open, press and hold to edit, swipe left to delete), a recipe page
 (per-serving calories and macros, Ingredients and Steps folds, and a Log it card pinned at the
 bottom with the servings stepper, posting to `/app/log` with the recipe's food row), and an
@@ -86,6 +86,17 @@ editor (name, servings it makes, ingredients found by searching your foods with 
 whole recipe, steps one per line). The editor goes back to the server to search, add or remove
 an ingredient (`/app/recipes/draft`); the script swaps the new form in place. A recipe's food
 row stays out of Foods, and opening it as a food opens the recipe.
+
+The Foods tab has a Foods / Meals switch at the top (#60); the tab always opens on Foods,
+and each side's search box searches only that side. Meals (`/app/saved-meals`) lists the
+saved meals (`meal_templates`) with their calories and macros (tap to open, press and hold
+to edit, swipe left to delete after a confirm), a saved meal's page shows its totals and
+foods with a Log it card (posting to `/app/log-template`, a new meal at a time and date or
+into one of today's meals), and + New saved meal opens the editor: a name, then foods found
+by searching your foods, each in servings (when the food has a serving size) or grams. It
+works like the recipe editor (`/app/saved-meals/draft`), saves through
+`store.edit_template`, which refuses a name another saved meal already has, and an item's
+estimated flag (#75) stays only while its grams are unchanged.
 
 New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text

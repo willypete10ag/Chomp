@@ -791,9 +791,16 @@ def day_attrs(ctx: DayContext | None, base: float) -> str:
 
 
 def meal_menu(
-    ctx: DayContext, exclude: int | None, prompt: str, time: str, *, with_name: bool = False
+    ctx: DayContext,
+    exclude: int | None,
+    prompt: str,
+    time: str,
+    *,
+    with_name: bool = False,
+    with_date: bool = False,
 ) -> str:
-    """'Add to' / 'Move to': another meal that day, or a new meal at a time (and name)."""
+    """'Add to' / 'Move to': another meal that day, or a new meal at a time (and name, and
+    with_date another day up to today)."""
     options = "".join(
         f'<option value="{mid}">{e(title)}</option>' for mid, title in ctx.meals if mid != exclude
     )
@@ -803,11 +810,16 @@ def meal_menu(
         if with_name
         else ""
     )
+    when = f'<label>Time<input type="time" name="time" value="{time}"></label>'
+    if with_date:
+        when = (
+            f'<div class="pair">{when}<label>Date<input type="date" name="date"'
+            f' value="{ctx.day.isoformat()}" max="{ctx.today.isoformat()}"></label></div>'
+        )
     return (
         f'<label>{prompt}<select name="to" data-new-meal>'
         f'<option value="new">A new meal</option>{options}</select></label>'
-        f'<div class="new-meal"><label>Time<input type="time" name="time" value="{time}">'
-        f"</label>{name}</div>"
+        f'<div class="new-meal">{when}{name}</div>'
     )
 
 
@@ -1669,7 +1681,7 @@ MANIFEST = json.dumps(
 
 RECIPE_NAME_MAX, STEPS_MAX, MAX_SERVINGS = 80, 5000, 100
 RECIPE_PICKS = 12  # foods listed when searching for an ingredient
-# An open book, for the button on Today that opens Recipes
+# An open book, for the button on Foods that opens Recipes
 BOOK_ICON = (
     '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none"'
     ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
@@ -1720,6 +1732,90 @@ def recipe_item(recipe: store.Recipe) -> str:
         f'<div class="row small muted"><span>Makes {count_text(recipe.servings)}'
         f" · per serving</span><span>{macros_line(n)}</span></div></a></div></li>"
     )
+
+
+# --- Saved meals (#60) ---------------------------------------------------------------------
+
+SAVED = f"{PREFIX}/saved-meals"
+TEMPLATE_NAME_MAX = 80
+
+
+def recipes_fab() -> str:
+    """The book in the bottom corner of Foods that opens Recipes (#82, moved from Today)."""
+    return (
+        f'<a class="fab" href="{PREFIX}/recipes" aria-label="Recipes" title="Recipes">'
+        f"{BOOK_ICON}</a>"
+    )
+
+
+def foods_switch(active: str) -> str:
+    """Foods / Meals at the top of the Foods tab (#60); the tab always opens on Foods."""
+    sides = (("foods", f"{PREFIX}/foods", "Foods"), ("meals", SAVED, "Meals"))
+    links = "".join(
+        f'<a href="{href}"{" aria-current=page" if key == active else ""}>{label}</a>'
+        for key, href, label in sides
+    )
+    return f'<nav class="segment" aria-label="Foods or saved meals">{links}</nav>'
+
+
+def template_totals(items) -> logic.Nutrients:
+    """A saved meal's calories and nutrients, from its foods and grams."""
+    return logic.sum_nutrients([logic.snapshot(store.nutrients_of(i), i["grams"]) for i in items])
+
+
+def items_text(count: int) -> str:
+    return "1 item" if count == 1 else f"{count} items"
+
+
+def item_amount(item) -> str:
+    """How much of a food a saved meal has: servings when that's a whole or half number of
+    them, with the grams; else grams. An estimated amount gets the muted "~"."""
+    grams = grams_text(item["grams"], bool(item["estimated"]))
+    if item["serving_g"] and (count := whole_servings(item["grams"], item["serving_g"])):
+        return f"{servings_text(count)} · {grams}"
+    return grams
+
+
+def saved_meal_item(t, items) -> str:
+    """A saved meal on the Meals side of Foods: name, calories and macros. Tap opens it; with
+    the script, swipe it left to delete it (after asking) and press and hold it to edit it."""
+    n = logic.round_for_display(template_totals(items))
+    url = f"{SAVED}/{t['id']}"
+    name = capitalized(t["name"])
+    delete = (
+        f'<form class="swipe-action js-only" method="post" action="{url}/delete"'
+        f' data-confirm="Delete the saved meal {e(name)}?">'
+        f'<button type="submit" aria-label="Delete {e(name)}">Delete</button></form>'
+    )
+    return (
+        f'<li id="saved-{t["id"]}" class="swipe" data-hold="{url}/edit">{delete}'
+        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}"'
+        ' draggable="false">'
+        f'<div class="row"><span class="name clamp">{e(name)}</span>'
+        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+        f'<div class="row small muted"><span>{items_text(len(items))}</span>'
+        f"<span>{macros_line(n)}</span></div></a></div></li>"
+    )
+
+
+@dataclass
+class TemplateDraft:
+    """A saved meal being written in the editor, as typed. Each item is (food_id, amount as
+    typed, unit, est): unit is "servings" or "g", and est is the grams it was saved with when
+    that amount was an estimate (#75), which it stays while the grams don't change."""
+
+    template_id: int | None = None
+    name: str = ""
+    items: list[tuple[int, str, str, str]] = field(default_factory=list)
+    q: str = ""
+
+
+def draft_grams(food, amount: str, unit: str) -> float:
+    """An editor item's grams: its servings times the food's serving size, or its grams."""
+    raw = amount.replace(",", "").strip()
+    if unit == "servings" and food["serving_g"]:
+        return parse_servings(raw, food["serving_g"])
+    return parse_grams(raw)
 
 
 def add_routes(
@@ -2134,11 +2230,6 @@ def add_routes(
                 '<p class="muted small">Add food above, or tell Claude what you ate.</p>'
                 "</section>"
             )
-        # Recipes (#82) open from a book in the bottom corner, above the tab bar
-        cards.append(
-            f'<a class="fab" href="{PREFIX}/recipes" aria-label="Recipes" title="Recipes">'
-            f"{BOOK_ICON}</a>"
-        )
         loaded = clock(datetime.now(ZoneInfo(tz)).isoformat())
         cards.append(
             f'<p class="fresh muted small">Page loaded at {loaded}.'
@@ -3590,7 +3681,7 @@ def add_routes(
         return render(
             title,
             body,
-            "today",
+            "foods",
             signed_in=provider is not None,
             user=account(request),
             status=status,
@@ -3608,7 +3699,7 @@ def add_routes(
             banner = toast(f"<span>Deleted {e(removed)}.</span>", "status")
         parts = [
             '<header class="daynav">'
-            f'<a class="step" href="{PREFIX}" aria-label="Back to Today">&lsaquo;</a>'
+            f'<a class="step" href="{PREFIX}/foods" aria-label="Back to Foods">&lsaquo;</a>'
             '<div class="daytitle"><h1>Recipes</h1></div>'
             '<span class="step off" aria-hidden="true"></span></header>',
             banner,
@@ -3952,6 +4043,400 @@ def add_routes(
         log.info("dashboard: deleted recipe %d", recipe.id)
         return go(f"{PREFIX}/recipes?{urlencode({'removed': recipe.name})}")
 
+    # --- Saved meals (#60) ---
+
+    def foods_page(title: str, body: str, request: Request, status: int = 200) -> Response:
+        return render(
+            title,
+            body,
+            "foods",
+            signed_in=provider is not None,
+            user=account(request),
+            status=status,
+        )
+
+    @server.custom_route(SAVED, methods=["GET"])
+    async def saved_meals(request: Request) -> Response:
+        """The Meals side of Foods: saved meals, searched by name, and + New saved meal."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        q = params.get("q", "").strip()[:100]
+        with connect(request) as conn:
+            templates = store.list_templates(conn)
+            if q:
+                names = set(store.templates_matching(conn, q))
+                templates = [t for t in templates if t[0]["name"] in names]
+        banner = ""
+        if removed := params.get("removed", "")[:TEMPLATE_NAME_MAX]:
+            banner = toast(f"<span>Deleted {e(capitalized(removed))}.</span>", "status")
+        clear = f'<a class="clear" href="{SAVED}">Clear</a>' if q else ""
+        parts = [
+            "<h1>Foods</h1>",
+            foods_switch("meals"),
+            banner,
+            f'<form class="search" method="get" action="{SAVED}">'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Your saved meals"'
+            ' aria-label="Search your saved meals">'
+            f'<button type="submit">Search</button>{clear}</form>',
+            f'<a class="button add" href="{SAVED}/new">+ New saved meal</a>',
+        ]
+        if templates:
+            hint = (
+                '<p class="small muted js-only hint">Tap a meal to see it; press and hold it'
+                " to edit. Swipe left to delete.</p>"
+            )
+            items = "".join(saved_meal_item(t, t_items) for t, t_items in templates)
+            parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
+        elif q:
+            parts.append(
+                f'<section class="card empty"><p>No saved meal matches “{e(q)}”.</p></section>'
+            )
+        else:
+            parts.append(
+                '<section class="card empty"><p>No saved meals yet.</p><p class="muted small">'
+                "Add one here, or tell Claude “save this as my usual breakfast”.</p></section>"
+            )
+        parts.append(recipes_fab())
+        return foods_page("Saved meals", "".join(parts), request)
+
+    @server.custom_route(SAVED + "/{template_id:int}", methods=["GET"])
+    async def saved_meal_view(request: Request) -> Response:
+        """One saved meal: its total calories and macros, its foods, and a Log it card."""
+        if not signed_in(request):
+            return to_login(request)
+        template_id = request.path_params["template_id"]
+        day = today()
+        with connect(request) as conn:
+            try:
+                template, items = store.template_with_foods(conn, template_id)
+            except store.NotFound:
+                return message(
+                    "Not found", "That saved meal no longer exists.", 404, signed_in=True
+                )
+            _, _, _, ctx = load_day(conn, day)
+        name = capitalized(template["name"])
+        totals = template_totals(items)
+        shown = logic.round_for_display(totals)
+        banner = (
+            toast(f"<span>Saved {e(name)}.</span>", "status")
+            if request.query_params.get("saved")
+            else ""
+        )
+        split = logic.macro_split(totals)
+        rects, tiles, x = [], [], 0.0
+        for key, cls, _ in MACROS:
+            share = split[key] if split else 0.0
+            rects.append(
+                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
+            )
+            x += share
+            tiles.append(
+                f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
+                f"<div><strong>{amount(key, shown[key])}</strong></div>"
+                f'<div class="muted small">{round(share)}% of kcal</div></div>'
+            )
+        foods_list = "".join(
+            f'<li class="row"><span class="name">{e(i["name"])}'
+            + (f' <span class="muted small">{e(i["brand"])}</span>' if i["brand"] else "")
+            + f'</span><span class="muted">{item_amount(i)}</span></li>'
+            for i in items
+        )
+        after = ctx.kcal + shown["kcal"]
+        goal = f" of {num(ctx.goal)}" if ctx.goal else ""
+        url = f"{SAVED}/{template['id']}"
+        log_form = (
+            f'<form class="stack edit" method="post" action="{PREFIX}/log-template">'
+            f'<input type="hidden" name="template_id" value="{template["id"]}">'
+            + meal_menu(
+                ctx, None, "Add to", datetime.now(ZoneInfo(tz)).strftime("%H:%M"), with_date=True
+            )
+            # Only true for today, so the script hides it while another date is picked
+            + f'<p class="preview small muted" data-today="{day.isoformat()}">'
+            f"Today after this: {num(after)}{goal} kcal</p>"
+            '<button type="submit">Log this meal</button></form>'
+        )
+        parts = [
+            '<header class="daynav">'
+            f'<a class="step" href="{SAVED}" aria-label="Back to Meals">&lsaquo;</a>'
+            f'<a class="step edit-link" href="{url}/edit">Edit</a></header>',
+            banner,
+            '<section class="card summary food-hero">'
+            f'<h1 class="food-name">{e(name)}</h1>'
+            f'<p class="muted brand">Saved meal · {items_text(len(items))}</p>'
+            f'<p class="hero"><span class="big kcal">{num(shown["kcal"])}</span> kcal</p>'
+            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
+            f' aria-hidden="true">{"".join(rects)}</svg>'
+            f'<div class="macros">{"".join(tiles)}</div></section>',
+            fold("saved-meal-foods", "Foods", f'<ul class="plain ingredients">{foods_list}</ul>'),
+            '<section class="card"><details class="confirm"><summary>Delete saved meal…'
+            f'</summary><form method="post" action="{url}/delete">'
+            f'<button class="danger" type="submit">Yes, delete {e(name)}</button></form>'
+            "</details></section>",
+            '<section class="card log-recipe"><details class="fold">'
+            '<summary><h2 class="section">Log it</h2></summary>'
+            f"{log_form}</details></section>",
+        ]
+        return foods_page(name, "".join(parts), request)
+
+    def template_editor(conn, draft: TemplateDraft, error: str = "") -> str:
+        """The saved meal form: a name, then its foods (search your foods to add one), each
+        in servings or grams, and what the meal comes to so far."""
+        foods = store.get_foods(conn, (i[0] for i in draft.items)) if draft.items else {}
+        results = store.search_foods(conn, draft.q, RECIPE_PICKS) if draft.q else []
+        rows, picked = [], []
+        for index, (food_id, amount_typed, unit, est) in enumerate(draft.items):
+            food = foods[food_id]
+            kcal = ""
+            try:
+                g = draft_grams(food, amount_typed, unit)
+                picked.append(logic.snapshot(store.nutrients_of(food), g))
+                kcal = f"{num(picked[-1]['kcal'])}{NBSP}kcal"
+            except ValueError:
+                pass
+            label = e(food["name"])
+            if food["serving_g"]:
+                options = "".join(
+                    f'<option value="{v}"{" selected" if unit == v else ""}>{text}</option>'
+                    for v, text in (
+                        ("servings", f"&times; {num(food['serving_g'], 1)}{NBSP}g"),
+                        ("g", "g"),
+                    )
+                )
+                unit_field = (
+                    f'<select name="unit" data-serving="{float(food["serving_g"])!r}"'
+                    f' aria-label="Servings or grams of {label}">'
+                    f"{options}</select>"
+                )
+            else:
+                unit_field = (
+                    '<input type="hidden" name="unit" value="g"><span class="unit">g</span>'
+                )
+            rows.append(
+                f'<li class="ingredient"><input type="hidden" name="food_id" value="{food_id}">'
+                f'<input type="hidden" name="est" value="{e(est)}">'
+                f'<span class="name clamp">{label}</span>'
+                f'<span class="muted small kcal">{kcal}</span>'
+                f'<button class="remove" type="submit" name="remove" value="{index}"'
+                f' formaction="{SAVED}/draft" formnovalidate'
+                f' aria-label="Remove {label}">&times;</button>'
+                f'<span class="field"><input name="amount" value="{e(amount_typed)}"'
+                f' inputmode="decimal" autocomplete="off" aria-label="Amount of {label}"'
+                f" required>{unit_field}</span></li>"
+            )
+        so_far = ""
+        if picked and len(picked) == len(draft.items):
+            n = logic.round_for_display(logic.sum_nutrients(picked))
+            so_far = (
+                f'<p class="small">In all: <span class="kcal">{num(n["kcal"])}'
+                f"{NBSP}kcal</span> · {macros_line(n)}</p>"
+            )
+        found = ""
+        if draft.q:
+            picks = "".join(
+                f'<li><button class="pick" type="submit" name="add" value="{r["id"]}"'
+                f' formaction="{SAVED}/draft" formnovalidate>'
+                f'<span class="name clamp">{e(r["name"])}</span><span class="muted small">'
+                + (f"{e(r['brand'])} · " if r["brand"] else "")
+                + f"{num(logic.round_for_display(store.nutrients_of(r))['kcal'])}{NBSP}kcal"
+                ' per 100 g</span><span class="plus" aria-hidden="true">+</span>'
+                "</button></li>"
+                for r in results
+            )
+            found = (
+                f'<ul class="picks">{picks}</ul>'
+                if picks
+                else f'<p class="muted small">None of your foods match “{e(draft.q)}”. Add it'
+                f' from <a href="{PREFIX}/foods/new">New food</a> first, or ask Claude.</p>'
+            )
+        title = "Edit saved meal" if draft.template_id else "New saved meal"
+        back = f"{SAVED}/{draft.template_id}" if draft.template_id else SAVED
+        keep = (
+            f'<input type="hidden" name="template_id" value="{draft.template_id}">'
+            if draft.template_id
+            else ""
+        )
+        return (
+            '<header class="daynav">'
+            f'<a class="step" href="{back}" aria-label="Back">&lsaquo;</a>'
+            f'<div class="daytitle"><h1>{title}</h1></div>'
+            '<span class="step off" aria-hidden="true"></span></header>'
+            + (toast(f"<span>{e(error)}</span>", "alert", " bad") if error else "")
+            + f'<form class="recipe-form" method="post" action="{SAVED}/save" data-draft>'
+            # Enter in a box searches (or refreshes the totals) rather than saving
+            f'<button class="sr" type="submit" name="do" value="search" tabindex="-1"'
+            f' formaction="{SAVED}/draft" formnovalidate aria-hidden="true"></button>'
+            + keep
+            + '<section class="card stack">'
+            f'<label>Name<input name="name" value="{e(draft.name)}" required'
+            f' maxlength="{TEMPLATE_NAME_MAX}" placeholder="Like Usual breakfast"></label>'
+            "</section>"
+            '<section class="card" id="ingredients"><h2 class="section">Foods'
+            "<small>in servings or grams</small></h2>"
+            + (f'<ul class="ingredients meal-items">{"".join(rows)}</ul>' if rows else "")
+            + so_far
+            + '<div class="search"><input type="search" name="q"'
+            f' value="{e(draft.q)}" placeholder="Search your foods to add one"'
+            ' aria-label="Search your foods to add one" data-draft-search>'
+            f'<button type="submit" name="do" value="search" formaction="{SAVED}/draft"'
+            " formnovalidate>Search</button></div>" + found + "</section>"
+            '<button class="wide" type="submit">Save meal</button></form>'
+        )
+
+    def read_template_draft(form) -> TemplateDraft:
+        ids = [int_param(str(v)) for v in form.getlist("food_id")]
+        amounts = [str(v).strip()[:20] for v in form.getlist("amount")]
+        units = [str(v) for v in form.getlist("unit")]
+        ests = [str(v).strip()[:20] for v in form.getlist("est")]
+        items = [
+            (i, a, u if u in ("servings", "g") else "g", est)
+            for i, a, u, est in zip(ids, amounts, units, ests, strict=False)
+            if i is not None
+        ]
+        return TemplateDraft(
+            template_id=int_param(str(form.get("template_id", ""))),
+            name=" ".join(str(form.get("name", "")).split())[:TEMPLATE_NAME_MAX],
+            items=items,
+            q=str(form.get("q", "")).strip()[:100],
+        )
+
+    def known_items(conn, draft: TemplateDraft) -> None:
+        """Drop items whose food was deleted while the editor was open."""
+        live = []
+        for item in draft.items:
+            try:
+                store.get_food(conn, item[0], live=True)
+            except store.NotFound:
+                continue
+            live.append(item)
+        draft.items = live
+
+    @server.custom_route(SAVED + "/new", methods=["GET"])
+    async def saved_meal_new(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            body = template_editor(conn, TemplateDraft())
+        return foods_page("New saved meal", body, request)
+
+    @server.custom_route(SAVED + "/{template_id:int}/edit", methods=["GET"])
+    async def saved_meal_edit(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            try:
+                template, items = store.template_with_foods(
+                    conn, request.path_params["template_id"]
+                )
+            except store.NotFound:
+                return message(
+                    "Not found", "That saved meal no longer exists.", 404, signed_in=True
+                )
+            draft = TemplateDraft(template_id=template["id"], name=capitalized(template["name"]))
+            for i in items:
+                grams = num(i["grams"], 1).replace(",", "")
+                est = grams if i["estimated"] else ""
+                count = whole_servings(i["grams"], i["serving_g"]) if i["serving_g"] else None
+                if count:
+                    draft.items.append((i["id"], count_text(count), "servings", est))
+                else:
+                    draft.items.append((i["id"], grams, "g", est))
+            body = template_editor(conn, draft)
+        return foods_page("Edit saved meal", body, request)
+
+    @server.custom_route(SAVED + "/draft", methods=["POST"])
+    async def saved_meal_draft(request: Request) -> Response:
+        """The editor again after searching for, adding or removing a food. The script
+        swaps the new form in place; without it this is a fresh page."""
+        if (no := refused(request, "Edit saved meals")) is not None:
+            return no
+        form = await request.form()
+        draft = read_template_draft(form)
+        with connect(request) as conn:
+            index = int_param(str(form.get("remove", "")))
+            if index is not None and 0 <= index < len(draft.items):
+                del draft.items[index]
+            if (food_id := int_param(str(form.get("add", "")))) is not None:
+                try:
+                    food = store.get_food(conn, food_id, live=True)
+                except store.NotFound:
+                    food = None
+                if food is not None:
+                    if food["serving_g"]:
+                        draft.items.append((food["id"], "1", "servings", ""))
+                    else:
+                        draft.items.append((food["id"], "100", "g", ""))
+                    draft.q = ""
+            try:
+                body = template_editor(conn, draft)
+            except store.NotFound:
+                known_items(conn, draft)
+                body = template_editor(conn, draft)
+        title = "Edit saved meal" if draft.template_id else "New saved meal"
+        return foods_page(title, body, request)
+
+    @server.custom_route(SAVED + "/save", methods=["POST"])
+    async def saved_meal_save(request: Request) -> Response:
+        if (no := refused(request, "Save meals")) is not None:
+            return no
+        form = await request.form()
+        draft = read_template_draft(form)
+        title = "Edit saved meal" if draft.template_id else "New saved meal"
+        with connect(request) as conn:
+            problem = ""
+            items: list[store.Item] = []
+            try:
+                foods = store.get_foods(conn, (i[0] for i in draft.items), live=True)
+            except store.NotFound:
+                known_items(conn, draft)
+                foods = store.get_foods(conn, (i[0] for i in draft.items))
+                problem = PROBLEMS["gone"]
+            for food_id, amount_typed, unit, est in draft.items:
+                try:
+                    grams = draft_grams(foods[food_id], amount_typed, unit)
+                except ValueError as err:
+                    problem = problem or str(err)
+                    continue
+                # An estimated amount stays one only while its grams are unchanged
+                try:
+                    kept = bool(est) and abs(float(est) - grams) < 0.05
+                except ValueError:
+                    kept = False
+                items.append((food_id, grams, kept))
+            if not draft.name:
+                problem = "A saved meal needs a name."
+            elif not draft.items:
+                problem = "Add at least one food: search your foods above."
+            template_id = draft.template_id
+            if not problem:
+                try:
+                    template_id = store.edit_template(conn, draft.template_id, draft.name, items)
+                except store.NotFound:
+                    problem = PROBLEMS["gone"]
+                except ValueError as err:
+                    problem = capitalized(str(err)) + "."
+            if problem:
+                try:
+                    body = template_editor(conn, draft, problem)
+                except store.NotFound:
+                    known_items(conn, draft)
+                    body = template_editor(conn, draft, problem)
+                return foods_page(title, body, request, status=400)
+        log.info("dashboard: saved meal template %d", template_id)
+        return go(f"{SAVED}/{template_id}?saved=1")
+
+    @server.custom_route(SAVED + "/{template_id:int}/delete", methods=["POST"])
+    async def saved_meal_delete(request: Request) -> Response:
+        if (no := refused(request, "Delete saved meals")) is not None:
+            return no
+        with connect(request) as conn:
+            try:
+                template = store.delete_template(conn, request.path_params["template_id"])
+            except store.NotFound:
+                return go(SAVED)
+        log.info("dashboard: deleted meal template %d", template["id"])
+        return go(f"{SAVED}?{urlencode({'removed': template['name']})}")
+
     @server.custom_route(f"{PREFIX}/history", methods=["GET"])
     async def history(request: Request) -> Response:
         if not signed_in(request):
@@ -4063,11 +4548,8 @@ def add_routes(
         with connect(request) as conn:
             if q:
                 rows = store.search_foods(conn, q, FOODS_LIMIT, sort, desc, per_serving)
-                names = set(store.templates_matching(conn, q))
-                templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, sort, desc, per_serving)
-                templates = store.list_templates(conn)
             # Recipes (#82) have their own page; their food rows are only for logging
             recipe_foods = store.recipe_food_ids(conn)
             rows = [r for r in rows if r["id"] not in recipe_foods]
@@ -4075,35 +4557,16 @@ def add_routes(
         clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
         parts = [
             "<h1>Foods</h1>",
+            foods_switch("foods"),
             banner,
             f'<form class="search" method="get" action="{PREFIX}/foods">'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Foods and meals"'
-            ' aria-label="Search foods and saved meals">'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Your foods"'
+            ' aria-label="Search your foods">'
             f'<button type="submit">Search</button>{clear}</form>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
-        if q and not (rows or templates):
+        if q and not rows:
             parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')
-
-        # Reusable meals first, so they're reachable without scrolling every food
-        if templates:
-            cards = []
-            for t, t_items in templates:
-                snaps = [logic.snapshot(store.nutrients_of(i), i["grams"]) for i in t_items]
-                t_totals = logic.round_for_display(logic.sum_nutrients(snaps))
-                lis = "".join(
-                    f'<li class="row small"><span class="name">{e(i["name"])}</span>'
-                    f'<span class="muted">{num(i["grams"], 1)}{NBSP}g</span></li>'
-                    for i in t_items
-                )
-                cards.append(
-                    f'<div class="template"><div class="row">'
-                    f"<strong>{e(capitalized(t['name']))}</strong>"
-                    f'<span class="kcal">{num(t_totals["kcal"])}{NBSP}kcal</span></div>'
-                    f'<ul class="plain">{lis}</ul><div class="small muted">'
-                    f"{macros_line(t_totals)}</div></div>"
-                )
-            parts.append(fold("meals", "Saved meals", "".join(cards)))
         if rows:
             heading = "Foods" if q else "Your foods"
             day = today()
@@ -4128,6 +4591,7 @@ def add_routes(
             parts.append(fold("foods", heading, f'{bar}{hint}<ul class="entries">{items}</ul>'))
         elif not q:
             parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+        parts.append(recipes_fab())
         response = render(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
         )

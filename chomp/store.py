@@ -608,19 +608,69 @@ def templates_matching(conn: sqlite3.Connection, query: str) -> list[str]:
     ]
 
 
+def _template_foods(conn: sqlite3.Connection, template_id: int) -> list[sqlite3.Row]:
+    """A template's items in order: grams, estimated and the food's columns."""
+    cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
+    return conn.execute(
+        f"SELECT i.grams, i.estimated, {cols} FROM meal_template_items i"
+        " JOIN foods f ON f.id = i.food_id WHERE i.template_id = ? ORDER BY i.id",
+        (template_id,),
+    ).fetchall()
+
+
 def list_templates(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[sqlite3.Row]]]:
     """Every meal template with its items (food name, grams and per-100 g nutrients)."""
-    templates = _templates(conn)
-    cols = ", ".join("f." + c for c in FOOD_COLS.split(", "))
-    out = []
-    for t in templates:
-        items = conn.execute(
-            f"SELECT i.grams, i.estimated, {cols} FROM meal_template_items i"
-            " JOIN foods f ON f.id = i.food_id WHERE i.template_id = ? ORDER BY i.id",
-            (t["id"],),
-        ).fetchall()
-        out.append((t, items))
-    return out
+    return [(t, _template_foods(conn, t["id"])) for t in _templates(conn)]
+
+
+def template_with_foods(
+    conn: sqlite3.Connection, template_id: int
+) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
+    """One of this user's templates with its items as list_templates gives them."""
+    row, _ = get_template_by_id(conn, template_id)
+    return row, _template_foods(conn, template_id)
+
+
+def edit_template(
+    conn: sqlite3.Connection, template_id: int | None, name: str, items: list[Item]
+) -> int:
+    """Save a template from the dashboard editor (#60): a new one when template_id is None,
+    else that one renamed and its items replaced. Unlike save_template a name is never
+    reused: another template with the same name (any case) is refused with ValueError."""
+    get_foods(conn, (i[0] for i in items), live=True)
+    if template_id is not None:
+        get_template_by_id(conn, template_id)
+    user_id = user_of(conn)
+    with transaction(conn):
+        clash = conn.execute(
+            "SELECT 1 FROM meal_templates WHERE user_id = ? AND name = ? COLLATE NOCASE"
+            " AND id IS NOT ?",
+            (user_id, name, template_id),
+        ).fetchone()
+        if clash is not None:
+            raise ValueError(f"you already have a saved meal named {name!r}")
+        if template_id is None:
+            template_id = conn.execute(
+                "INSERT INTO meal_templates (user_id, name) VALUES (?, ?)", (user_id, name)
+            ).lastrowid
+        else:
+            conn.execute("UPDATE meal_templates SET name = ? WHERE id = ?", (name, template_id))
+            conn.execute("DELETE FROM meal_template_items WHERE template_id = ?", (template_id,))
+        conn.executemany(
+            "INSERT INTO meal_template_items (template_id, food_id, grams, estimated)"
+            " VALUES (?, ?, ?, ?)",
+            [(template_id, f, g, int(any(est))) for f, g, *est in items],
+        )
+    return template_id
+
+
+def delete_template(conn: sqlite3.Connection, template_id: int) -> sqlite3.Row:
+    """Delete one of this user's templates (its items go with it). Returns its id and name."""
+    row, _ = get_template_by_id(conn, template_id)
+    with transaction(conn):
+        conn.execute("DELETE FROM meal_template_items WHERE template_id = ?", (template_id,))
+        conn.execute("DELETE FROM meal_templates WHERE id = ?", (template_id,))
+    return row
 
 
 # --- Recipes (#82) -------------------------------------------------------------------------

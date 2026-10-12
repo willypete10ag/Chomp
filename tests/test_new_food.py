@@ -388,7 +388,8 @@ def test_foods_sort_by_and_per_serving(app, conn):
     assert names("kcal", desc=False) == ["Oat milk", "Oat bran", "Oat cookie"]
 
     page = app.get("/app/foods").text
-    assert 'data-fold="meals"' in page and 'data-fold="foods"' in page and " open>" in page
+    assert 'data-fold="foods"' in page and " open>" in page
+    assert 'data-fold="meals"' not in page  # saved meals are on the Meals side (#60)
     assert 'class="sortbar"' in page and 'value="most" selected>Most logged<' in page
     assert "Unconfirmed first" in page and "aria-current=page>Recent<" not in page  # no chips
     assert "most logged first" not in page and 'class="badge">100 g<' not in page
