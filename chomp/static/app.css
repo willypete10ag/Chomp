@@ -672,7 +672,7 @@ button.found {
   padding: 0; min-height: 0; border-radius: 0; font-weight: inherit;
 }
 
-/* Recipes (#82): a book in the bottom corner of Today opens them */
+/* Recipes (#82): a book in the bottom corner of Foods opens them */
 .fab {
   position: fixed; z-index: 5; right: max(1rem, env(safe-area-inset-right));
   bottom: calc(4.4rem + env(safe-area-inset-bottom));
@@ -694,6 +694,11 @@ ul.ingredients:not(.plain) li:first-child { border-top: 0; }
 .ingredient .field input { min-width: 0; text-align: right; }
 .ingredient .unit { color: var(--muted); font-size: .9rem; }
 .ingredient .kcal { font-weight: 400; text-align: right; }
+/* Saved meal editor (#60): name, kcal and remove on top, the amount and its unit below */
+ul.ingredients.meal-items li { grid-template-columns: 1fr 4.6rem 2.75rem; row-gap: .2rem; }
+.meal-items .field { grid-column: 1 / -1; }
+.meal-items .field input { width: 5.5rem; flex: none; }
+.meal-items .field select { width: auto; }
 button.remove {
   background: transparent; color: var(--muted); font-size: 1.4rem; padding: 0; min-width: 2.75rem;
 }

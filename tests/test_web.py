@@ -423,16 +423,16 @@ def test_foods_and_templates(http, conn, logged):
     assert "Egg white" in text and "Confirmed" in text
     assert "logged 1&times;" not in text  # on the food's page now (#72)
     assert "Cached FDC hit" not in text
-    assert "<strong>Usual breakfast</strong>" in text and "143 kcal" in text
-    assert '<h2 class="section">Saved meals</h2>' in text
+    assert "Usual breakfast" not in text  # on the Meals side now (#60)
+    assert 'href="/app/foods" aria-current=page>Foods<' in text and ">Meals</a>" in text
     assert text.count('class="swipe unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
     assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text
-    assert "Nicknames" not in r.text and "Saved meals" not in r.text
+    assert "Nicknames" not in r.text
     assert "Clear" in r.text
     r = http.get("/app/foods", params={"q": "breakfast"})
-    assert "Saved meals" in r.text and "Usual breakfast" in r.text
+    assert "Usual breakfast" not in r.text and "Nothing matches" in r.text
     r = http.get("/app/foods", params={"q": "zzz"})
     assert "Nothing matches" in r.text
     r = http.get("/app/foods", params={"q": "<script>"})

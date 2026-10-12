@@ -863,7 +863,31 @@
     });
   }
 
-  // The recipe editor (#82): searching for, adding or removing an ingredient asks the
+  // In the saved meal editor (#60), switching an item between servings and grams keeps
+  // its amount: 2 servings of 40 g become 80 g
+  document.addEventListener("change", function (event) {
+    var unit = event.target;
+    if (unit.name !== "unit" || !unit.dataset.serving) return;
+    var box = unit.parentNode.querySelector('input[name="amount"]');
+    if (!box) return;
+    var size = parseFloat(unit.dataset.serving);
+    var value = parseFloat(box.value.replace(/,/g, ""));
+    if (!size || !isFinite(value)) return;
+    var next = unit.value === "g" ? value * size : value / size;
+    box.value = String(Math.round(next * 100) / 100);
+  });
+
+  // Deleting a saved meal (#60) asks first
+  document.addEventListener("submit", function (event) {
+    var ask = event.target.getAttribute("data-confirm");
+    if (ask && !window.confirm(ask)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hide();
+    }
+  }, true);
+
+  // The recipe editor (#82) and the saved meal editor (#60): searching for, adding or removing an ingredient asks the
   // server for the form again and swaps it in place, so the page doesn't jump
   document.addEventListener("submit", function (event) {
     var form = event.target;
@@ -884,7 +908,7 @@
         form.replaceWith(fresh);
         var focus = null;
         if (by.name === "add") {
-          var boxes = fresh.querySelectorAll('input[name="grams"]');
+          var boxes = fresh.querySelectorAll('input[name="grams"], input[name="amount"]');
           focus = boxes[boxes.length - 1];
         } else if (by.name === "do") {
           focus = fresh.querySelector(".picks button") || fresh.querySelector("[data-draft-search]");
