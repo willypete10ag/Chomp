@@ -44,7 +44,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db, logic, serving_fill, store, users
+from chomp import db, hevy, logic, serving_fill, store, users
 from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
@@ -64,6 +64,9 @@ HISTORY_RANGES = (7, 30, 90)
 WEIGHT_RANGES = ((30, "30 days"), (90, "90 days"), (365, "1 year"))  # Weight page (#94)
 WEIGHT = f"{PREFIX}/weight"
 WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here"}
+WORKOUTS = f"{PREFIX}/workouts"  # Workouts page (#94)
+HEVY_MAX = 20 * 1024 * 1024
+SET_MARKS = {"warmup": "W", "failure": "F", "dropset": "D"}
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
@@ -474,6 +477,103 @@ def weight_item(row, tz: str) -> str:
     )
 
 
+def duration_text(row) -> str:
+    """A workout's length, "1 h 48 min" or "52 min", or "" without an end time."""
+    if not row["ended_at"]:
+        return ""
+    delta = logic.parse_utc(row["ended_at"]) - logic.parse_utc(row["started_at"])
+    minutes = max(round(delta.total_seconds() / 60), 0)
+    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
+
+
+def set_text(s) -> str:
+    """One set as people say it: "185 lb &times; 6", "12 reps", "1.25 mi · 20:15"."""
+    parts = []
+    lifted = (
+        None
+        if s["weight_kg"] is None
+        else f"{num(logic.weight_out(s['weight_kg'])['lb'], 1)}{NBSP}lb"
+    )
+    if s["weight_kg"] is not None and s["reps"] is not None:
+        parts.append(f"{lifted} &times; {s['reps']}")
+    elif s["weight_kg"] is not None:
+        parts.append(lifted)
+    elif s["reps"] is not None:
+        parts.append(f"{s['reps']} rep{'' if s['reps'] == 1 else 's'}")
+    if s["distance_m"] is not None:
+        parts.append(f"{s['distance_m'] / 1609.344:.2f}{NBSP}mi")
+    if s["duration_s"] is not None:
+        total = round(s["duration_s"])
+        parts.append(f"{total // 60}:{total % 60:02d}")
+    return " · ".join(parts) or "&ndash;"
+
+
+def workout_summary(row, sets) -> str:
+    exercises = len({x["exercise"] for x in sets})
+    bits = [duration_text(row), f"{exercises} exercise{'' if exercises == 1 else 's'}"]
+    if volume := logic.workout_volume_kg(sets):
+        bits.append(f"{num(logic.weight_out(volume)['lb'])}{NBSP}lb lifted")
+    return " · ".join(b for b in bits if b)
+
+
+def workout_item(row, sets, tz: str) -> str:
+    """A workout in the Workouts list: date, title and a summary. Tap opens it; with the
+    script, swipe it left to delete it (after asking)."""
+    local = logic.local_iso(row["started_at"], tz)
+    when = datetime.fromisoformat(local)
+    url = f"{WORKOUTS}/{row['id']}"
+    title = row["title"]
+    delete = (
+        f'<form class="swipe-action js-only" method="post" action="{url}/delete"'
+        f' data-confirm="Delete the workout {e(title)}? Importing an export that still has it'
+        ' brings it back.">'
+        f'<button type="submit" aria-label="Delete {e(title)}">Delete</button></form>'
+    )
+    return (
+        f'<li id="workout-{row["id"]}" class="swipe">{delete}'
+        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}"'
+        ' draggable="false">'
+        f'<div class="row"><span class="name clamp">{e(title)}</span>'
+        f'<span class="small muted">{e(when.strftime("%a %b"))} {when.day}</span></div>'
+        f'<div class="small muted">{workout_summary(row, sets)}</div></a></div></li>'
+    )
+
+
+def exercise_card(name: str, sets: list) -> str:
+    """One exercise of a workout: its sets numbered, warm-up, failure and drop sets marked."""
+    notes = next((x["exercise_notes"] for x in sets if x["exercise_notes"]), None)
+    rows = []
+    number = 0
+    for x in sets:
+        mark = SET_MARKS.get(x["set_type"])
+        if mark is None:
+            number += 1
+        label = mark or str(number)
+        rpe = f'<span class="muted small">RPE {num(x["rpe"], 1)}</span>' if x["rpe"] else ""
+        rows.append(
+            f'<li class="row"><span><span class="setno {x["set_type"]}"'
+            f' title="{e(x["set_type"])}">{label}</span> {set_text(x)}</span>{rpe}</li>'
+        )
+    note = f'<p class="muted small">{e(notes)}</p>' if notes else ""
+    return (
+        f'<section class="card"><h2>{e(name)}</h2>{note}'
+        f'<ul class="sets">{"".join(rows)}</ul></section>'
+    )
+
+
+def hevy_form(opened: bool) -> str:
+    body = (
+        f'<form class="stack" method="post" action="{WORKOUTS}/import"'
+        ' enctype="multipart/form-data">'
+        '<p class="muted small">In Hevy: Profile &rsaquo; Settings &rsaquo; Export &amp;'
+        " Import Data &rsaquo; Export Workouts, then pick the CSV here. Importing again"
+        " later only adds what's new.</p>"
+        '<input type="file" name="csv" accept=".csv,text/csv" required>'
+        '<button type="submit">Import</button></form>'
+    )
+    return fold("hevy", "Import from Hevy", body, opened=opened)
+
+
 # --- Pages ----------------------------------------------------------------------------------
 
 HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -495,6 +595,7 @@ NAV = (
     ("history", "/history", "History"),
     ("foods", "/foods", "Foods"),
     ("weight", "/weight", "Weight"),
+    ("workouts", "/workouts", "Workouts"),
 )
 
 
@@ -1308,6 +1409,9 @@ PROBLEMS = {
     "photo": "That file isn't a photo Chomp can read. Try a JPEG or PNG.",
     "photo_big": "That photo is too big. Try one under 20 MB.",
     "weight": "Weight must be a number of pounds, like 182.4.",
+    "hevy": "That file isn't a Hevy workout export. In Hevy: Profile > Settings > Export &"
+    " Import Data > Export Workouts.",
+    "hevy_big": "That file is too big for a Hevy export (20 MB at most).",
 }
 PHOTO_TOASTS = {"saved": "Photo saved.", "removed": "Photo removed."}
 
@@ -4606,6 +4710,166 @@ def add_routes(
                 return go(SAVED)
         log.info("dashboard: deleted meal template %d", template["id"])
         return go(f"{SAVED}?{urlencode({'removed': template['name']})}")
+
+    # --- Workouts (#94) ---
+
+    @server.custom_route(WORKOUTS, methods=["GET"])
+    async def workouts_view(request: Request) -> Response:
+        """Workouts imported from Hevy, newest first, over 30 days, 90 days or a year, with
+        the Hevy import at the top (folded once there are workouts)."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        span = int_param(params.get("days")) or 30
+        if span not in dict(WEIGHT_RANGES):
+            span = 30
+        last = today()
+        first = last - timedelta(days=span - 1)
+        lo, _ = logic.local_day_bounds(first, tz)
+        _, hi = logic.local_day_bounds(last, tz)
+        with connect(request) as conn:
+            rows = store.workouts_between(conn, lo, hi)
+            sets = store.workout_sets(conn, (r["id"] for r in rows))
+            any_at_all = (
+                bool(rows)
+                or conn.execute(
+                    "SELECT 1 FROM workouts WHERE user_id = ? LIMIT 1", (store.user_of(conn),)
+                ).fetchone()
+                is not None
+            )
+
+        banner = ""
+        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
+            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        elif (done := params.get("imported", "")).count("-") == 3:
+            added, updated, same, skipped = (int_param(x) or 0 for x in done.split("-"))
+            text = f"Imported {added} new workout{'' if added == 1 else 's'}"
+            extra = []
+            if updated:
+                extra.append(f"{updated} updated")
+            if same:
+                extra.append(f"{same} already here")
+            if skipped:
+                extra.append(
+                    f"{skipped} skipped because a row couldn't be read; fix it in Hevy and"
+                    " export again"
+                )
+            text += f" ({', '.join(extra)})." if extra else "."
+            banner = toast(f"<span>{e(text)}</span>", "status")
+        elif params.get("removed"):
+            banner = toast("<span>Workout deleted.</span>", "status")
+        tabs = "".join(
+            f'<a href="{WORKOUTS}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
+            for n, label in WEIGHT_RANGES
+        )
+        parts = [f'<h1>Workouts</h1><nav class="segment">{tabs}</nav>', banner]
+        if rows:
+            volume = sum(logic.workout_volume_kg(sets[r["id"]]) for r in rows)
+            parts.append(
+                '<section class="card summary"><div class="grid2">'
+                f'<div><div class="big">{len(rows)}</div><div class="muted small">'
+                f"workout{'' if len(rows) == 1 else 's'}</div></div>"
+                f'<div><div class="big">{num(logic.weight_out(volume)["lb"])}</div>'
+                '<div class="muted small">lb lifted</div></div></div></section>'
+            )
+        parts.append(hevy_form(opened=not any_at_all))
+        if rows:
+            hint = (
+                '<p class="small muted js-only hint">Tap a workout to see its sets. Swipe'
+                " left to delete.</p>"
+            )
+            items = "".join(workout_item(r, sets[r["id"]], tz) for r in rows)
+            parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
+        elif any_at_all:
+            parts.append('<section class="card empty"><p>No workouts in this period.</p></section>')
+        else:
+            parts.append(
+                '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
+                "Import your Hevy export above to bring in your history.</p></section>"
+            )
+        return render(
+            "Workouts",
+            "".join(parts),
+            "workouts",
+            signed_in=provider is not None,
+            user=account(request),
+        )
+
+    @server.custom_route(WORKOUTS + "/import", methods=["POST"])
+    async def workouts_import(request: Request) -> Response:
+        if (no := refused(request, "Import workouts")) is not None:
+            return no
+        size = int_param(request.headers.get("content-length"))
+        if size is not None and size > HEVY_MAX:
+            return go(f"{WORKOUTS}?problem=hevy_big")
+        async with request.form(max_files=1, max_fields=2) as form:
+            upload = form.get("csv")
+            data = await upload.read() if hasattr(upload, "read") else b""
+        if len(data) > HEVY_MAX:
+            return go(f"{WORKOUTS}?problem=hevy_big")
+        try:
+            parsed = hevy.parse(data, tz)
+        except hevy.HevyError:
+            return go(f"{WORKOUTS}?problem=hevy")
+        with connect(request) as conn:
+            counts = store.import_workouts(conn, parsed.workouts, "hevy")
+        log.info(
+            "dashboard: Hevy import, %d added, %d updated, %d unchanged, %d left out (%d bad rows)",
+            counts.added,
+            counts.updated,
+            counts.unchanged,
+            parsed.incomplete,
+            parsed.rejected,
+        )
+        done = f"{counts.added}-{counts.updated}-{counts.unchanged}-{parsed.incomplete}"
+        return go(f"{WORKOUTS}?days=365&imported={done}")
+
+    @server.custom_route(WORKOUTS + "/{workout_id:int}", methods=["GET"])
+    async def workout_view(request: Request) -> Response:
+        """One workout: title, when, how long, volume, notes, then each exercise's sets."""
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            try:
+                row = store.get_workout(conn, request.path_params["workout_id"])
+            except store.NotFound:
+                return message("Not found", "That workout isn't here anymore.", 404, signed_in=True)
+            sets = store.workout_sets(conn, [row["id"]])[row["id"]]
+        local = logic.local_iso(row["started_at"], tz)
+        when = datetime.fromisoformat(local)
+        by_exercise: dict[str, list] = {}
+        for x in sets:
+            by_exercise.setdefault(x["exercise"], []).append(x)
+        description = (
+            f'<p class="muted small">{e(row["description"])}</p>' if row["description"] else ""
+        )
+        parts = [
+            f'<p><a href="{WORKOUTS}">&lsaquo; Workouts</a></p>',
+            f"<h1>{e(row['title'])}</h1>",
+            f'<p class="muted small">{e(when.strftime("%A, %B"))} {when.day}, {clock(local)}'
+            f" · {workout_summary(row, sets)}</p>",
+            description,
+            *(exercise_card(name, group) for name, group in by_exercise.items()),
+        ]
+        return render(
+            row["title"],
+            "".join(parts),
+            "workouts",
+            signed_in=provider is not None,
+            user=account(request),
+        )
+
+    @server.custom_route(WORKOUTS + "/{workout_id:int}/delete", methods=["POST"])
+    async def workout_delete(request: Request) -> Response:
+        if (no := refused(request, "Delete workouts")) is not None:
+            return no
+        with connect(request) as conn:
+            try:
+                row = store.delete_workout(conn, request.path_params["workout_id"])
+            except store.NotFound:
+                return go(WORKOUTS)
+        log.info("dashboard: deleted workout %d", row["id"])
+        return go(f"{WORKOUTS}?removed=1")
 
     # --- Weight (#94) ---
 

@@ -22,3 +22,4 @@ commit when a migration changes the design.
 | `0011_off_saved.sql` | Open Food Facts foods so far marked saved: OFF search hits (#88) are a lookup cache like FDC's |
 | `0012_recipes.sql` | `recipes` and `recipe_ingredients`; each recipe backed by a food row for logging (#82) |
 | `0013_weights.sql` | `weights`: each person's weigh-ins in kg; `ingest_tokens`: hashed phone tokens for `/ingest/health` (#94, #101) |
+| `0014_workouts.sql` | `workouts` and `workout_sets`: each person's workouts imported from Hevy's CSV export (#94) |

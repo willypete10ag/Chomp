@@ -51,7 +51,12 @@ out), History (7/30/90-day averages and inline-SVG charts; each day links to its
 Weight (#94, `/app/weight`, the fourth tab: the latest weigh-in in lb, the change over 30 days,
 90 days or a year, an inline-SVG line of each weighed day's last weigh-in, an Add a weigh-in
 form (lb, time, date), and every weigh-in in the range with where it came from, swiped left to
-delete after asking; a minimal page, expected to move in a wider health redesign)
+delete after asking; a minimal page, expected to move in a wider health redesign),
+Workouts (#94, `/app/workouts`, the fifth tab: workouts imported from Hevy over 30 days, 90
+days or a year with their count and pounds lifted, an Import from Hevy card (open until there
+are workouts) that takes the CSV export, and each workout's title, date, length, exercises and
+volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
+F and D, and RPE; swipe left deletes after asking)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
 (most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
@@ -173,6 +178,7 @@ local-only mode everything is the owner's.
 | `save_portion` / `forget_portion` | Remember (or forget) what one of the user's portions of a food weighs ("my handful of Cheez-Its = 30 g") | `food_id`, `name`, `grams`, `count?`, `estimated?` / `food_id`, `name` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
 | `save_recipe` / `get_recipe` / `delete_recipe` | The user's homemade recipes (#82): ingredients from foods with grams, steps, servings it makes; returns nutrition per serving and the recipe's `food_id` for `log_entries` | `name`, `servings`, `ingredients`, `steps?` / `name?` (omit to list) / `recipe_id` |
+| `get_workouts` | Strength workouts imported from Hevy (#94) over a range (default the last 30 days, at most 60 listed), newest first, each with its exercises and sets (lb and kg, reps, set type, RPE) and volume; `exercise` narrows to workouts with a matching exercise and lists only its sets | `start?`, `end?`, `exercise?` |
 | `log_weight` / `get_weight` / `delete_weight` | Body weight (#94): record a weigh-in the user mentions; read weigh-ins over a range (default the last 30 days) with each day's last, the change, the average and the latest; delete a wrong one. Values in kg and lb | `weight`, `unit`, `measured_at?` / `start?`, `end?` / `weight_id` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
@@ -204,6 +210,14 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   any food, by servings. The row follows the recipe and its ingredients (re-summed when an
   ingredient is corrected); it can't be edited, renamed or deleted as a food, only through
   the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
+- Workouts (#94, migration 0014, `chomp/hevy.py`): Hevy has no API without Pro, so workouts
+  come from its CSV export (one row per set; `weight_lbs`/`distance_miles` or the metric
+  columns; local times like `13 Oct 2026, 18:56`), uploaded on the Workouts page or with
+  `chomp import-hevy FILE [--user NAME]`. Each user's `workouts` (UTC `started_at`, title,
+  description) hold `workout_sets` in order (exercise, notes, superset, set index, type, kg,
+  reps, metres, seconds, RPE). A workout is identified by its start time, so re-importing a
+  newer export adds new workouts, replaces changed ones and skips the rest. A workout with
+  a bad row is left out whole (and counted), so it never replaces a complete saved copy. Volume (`logic.workout_volume_kg`) is weight × reps over working sets.
 - Body weight (#94, migration 0013): each user's `weights` (UTC `measured_at`, `kg`, `source`:
   `health` from the phone, `chat` from `log_weight`, `app` reserved for the dashboard). Stored in
   kg; `logic.to_kg` / `logic.weight_out` convert (lb to 0.1, kg to 0.01). One weigh-in per
@@ -254,7 +268,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Backup and export
 - `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one. Food photos are copied to `BACKUP_HOST_DIR/photos` (new and changed files only; none deleted there), and a restore keeps photos only for foods the restored database has (a food added later could otherwise hand its id, and photo, to a new food), filling gaps from the backup and moving the old folder aside.
-- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates, recipes, targets and weigh-ins. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
+- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates, recipes, targets, workouts with their sets and weigh-ins. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.

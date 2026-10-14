@@ -264,6 +264,18 @@ Sending the same readings again is harmless: Chomp keeps one weigh-in per time. 
 says how many were added, updated or unchanged. Don't put Cloudflare Access in front of
 `/ingest` (the phone can't sign in to it). Ask Claude "what do I weigh?" to check.
 
+### 10. Import workouts from Hevy
+
+In Hevy: Profile › Settings › Export & Import Data › Export Workouts. Then on the dashboard's
+**Workouts** tab, open Import from Hevy and pick the CSV. Import again whenever you like; only
+new or changed workouts are added. A big first import can also be done on the server:
+
+```bash
+docker compose exec -T chomp chomp import-hevy - --user Will < workout_data.csv
+```
+
+Ask Claude "what did I bench last time?" or "what did I do at the gym this week?".
+
 ### Updating
 
 ```bash

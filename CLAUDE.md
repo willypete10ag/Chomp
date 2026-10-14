@@ -12,7 +12,8 @@ chomp/
   auth.py          # OAuth 2.1 server + bearer token, consent page (password picks the user)
   users.py         # users and their scrypt passwords (`chomp user add`)
   health.py        # /ingest/health: phone posts Apple Health data (weight) with an ingest token
-  cli.py           # `chomp` command: serve, backup, restore, export, user (+ ingest-token)
+  hevy.py          # Hevy workout CSV export parser (workouts are imported, Hevy has no free API)
+  cli.py           # `chomp` command: serve, backup, restore, export, user (+ ingest-token), import-hevy
   backup.py        # nightly SQLite backup with retention, restore
   export.py        # CSV/JSON export
   config.py        # settings from env
