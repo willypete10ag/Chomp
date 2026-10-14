@@ -62,13 +62,22 @@ def test_units_convert_to_stored_units():
 
 
 def test_days_sum_their_buckets_and_average_over_days_with_data():
+    def row(metric, period, start_at, qty, sent="2026-10-14 12:00:00"):
+        return {
+            "metric": metric,
+            "period": period,
+            "start_at": start_at,
+            "qty": qty,
+            "updated_at": sent,
+        }
+
     rows = [
-        {"metric": "steps", "start_at": "2026-10-13T04:00:00Z", "qty": 1000},  # Oct 13 local
-        {"metric": "steps", "start_at": "2026-10-13T15:00:00Z", "qty": 500},
-        {"metric": "steps", "start_at": "2026-10-14T03:30:00Z", "qty": 200},  # still Oct 13
-        {"metric": "steps", "start_at": "2026-10-14T04:00:00Z", "qty": 3000},
-        {"metric": "active_kcal", "start_at": "2026-10-14T04:00:00Z", "qty": 300},
-        {"metric": "resting_kcal", "start_at": "2026-10-14T04:00:00Z", "qty": 1700},
+        row("steps", "part", "2026-10-13T04:00:00Z", 1000),  # Oct 13 local
+        row("steps", "part", "2026-10-13T15:00:00Z", 500),
+        row("steps", "part", "2026-10-14T03:30:00Z", 200),  # still Oct 13
+        row("steps", "day", "2026-10-14T04:00:00Z", 3000),
+        row("active_kcal", "day", "2026-10-14T04:00:00Z", 300),
+        row("resting_kcal", "day", "2026-10-14T04:00:00Z", 1700),
     ]
     days = logic.activity_by_day(rows, TZ)
     assert days == {
@@ -82,6 +91,35 @@ def test_days_sum_their_buckets_and_average_over_days_with_data():
     }
     assert logic.burned_kcal(days[date(2026, 10, 14)]) == 2000
     assert logic.burned_kcal(days[date(2026, 10, 13)]) is None
+
+
+def test_a_days_whole_total_and_its_hours_never_add_up():
+    """Switching between a whole-day sender (the Shortcut) and an hourly one (Health Auto
+    Export by hour): the kind sent last counts for that day, not both."""
+    hours = [
+        {
+            "metric": "steps",
+            "period": "part",
+            "start_at": f"2026-10-13T{h}:00:00Z",
+            "qty": 1000,
+            "updated_at": "2026-10-13 20:00:00",
+        }
+        for h in (4, 12, 18)
+    ]
+    whole = {
+        "metric": "steps",
+        "period": "day",
+        "start_at": "2026-10-13T04:00:00Z",
+        "qty": 2500,
+        "updated_at": "2026-10-13 21:00:00",
+    }
+    assert logic.activity_by_day([*hours, whole], TZ) == {date(2026, 10, 13): {"steps": 2500}}
+    later = {**hours[0], "updated_at": "2026-10-13 22:00:00"}
+    assert logic.activity_by_day([later, *hours[1:], whole], TZ) == {
+        date(2026, 10, 13): {"steps": 3000}
+    }
+    tie = {**whole, "updated_at": "2026-10-13 20:00:00"}
+    assert logic.activity_by_day([*hours, tie], TZ) == {date(2026, 10, 13): {"steps": 2500}}
 
 
 # --- payloads -------------------------------------------------------------------------------
@@ -102,14 +140,33 @@ def test_parses_health_auto_export_activity():
     )
     day = "2026-10-13T04:00:00Z"
     assert parsed.activity == {
-        ("steps", day): 8123,
-        ("active_kcal", day): pytest.approx(400),
-        ("distance_m", day): pytest.approx(3.8 * logic.M_PER_MILE),
-        ("exercise_min", day): 34,
-        ("flights", day): 12,
-        ("resting_kcal", day): 1750,
+        ("steps", "day", day): 8123,
+        ("active_kcal", "day", day): pytest.approx(400),
+        ("distance_m", "day", day): pytest.approx(3.8 * logic.M_PER_MILE),
+        ("exercise_min", "day", day): 34,
+        ("flights", "day", day): 12,
+        ("resting_kcal", "day", day): 1750,
     }
     assert parsed.ignored == {"heart_rate": 1} and parsed.rejected == 0
+
+
+def test_hourly_readings_are_parts_of_a_day():
+    parsed = health.parse(
+        hae(
+            (
+                "step_count",
+                "count",
+                [("2026-10-13 00:00:00 -0400", 40), ("2026-10-13 07:00:00 -0400", 900)],
+            ),
+            ("flights_climbed", "count", [("2026-10-13 00:00:00 -0400", 2)]),
+        ),
+        TZ,
+    )
+    assert parsed.activity == {
+        ("steps", "part", "2026-10-13T04:00:00Z"): 40,
+        ("steps", "part", "2026-10-13T11:00:00Z"): 900,
+        ("flights", "day", "2026-10-13T04:00:00Z"): 2,
+    }
 
 
 def test_simple_lists_take_a_bare_date_as_that_days_total():
@@ -122,8 +179,8 @@ def test_simple_lists_take_a_bare_date_as_that_days_total():
         TZ,
     )
     assert parsed.activity == {
-        ("steps", "2026-10-13T04:00:00Z"): 8123,
-        ("distance_m", "2026-10-13T04:00:00Z"): pytest.approx(6100),
+        ("steps", "day", "2026-10-13T04:00:00Z"): 8123,
+        ("distance_m", "day", "2026-10-13T04:00:00Z"): pytest.approx(6100),
     }
     assert list(parsed.weights) == ["2026-10-13T11:00:00Z"]
 
@@ -145,10 +202,10 @@ def test_parses_a_shortcuts_flat_fields():
     )
     day = "2026-10-13T04:00:00Z"
     assert parsed.activity == {
-        ("steps", day): 8123,
-        ("active_kcal", day): 412.6,
-        ("exercise_min", day): 34,
-        ("distance_m", day): pytest.approx(3.8 * logic.M_PER_MILE),
+        ("steps", "day", day): 8123,
+        ("active_kcal", "day", day): 412.6,
+        ("exercise_min", "day", day): 34,
+        ("distance_m", "day", day): pytest.approx(3.8 * logic.M_PER_MILE),
     }
     assert parsed.weights == {"2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3)}
     assert parsed.rejected == 0
@@ -211,7 +268,12 @@ def test_ingest_saves_activity_and_replaces_a_filling_bucket(ingest, conn):
         ("2026-10-12T04:00:00Z", 9000),
         ("2026-10-13T04:00:00Z", 7500),
     ]
-    assert store.last_activity_sync(conn).endswith("Z")
+    # An unchanged resend still counts as the phone's latest send
+    conn.execute("UPDATE activity SET updated_at = '2026-01-01 00:00:00'")
+    assert store.last_activity_sync(conn) == "2026-01-01T00:00:00Z"
+    r = ingest.post(health.PATH, json=payload, headers=auth)
+    assert r.json()["activity"] == {"added": 0, "updated": 0, "unchanged": 2}
+    assert store.last_activity_sync(conn) > "2026-01-02"
     r = ingest.post(health.PATH, json={"date": "2026-10-13", "flights": 3}, headers=auth)
     assert r.json()["activity"]["added"] == 1
 
@@ -224,12 +286,12 @@ async def test_get_activity(server, conn):
     store.add_activity(
         conn,
         [
-            ("steps", midnight(2), 10000),
-            ("active_kcal", midnight(2), 500),
-            ("resting_kcal", midnight(2), 1700),
-            ("distance_m", midnight(2), 8046.72),
-            ("steps", midnight(1), 6000),
-            ("steps", midnight(0), 1234),
+            ("steps", "day", midnight(2), 10000),
+            ("active_kcal", "day", midnight(2), 500),
+            ("resting_kcal", "day", midnight(2), 1700),
+            ("distance_m", "day", midnight(2), 8046.72),
+            ("steps", "day", midnight(1), 6000),
+            ("steps", "day", midnight(0), 1234),
         ],
     )
     async with Client(server) as client:
@@ -268,17 +330,17 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
     store.add_activity(
         conn,
         [
-            ("steps", midnight(3), 12000),
-            ("steps", midnight(1), 8000),
-            ("active_kcal", midnight(1), 450),
-            ("resting_kcal", midnight(1), 1750),
-            ("exercise_min", midnight(1), 30),
-            ("distance_m", midnight(1), 1609.344 * 3.5),
-            ("flights", midnight(1), 1),
-            ("steps", midnight(0), 2345),
-            ("resting_kcal", midnight(0), 900),
-            ("active_kcal", midnight(0), 100),
-            ("steps", midnight(20), 5000),  # only in the 30-day view
+            ("steps", "day", midnight(3), 12000),
+            ("steps", "day", midnight(1), 8000),
+            ("active_kcal", "day", midnight(1), 450),
+            ("resting_kcal", "day", midnight(1), 1750),
+            ("exercise_min", "day", midnight(1), 30),
+            ("distance_m", "day", midnight(1), 1609.344 * 3.5),
+            ("flights", "day", midnight(1), 1),
+            ("steps", "day", midnight(0), 2345),
+            ("resting_kcal", "day", midnight(0), 900),
+            ("active_kcal", "day", midnight(0), 100),
+            ("steps", "day", midnight(20), 5000),  # only in the 30-day view
         ],
     )
     sign_in(http)
@@ -295,7 +357,7 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
 
 
 def test_activity_page_with_nothing_in_range(http, conn):
-    store.add_activity(conn, [("steps", midnight(200), 5000)])
+    store.add_activity(conn, [("steps", "day", midnight(200), 5000)])
     sign_in(http)
     page = http.get("/app/activity").text
     assert "No activity in this period." in page and 'class="chart"' not in page
@@ -307,9 +369,12 @@ def test_activity_page_with_nothing_in_range(http, conn):
 def test_json_export_includes_activity_in_range(conn):
     store.add_activity(
         conn,
-        [("steps", "2026-10-05T04:00:00Z", 9000), ("steps", "2026-10-07T04:00:00Z", 1)],
+        [
+            ("steps", "day", "2026-10-05T04:00:00Z", 9000),
+            ("steps", "day", "2026-10-07T04:00:00Z", 1),
+        ],
     )
     data = export.to_json(conn, TZ, end=date(2026, 10, 6))
     assert data["activity"] == [
-        {"metric": "steps", "start_at": "2026-10-05T00:00:00-04:00", "qty": 9000}
+        {"metric": "steps", "period": "day", "start_at": "2026-10-05T00:00:00-04:00", "qty": 9000}
     ]

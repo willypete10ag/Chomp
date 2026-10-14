@@ -230,13 +230,16 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   phone's repeated sends. Deleting one (tool or Weight page) keeps the row with `deleted = 1`,
   so the phone resending it doesn't bring it back; saving the same time from chat or the
   page does.
-- Activity (#94, migration 0015): each user's `activity` readings (metric, UTC `start_at` of
-  its time bucket, `qty` in the stored unit: `steps`, `active_kcal`, `resting_kcal`,
-  `distance_m`, `exercise_min`, `flights`; `logic.to_activity` converts kJ, mi, km, hours and
-  so on). A day's total is the sum of its buckets in local time (`logic.activity_by_day`); the
-  phone sends a whole day as one bucket at local midnight (or hours, from Health Auto
-  Export). One reading per person, metric and bucket start: the phone resends today's
-  growing total and it replaces the last one. Averages leave out today, which isn't over.
+- Activity (#94, migration 0015): each user's `activity` readings (metric, `period`, UTC
+  `start_at` of its time bucket, `qty` in the stored unit: `steps`, `active_kcal`,
+  `resting_kcal`, `distance_m`, `exercise_min`, `flights`; `logic.to_activity` converts kJ,
+  mi, km, hours and so on). `period` is `day` for a whole day's total (the Shortcut's bare
+  date, or Health Auto Export readings that all start at local midnight) and `part` for
+  hours. A day's total in local time (`logic.activity_by_day`) is its `day` reading or the
+  sum of its parts, whichever was sent last (`updated_at`, bumped on every send, changed or
+  not), so switching between the two never adds them up. One reading per person, metric,
+  period and bucket start: the phone resends today's growing total and it replaces the last
+  one. Averages leave out today, which isn't over.
   Burned is active + resting, only when both arrived. The numbers are Apple Health's.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
   iPhone posts readings to `POST /ingest/health`, in one of three shapes. Health Auto Export's

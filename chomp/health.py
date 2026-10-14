@@ -18,8 +18,9 @@ These payload shapes are accepted:
 Weight is kept per weigh-in. Activity (steps, active and resting energy, walking + running
 distance, exercise minutes, flights) is kept per time bucket: Health Auto Export with Summarize
 Data sends one reading per day (or hour) of the metric, and a simple date with no time is that
-day's total. Readings are de-duplicated by person, metric and time, so the phone may resend
-overlapping windows. Metrics Chomp doesn't keep are counted and ignored.
+day's total. Readings are de-duplicated by person, metric, bucket size (a day or part of
+one) and time, so the phone may resend overlapping windows. Metrics Chomp doesn't keep are
+counted and ignored.
 """
 
 from __future__ import annotations
@@ -147,8 +148,8 @@ class PayloadError(ValueError):
 @dataclass
 class Parsed:
     weights: dict[str, float] = field(default_factory=dict)  # UTC measured_at -> kg
-    # (metric, UTC start of its bucket) -> amount in the stored unit
-    activity: dict[tuple[str, str], float] = field(default_factory=dict)
+    # (metric, "day" or "part", UTC start of its bucket) -> amount in the stored unit
+    activity: dict[tuple[str, str, str], float] = field(default_factory=dict)
     rejected: int = 0
     problems: list[str] = field(default_factory=list)
     ignored: dict[str, int] = field(default_factory=dict)  # metric name -> readings
@@ -201,17 +202,31 @@ def _weight(parsed: Parsed, item: Any, unit: Any, tz: str) -> None:
         parsed.reject(f"weight: {e}")
 
 
-def _activity(parsed: Parsed, metric: str, item: Any, unit: Any, tz: str) -> None:
-    try:
-        if not isinstance(item, dict):
-            raise ValueError(f"not a reading: {item!r}")
-        unit = item.get("unit", item.get("units", unit))
-        if unit is not None and not isinstance(unit, str):
-            raise ValueError(f"unknown unit {unit!r}")
-        qty = logic.to_activity(metric, _number(item.get("qty", item.get("value"))), unit)
-        parsed.activity[(metric, parse_date(item.get("date"), tz, day_ok=True))] = qty
-    except ValueError as e:
-        parsed.reject(f"{metric}: {e}")
+def _activity(parsed: Parsed, metric: str, items: list, unit: Any, tz: str) -> None:
+    """One metric's readings. A bare date is a whole day; timed readings are whole days when
+    every one of them starts at local midnight (Health Auto Export grouped by day), else
+    parts of days (grouped by hour)."""
+    timed: list[tuple[str, float]] = []
+    for item in items:
+        try:
+            if not isinstance(item, dict):
+                raise ValueError(f"not a reading: {item!r}")
+            item_unit = item.get("unit", item.get("units", unit))
+            if item_unit is not None and not isinstance(item_unit, str):
+                raise ValueError(f"unknown unit {item_unit!r}")
+            qty = logic.to_activity(metric, _number(item.get("qty", item.get("value"))), item_unit)
+            date_value = item.get("date")
+            start = parse_date(date_value, tz, day_ok=True)
+        except ValueError as e:
+            parsed.reject(f"{metric}: {e}")
+            continue
+        if isinstance(date_value, str) and DAY_RE.fullmatch(date_value.strip()):
+            parsed.activity[(metric, "day", start)] = qty
+        else:
+            timed.append((start, qty))
+    period = "day" if all(logic.is_local_midnight(t, tz) for t, _ in timed) else "part"
+    for start, qty in timed:
+        parsed.activity[(metric, period, start)] = qty
 
 
 def _blank(value: Any) -> bool:
@@ -244,8 +259,7 @@ def parse(payload: Any, tz: str) -> Parsed:
                 for item in readings:
                     _weight(parsed, item, metric.get("units"), tz)
             elif key in ACTIVITY_METRICS:
-                for item in readings:
-                    _activity(parsed, ACTIVITY_METRICS[key], item, metric.get("units"), tz)
+                _activity(parsed, ACTIVITY_METRICS[key], readings, metric.get("units"), tz)
             else:
                 parsed.ignored[name or "?"] = parsed.ignored.get(name or "?", 0) + len(readings)
         for other in ("workouts", "stateOfMind", "ecg", "symptoms"):
@@ -260,8 +274,7 @@ def parse(payload: Any, tz: str) -> Parsed:
                     for item in _items(value):
                         _weight(parsed, item, None, tz)
                 elif key in ACTIVITY_METRICS:
-                    for item in _items(value):
-                        _activity(parsed, ACTIVITY_METRICS[key], item, None, tz)
+                    _activity(parsed, ACTIVITY_METRICS[key], _items(value), None, tz)
                 else:
                     continue
             elif key in FLAT_ACTIVITY or key in FLAT_WEIGHT:
@@ -275,7 +288,7 @@ def parse(payload: Any, tz: str) -> Parsed:
                 else:
                     metric, unit = FLAT_ACTIVITY[key]
                     item = {"date": payload.get("date"), "value": value}
-                    _activity(parsed, metric, item, unit, tz)
+                    _activity(parsed, metric, [item], unit, tz)
             else:
                 continue
             found = True
@@ -323,7 +336,7 @@ def add_routes(server: MCPServer, settings: Settings) -> None:
         with closing(db.connect(settings.db_path, user_id)) as conn:
             weights = store.add_weights(conn, parsed.weights.items(), "health")
             activity = store.add_activity(
-                conn, ((m, start, qty) for (m, start), qty in parsed.activity.items())
+                conn, ((*key, qty) for key, qty in parsed.activity.items())
             )
         log.info(
             "ingest for user %d: weights %d added, %d updated, %d unchanged;"

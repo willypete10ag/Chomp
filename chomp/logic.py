@@ -663,13 +663,28 @@ def to_activity(metric: str, value: float, unit: str | None) -> float:
     return qty
 
 
+def is_local_midnight(utc: str, tz: str) -> bool:
+    return datetime.fromisoformat(local_iso(utc, tz)).time() == time()
+
+
 def activity_by_day(rows: Iterable[Mapping], tz: str) -> dict[date, dict[str, float]]:
-    """Each local day's total per metric from (metric, start_at, qty) rows, in day order."""
-    out: dict[date, dict[str, float]] = {}
+    """Each local day's total per metric from (metric, period, start_at, qty, updated_at)
+    rows, in day order. A day's "part" buckets (hours) add up; a "day" reading is the whole
+    day. When a day has both for a metric (the phone switched from one to the other), the
+    kind sent most recently counts, a whole day winning a tie."""
+    sums: dict[tuple[date, str, str], list] = {}  # (day, metric, period) -> [total, newest]
     for r in rows:
-        day = out.setdefault(local_date(r["start_at"], tz), {})
-        day[r["metric"]] = day.get(r["metric"], 0.0) + r["qty"]
-    return dict(sorted(out.items()))
+        key = (local_date(r["start_at"], tz), r["metric"], r["period"])
+        total = sums.setdefault(key, [0.0, ""])
+        total[0] += r["qty"]
+        total[1] = max(total[1], r["updated_at"])
+    out: dict[date, dict[str, float]] = {}
+    for (day, metric, period), (qty, newest) in sorted(sums.items()):
+        other = sums.get((day, metric, "part" if period == "day" else "day"))
+        if other is not None and (other[1] > newest or (other[1] == newest and period == "part")):
+            continue
+        out.setdefault(day, {})[metric] = qty
+    return out
 
 
 def activity_average(days: Mapping[date, Mapping[str, float]]) -> dict[str, float]:

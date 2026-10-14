@@ -193,7 +193,7 @@ def to_json(
             {**a, "start_at": logic.local_iso(a["start_at"], tz)}
             for a in _dicts(
                 conn,
-                "SELECT metric, start_at, qty FROM activity WHERE user_id = ?"
+                "SELECT metric, period, start_at, qty FROM activity WHERE user_id = ?"
                 " AND start_at >= ? AND start_at < ? ORDER BY start_at, metric",
                 (user_id, lo, hi),
             )
