@@ -380,10 +380,12 @@ def search_foods(
     sort: str | None = None,
     desc: bool = True,
     per_serving: bool = False,
+    typing: bool = False,
 ) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
     verified first, then by relevance; a `sort` (FOOD_SORTS, see food_order, as the Foods
-    page asks) orders them by it instead."""
+    page asks) orders them by it instead. With `typing` (Foods' search as you type, #97)
+    the last word may be half typed: "chob" finds Chobani, after the whole-word matches."""
     match = fts_query(query)
     if match is None:
         return []
@@ -398,13 +400,17 @@ def search_foods(
     )
     # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
     found: list[sqlite3.Row] = []
+    begun: list[sqlite3.Row] = []  # typing: the last word only begins a word ('chob')
     for row in rows:
-        if text.match_score(query, f"{row['name']} {row['brand'] or ''}") == 1:
+        name = f"{row['name']} {row['brand'] or ''}"
+        if text.match_score(query, name) == 1:
             found.append(row)
             if len(found) == limit:
                 break
+        elif typing and text.typed_so_far(query, name):
+            begun.append(row)
     rows.close()
-    return found
+    return (found + begun)[:limit]
 
 
 def list_used_foods(

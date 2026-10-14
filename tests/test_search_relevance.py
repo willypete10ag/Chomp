@@ -423,3 +423,22 @@ def test_foods_search_never_asks_upstream(app, upstream):
 def test_type_it_in_fills_in_the_name(app):
     page = app.get("/app/foods/new", params={"how": "type", "name": "Grandma's  chili"}).text
     assert 'name="name" value="Grandma&#x27;s chili"' in page
+
+
+def test_foods_search_as_you_type_finds_a_half_typed_word(app, conn):
+    for name, brand in (("Plain Greek Yogurt", "Chobani"), ("Eggs", None), ("Eggplant", None)):
+        store.save_label_food(
+            conn, name=name, brand=brand, gtin=None, per_100g=PER_100G, serving_g=100,
+            serving_desc=None,
+        )  # fmt: skip
+    typing = app.get("/app/foods", params={"q": "chob", "part": "1", "typing": "1"}).text
+    assert "Plain Greek Yogurt" in typing
+    plain = typing[typing.index("Plain Greek Yogurt") :]
+    assert "Search databases for “chob”" in plain
+    # a whole word still comes before a word it only begins
+    eggs = app.get("/app/foods", params={"q": "egg", "part": "1", "typing": "1"}).text
+    assert eggs.index(">Eggs<") < eggs.index(">Eggplant<")
+    # pressing Search (no typing) keeps whole words only
+    searched = app.get("/app/foods", params={"q": "egg", "part": "1"}).text
+    assert ">Eggs<" in searched and ">Eggplant<" not in searched
+    assert "Nothing in your foods" in app.get("/app/foods", params={"q": "chob"}).text

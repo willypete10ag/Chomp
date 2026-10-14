@@ -4616,7 +4616,9 @@ def add_routes(
         banner += food_toasts(request.query_params)
         with connect(request) as conn:
             if q:
-                rows = store.search_foods(conn, q, FOODS_LIMIT, sort, desc, per_serving)
+                rows = store.search_foods(
+                    conn, q, FOODS_LIMIT, sort, desc, per_serving, typing=bool(params.get("typing"))
+                )
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, sort, desc, per_serving)
             # Recipes (#82) have their own page; their food rows are only for logging

@@ -779,12 +779,13 @@
     var asked = 0;
     var pending = null;
     var current = box.value.trim();
-    function show(q) {
+    // `typing`: the last word may be half typed ("chob" finds Chobani)
+    function show(q, typing) {
       var mine = ++asked;
       if (pending) pending.abort();
       pending = window.AbortController ? new AbortController() : null;
       var url = live.action + (q ? "?" + new URLSearchParams({ q: q }).toString() : "");
-      fetch(url + (q ? "&" : "?") + "part=1", {
+      fetch(url + (q ? "&" : "?") + "part=1" + (typing && q ? "&typing=1" : ""), {
         credentials: "same-origin",
         signal: pending ? pending.signal : undefined,
       }).then(function (r) {
@@ -814,7 +815,7 @@
         var q = box.value.trim();
         if (q === current) return;
         current = q;
-        show(q);
+        show(q, true);
       }, 250);
     });
     live.addEventListener("submit", function (event) {
