@@ -7,7 +7,7 @@ person's health readings, and is refused everywhere else (as OAuth tokens are re
 
 Two payload shapes are accepted:
 
-    Health Auto Export:  {"data": {"metrics": [{"name": "weight_body_mass", "units": "lb",
+    Health Auto Export:  {"data": {"metrics": [{"name": "weight_&_body_mass", "units": "lb",
                            "data": [{"date": "2026-10-13 07:02:11 -0400", "qty": 182.4}]}]}}
     Simple (Shortcuts):  {"weight": [{"date": "2026-10-13T07:02:11-04:00", "value": 182.4,
                            "unit": "lb"}]}
@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import secrets
 import sqlite3
 from contextlib import closing
@@ -41,6 +42,7 @@ PATH = "/ingest/health"
 TOKEN_PREFIX = "chomp_ingest_"
 MAX_BODY = 10 * 1024 * 1024  # a long history backfill is still well under this
 MAX_PROBLEMS = 5
+# Health Auto Export calls weight "weight_&_body_mass"; names are compared without punctuation
 WEIGHT_METRICS = {"weight_body_mass", "weight", "body_mass"}
 HAE_DATE = "%Y-%m-%d %H:%M:%S %z"
 
@@ -130,6 +132,12 @@ def parse_date(value: Any, tz: str) -> str:
         return logic.parse_time(value, tz, field="date")
 
 
+def metric_key(name: str) -> str:
+    """A metric name compared loosely: "weight_&_body_mass" and "Weight Body Mass" are both
+    weight_body_mass."""
+    return "_".join(re.findall(r"[a-z0-9]+", name.lower()))
+
+
 def _number(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         raise ValueError(f"not a number: {value!r}")
@@ -168,9 +176,9 @@ def parse(payload: Any, tz: str) -> Parsed:
             if not isinstance(metric, dict):
                 parsed.reject("metric: not an object")
                 continue
-            name = str(metric.get("name", "")).strip().lower()
+            name = str(metric.get("name", "")).strip()
             readings = _items(metric.get("data"))
-            if name in WEIGHT_METRICS:
+            if metric_key(name) in WEIGHT_METRICS:
                 for item in readings:
                     _weight(parsed, item, metric.get("units"), tz)
             else:

@@ -20,7 +20,7 @@ def add_her(conn) -> int:
     return users.add_user(conn, "Sam", HER_PASSWORD, "")
 
 
-def hae(*readings, units="lb", name="weight_body_mass", extra=None):
+def hae(*readings, units="lb", name="weight_&_body_mass", extra=None):
     """A Health Auto Export payload."""
     metrics = [{"name": name, "units": units, "data": [{"date": d, "qty": q} for d, q in readings]}]
     return {"data": {"metrics": metrics + (extra or []), "workouts": []}}
@@ -82,6 +82,13 @@ def test_parses_health_auto_export():
         "2026-10-14T10:58:00Z": pytest.approx(82.509, abs=1e-3),
     }
     assert parsed.ignored == {"step_count": 3} and parsed.rejected == 0
+
+
+def test_weight_metric_names_match_loosely():
+    for name in ("weight_&_body_mass", "weight_body_mass", "Weight & Body Mass", "body_mass"):
+        parsed = health.parse(hae(("2026-10-13 07:00:00 -0400", 180), name=name), TZ)
+        assert list(parsed.weights) == ["2026-10-13T11:00:00Z"], name
+    assert health.parse(hae(("2026-10-13 07:00:00 -0400", 22), name="body_mass_index"), TZ).ignored
 
 
 def test_parses_simple_shape_with_local_and_offset_times():

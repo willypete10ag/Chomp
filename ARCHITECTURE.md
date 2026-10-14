@@ -203,7 +203,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   page does.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
   iPhone posts readings to `POST /ingest/health`, either Health Auto Export's REST automation
-  JSON (`data.metrics[]`, weight as `weight_body_mass` in lb or kg, dates like
+  JSON (`data.metrics[]`, weight as `weight_&_body_mass` in lb or kg (names compared without punctuation), dates like
   `2026-10-13 07:02:11 -0400`) or a simple `{"weight": [{"date", "value", "unit"}]}` an iOS
   Shortcut can build (ISO 8601; no offset = `TZ`). Bad readings are skipped and reported;
   metrics Chomp doesn't keep yet are counted under `ignored`. The reply gives added, updated
