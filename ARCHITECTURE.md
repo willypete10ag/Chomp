@@ -159,6 +159,7 @@ local-only mode everything is the owner's.
 | `save_portion` / `forget_portion` | Remember (or forget) what one of the user's portions of a food weighs ("my handful of Cheez-Its = 30 g") | `food_id`, `name`, `grams`, `count?`, `estimated?` / `food_id`, `name` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
 | `save_recipe` / `get_recipe` / `delete_recipe` | The user's homemade recipes (#82): ingredients from foods with grams, steps, servings it makes; returns nutrition per serving and the recipe's `food_id` for `log_entries` | `name`, `servings`, `ingredients`, `steps?` / `name?` (omit to list) / `recipe_id` |
+| `log_weight` / `get_weight` / `delete_weight` | Body weight (#94): record a weigh-in the user mentions; read weigh-ins over a range (default the last 30 days) with each day's last, the change, the average and the latest; delete a wrong one. Values in kg and lb | `weight`, `unit`, `measured_at?` / `start?`, `end?` / `weight_id` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
 
@@ -189,6 +190,18 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   any food, by servings. The row follows the recipe and its ingredients (re-summed when an
   ingredient is corrected); it can't be edited, renamed or deleted as a food, only through
   the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
+- Body weight (#94, migration 0013): each user's `weights` (UTC `measured_at`, `kg`, `source`:
+  `health` from the phone, `chat` from `log_weight`, `app` reserved for the dashboard). Stored in
+  kg; `logic.to_kg` / `logic.weight_out` convert (lb to 0.1, kg to 0.01). One weigh-in per
+  person per second: saving another at the same time replaces it, which de-duplicates the
+  phone's repeated sends.
+- Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
+  iPhone posts readings to `POST /ingest/health`, either Health Auto Export's REST automation
+  JSON (`data.metrics[]`, weight as `weight_body_mass` in lb or kg, dates like
+  `2026-10-13 07:02:11 -0400`) or a simple `{"weight": [{"date", "value", "unit"}]}` an iOS
+  Shortcut can build (ISO 8601; no offset = `TZ`). Bad readings are skipped and reported;
+  metrics Chomp doesn't keep yet are counted under `ignored`. The reply gives added, updated
+  and unchanged counts.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
@@ -209,16 +222,23 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 
 ## Security
-- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
+- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, `/ingest/health` (phones), and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
 - Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. Food photos are served only to signed-in people. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
+- Health ingest tokens (decided on #101): one per person, made with `chomp user ingest-token NAME`
+  (shown once, replaces the old one; `--revoke` removes it), stored as SHA-256 hashes in
+  `ingest_tokens` (migration 0013). Sent as `Authorization: Bearer` or `X-Chomp-Token`, never
+  in the URL. An ingest token only adds its person's health readings at `/ingest/health`; it is
+  refused on `/mcp` and everywhere else, and connector tokens are refused at `/ingest`. Bodies
+  over 10 MB get 413. The ingest route needs a token even in local-only mode. Cloudflare Access
+  must not cover it (the phone can't pass Access).
 - With `PUBLIC_URL` unset Chomp runs local-only: no auth, and it refuses any non-loopback `HOST`. With it set, missing or short secrets stop startup. The public host is added to the SDK's DNS-rebinding allowlist (it answers 421 otherwise).
 - Secrets (`FDC_API_KEY`, `AUTH_PASSWORD`, `OAUTH_CLIENT_SECRET`, `BEARER_TOKEN`, `TUNNEL_TOKEN`) in `.env`, never committed or logged.
 - The container runs as uid 10001 with a read-only root filesystem and no capabilities; the database lives in the `chomp-data` volume.
 
 ## Backup and export
 - `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one. Food photos are copied to `BACKUP_HOST_DIR/photos` (new and changed files only; none deleted there), and a restore keeps photos only for foods the restored database has (a food added later could otherwise hand its id, and photo, to a new food), filling gaps from the backup and moving the old folder aside.
-- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates and targets. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
+- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates, recipes, targets and weigh-ins. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.

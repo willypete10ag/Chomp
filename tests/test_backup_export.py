@@ -132,6 +132,16 @@ def test_json_holds_everything(conn, logged):
     assert data["meal_templates"][0]["name"] == "usual breakfast"
     assert len(data["meal_templates"][0]["items"]) == 2
     assert data["targets"]["protein_g"] == 180
+    assert data["weights"] == []
+
+
+def test_json_includes_weigh_ins_in_range(conn, logged):
+    store.add_weight(conn, "2026-10-05T11:00:00Z", 82.5, "health")
+    store.add_weight(conn, "2026-10-07T11:00:00Z", 82.0, "chat")
+    data = export.to_json(conn, "America/New_York", end=date(2026, 10, 6))
+    assert data["weights"] == [
+        {"measured_at": "2026-10-05T07:00:00-04:00", "kg": 82.5, "source": "health"}
+    ]
 
 
 # --- the chomp command ----------------------------------------------------------------------

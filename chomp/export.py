@@ -91,7 +91,7 @@ def _dicts(conn: sqlite3.Connection, sql: str, params=()) -> list[dict]:
 def to_json(
     conn: sqlite3.Connection, tz: str, start: date | None = None, end: date | None = None
 ) -> dict:
-    """Everything in the log as plain data. A date range limits meals only; foods,
+    """Everything in the log as plain data. A date range limits meals and weigh-ins; foods,
     portions, templates, recipes and targets are always included in full."""
     lo, hi = _bounds(start, end, tz)
     meals: dict[int, dict] = {}
@@ -174,6 +174,19 @@ def to_json(
         "meal_templates": templates,
         "recipes": recipes,
         "targets": dict(targets) if targets else None,
+        "weights": [
+            {
+                "measured_at": logic.local_iso(w["measured_at"], tz),
+                "kg": w["kg"],
+                "source": w["source"],
+            }
+            for w in _dicts(
+                conn,
+                "SELECT measured_at, kg, source FROM weights WHERE user_id = ?"
+                " AND measured_at >= ? AND measured_at < ? ORDER BY measured_at",
+                (user_id, lo, hi),
+            )
+        ],
     }
 
 

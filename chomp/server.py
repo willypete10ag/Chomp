@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from datetime import timedelta
 from typing import Annotated, Literal, TypedDict
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -22,6 +23,7 @@ from starlette.responses import JSONResponse
 from chomp import __version__, auth, db, logic, serving_fill, store, text, users, web
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
+from chomp.health import add_routes as add_health_routes
 from chomp.photos import Photos
 from chomp.sources import SourceError
 from chomp.sources import gtin as gtins
@@ -74,6 +76,7 @@ LOOKUP = ToolAnnotations(  # only caches upstream foods
 ADDS = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 CHANGES = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
 TOTALS_MAX_DAYS = 366
+WEIGHT_MAX_DAYS = 3 * 366
 
 
 # --- Output models --------------------------------------------------------------------------
@@ -398,6 +401,47 @@ class LogItem(BaseModel):
     )
 
 
+class Weight(BaseModel):
+    """One weigh-in, in both units."""
+
+    weight_id: int
+    measured_at: str = Field(description="Local time with offset")
+    kg: float
+    lb: float
+    source: Literal["health", "chat", "app"] = Field(
+        description="health = posted from Apple Health on the user's phone"
+    )
+
+
+class WeightChange(BaseModel):
+    kg: float
+    lb: float
+
+
+class WeightResult(BaseModel):
+    weight: Weight
+    previous: Weight | None = Field(description="The weigh-in before this one, if any")
+    change: WeightChange | None = Field(description="Change since previous; negative = lost")
+
+
+class DayWeight(BaseModel):
+    date: str
+    kg: float = Field(description="The day's last weigh-in")
+    lb: float
+
+
+class WeightHistory(BaseModel):
+    start: str
+    end: str
+    readings: list[Weight] = Field(description="Every weigh-in in the range, oldest first")
+    per_day: list[DayWeight] = Field(description="Each weighed day's last weigh-in")
+    change: WeightChange | None = Field(
+        description="Last weigh-in in the range minus the first; negative = lost"
+    )
+    average: WeightChange | None = Field(description="Average of per_day")
+    latest: Weight | None = Field(description="The most recent weigh-in, even if before start")
+
+
 # --- Helpers --------------------------------------------------------------------------------
 
 
@@ -408,6 +452,19 @@ def tool_errors() -> Iterator[None]:
         yield
     except (store.NotFound, ValueError, SourceError) as e:
         raise ToolError(str(e)) from e
+
+
+def _weight(row, tz: str) -> Weight:
+    return Weight(
+        weight_id=row["id"],
+        measured_at=logic.local_iso(row["measured_at"], tz),
+        source=row["source"],
+        **logic.weight_out(row["kg"]),
+    )
+
+
+def _change(kg: float) -> WeightChange:
+    return WeightChange(**logic.weight_out(kg))
 
 
 def _amounts(conn, items: list[LogItem]) -> list[tuple[int, float, bool]]:
@@ -497,6 +554,7 @@ def build_server(
     off = off or OFFClient(settings.off_user_agent)
     photos = photos or Photos(settings.photos_path, off)
     web.add_routes(server, settings, provider, fdc, off, photos)
+    add_health_routes(server, settings)
     expected_version = db.latest_version(settings.migrations_dir)
     tz = settings.tz
 
@@ -1324,6 +1382,83 @@ def build_server(
             out = recipe_out(conn, recipe)
             store.delete_recipe(conn, recipe_id)
             return RecipeResult(recipe=out, replaced=False)
+
+    @server.tool(annotations=ADDS)
+    def log_weight(
+        weight: Annotated[float, Field(gt=0, description="Body weight in the unit given")],
+        unit: Annotated[Literal["lb", "kg"], Field(description="Unit the user gave")],
+        measured_at: Annotated[
+            str,
+            Field(
+                description="When they weighed in: 'now', or local ISO 8601 like "
+                "2026-10-05T07:15 (ask if they haven't said)"
+            ),
+        ] = "now",
+    ) -> WeightResult:
+        """Record a body weigh-in the user tells you about ("I weighed 182.4 this morning").
+
+        Scale readings usually arrive on their own from Apple Health, so check get_weight
+        first if they might already be there. A weigh-in at the same time replaces the old
+        one. Returns the weigh-in in kg and lb and the change since the previous one.
+        """
+        with tool_errors(), connect() as conn:
+            when = logic.parse_time(measured_at, tz, field="measured_at")
+            row = store.add_weight(conn, when, logic.to_kg(weight, unit), "chat")
+            prev = store.latest_weight(conn, before=when)
+            return WeightResult(
+                weight=_weight(row, tz),
+                previous=_weight(prev, tz) if prev else None,
+                change=_change(row["kg"] - prev["kg"]) if prev else None,
+            )
+
+    @server.tool(annotations=READ_ONLY)
+    def get_weight(
+        start: Annotated[
+            str | None, Field(description="First local date, YYYY-MM-DD. Omit for 30 days ago.")
+        ] = None,
+        end: Annotated[
+            str | None, Field(description="Last local date, inclusive. Omit for today.")
+        ] = None,
+    ) -> WeightHistory:
+        """The user's body weight over a date range: every weigh-in, each day's last one,
+        the change and average over the range, and their latest weigh-in.
+
+        Use for "what do I weigh?", "how's my weight trending?", or next to get_totals to
+        compare intake with weight. Weights come from their scale through Apple Health or
+        from log_weight. Values are in kg and lb; answer in the unit the user uses.
+        """
+        with tool_errors(), connect() as conn:
+            last = logic.parse_local_date(end, tz)
+            first = logic.parse_local_date(start, tz) if start else last - timedelta(days=29)
+            days = logic.date_range(first, last)
+            if len(days) > WEIGHT_MAX_DAYS:
+                raise ValueError(f"range is {len(days)} days; the maximum is {WEIGHT_MAX_DAYS}")
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
+            rows = store.weights_between(conn, lo, hi)
+            by_day = {logic.local_date(r["measured_at"], tz): r["kg"] for r in rows}
+            latest = store.latest_weight(conn)
+            return WeightHistory(
+                start=first.isoformat(),
+                end=last.isoformat(),
+                readings=[_weight(r, tz) for r in rows],
+                per_day=[
+                    DayWeight(date=d.isoformat(), **logic.weight_out(kg))
+                    for d, kg in by_day.items()
+                ],
+                change=_change(rows[-1]["kg"] - rows[0]["kg"]) if rows else None,
+                average=_change(sum(by_day.values()) / len(by_day)) if by_day else None,
+                latest=_weight(latest, tz) if latest else None,
+            )
+
+    @server.tool(annotations=CHANGES)
+    def delete_weight(
+        weight_id: Annotated[int, Field(description="weight_id from get_weight")],
+    ) -> Weight:
+        """Delete one of the user's weigh-ins, only when they ask (a wrong reading, someone
+        else stepped on the scale). Returns the deleted weigh-in."""
+        with tool_errors(), connect() as conn:
+            return _weight(store.delete_weight(conn, weight_id), tz)
 
     @server.tool(annotations=READ_ONLY)
     def get_totals(

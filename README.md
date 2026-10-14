@@ -210,6 +210,30 @@ dashboard is the same address; their password opens their log. To change someone
 If they use ChatGPT, their connector gets its own callback URL, which must be added to
 `CONNECTOR_CALLBACKS` in `chomp/auth.py` first (see "Add the ChatGPT connector").
 
+### 9. Send weight from your iPhone (Apple Health)
+
+A smart scale that writes to Apple Health (VeSync does) can reach Chomp on its own: an iPhone
+app posts new readings to `https://chomp.<your-domain>/ingest/health`. Make each person's
+token on the server; it is shown once, and running it again replaces the old one:
+
+```bash
+docker compose exec chomp chomp user ingest-token Will
+docker compose exec chomp chomp user ingest-token Will --revoke   # stop accepting it
+```
+
+The token can only add that person's health data; it opens nothing else. Then on that
+person's iPhone, pick one:
+
+- **Health Auto Export**: add a REST API automation with the URL above, JSON format, the
+  Weight & Body Mass metric, and a header `Authorization` = `Bearer <token>`.
+- **iOS Shortcut**: find the latest Weight samples, build
+  `{"weight": [{"date": "<ISO 8601 date>", "value": <number>, "unit": "lb"}]}`, and send it
+  with Get Contents of URL (POST, same header), from a daily personal automation.
+
+Sending the same readings again is harmless: Chomp keeps one weigh-in per time. The reply
+says how many were added, updated or unchanged. Don't put Cloudflare Access in front of
+`/ingest` (the phone can't sign in to it). Ask Claude "what do I weigh?" to check.
+
 ### Updating
 
 ```bash

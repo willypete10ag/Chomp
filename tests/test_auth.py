@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from starlette.testclient import TestClient
 
-from chomp import auth, db
+from chomp import auth, db, health, users
 from chomp.server import build_server
 
 PUBLIC = "https://chomp.example.com"
@@ -221,6 +221,18 @@ def test_revoke_ends_the_grant(http):
 
 def test_static_bearer_is_accepted(http):
     assert mcp(http, BEARER).status_code == 200
+
+
+def test_ingest_token_and_connector_tokens_stay_apart(public_settings, http):
+    """#101: a phone's ingest token only reaches /ingest/health, and connector tokens never do."""
+    with db.connect(public_settings.db_path) as conn:
+        token = health.new_token(conn, users.OWNER_ID)
+    assert mcp(http, token).status_code == 401
+    reading = {"weight": {"date": "2026-10-13T07:00", "value": 80, "unit": "kg"}}
+    r = http.post(health.PATH, json=reading, headers={"Authorization": f"Bearer {BEARER}"})
+    assert r.status_code == 401
+    r = http.post(health.PATH, json=reading, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200 and r.json()["weights"]["added"] == 1
 
 
 def test_bad_verifier_and_wrong_secret_are_refused(http):

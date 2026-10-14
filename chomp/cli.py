@@ -8,6 +8,9 @@
     chomp user add NAME        add a person with their own log and password (asks for it)
     chomp user password NAME   change someone's password (signs them out everywhere)
     chomp user rename OLD NEW  change someone's display name
+    chomp user ingest-token NAME [--revoke]
+                               make (or replace, or remove) the token their phone uses to
+                               post Apple Health data to /ingest/health
 
 Settings come from the environment (see .env.example).
 """
@@ -22,7 +25,7 @@ from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
-from chomp import auth, backup, db, export, users
+from chomp import auth, backup, db, export, health, users
 from chomp.config import Settings
 
 
@@ -76,6 +79,11 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     rn = us.add_parser("rename", help="change a user's display name")
     rn.add_argument("name")
     rn.add_argument("new_name")
+    it = us.add_parser(
+        "ingest-token", help="make the token a phone posts health data with (replaces the old)"
+    )
+    it.add_argument("name")
+    it.add_argument("--revoke", action="store_true", help="remove the token instead")
     return p
 
 
@@ -108,6 +116,16 @@ def user_command(args, settings: Settings) -> None:
             user = users.get_by_name(c, args.name)
             users.rename(c, user["id"], args.new_name)
             print(f"renamed {user['name']} to {' '.join(args.new_name.split())}")
+        elif args.action == "ingest-token":
+            user = users.get_by_name(c, args.name)
+            if args.revoke:
+                gone = health.revoke_token(c, user["id"])
+                print(f"removed {user['name']}'s ingest token" if gone else "there was none")
+            else:
+                token = health.new_token(c, user["id"])
+                print(f"{user['name']}'s ingest token (shown once; any older one stops working):")
+                print(token)
+                print(f"Post to {health.PATH} with the header: Authorization: Bearer <token>")
 
 
 def main(argv: list[str] | None = None) -> int:
