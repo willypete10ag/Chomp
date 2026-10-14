@@ -61,6 +61,9 @@ PREFIX = "/app"
 COOKIE = "chomp_session"
 SESSION_TTL_S = 30 * 86400
 HISTORY_RANGES = (7, 30, 90)
+WEIGHT_RANGES = ((30, "30 days"), (90, "90 days"), (365, "1 year"))  # Weight page (#94)
+WEIGHT = f"{PREFIX}/weight"
+WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here"}
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
@@ -392,6 +395,85 @@ def bar_chart(
     return "".join(parts)
 
 
+def weight_chart(points: list[tuple[date, float]], first: date, last: date) -> str:
+    """Inline SVG line of each weighed day's weight in lb (#94) from first to last, with the
+    lowest and highest marked on the left. Days with no weigh-in are skipped, not zeroed."""
+    w, h, top, bottom, left = 320, 150, 12, 18, 34
+    plot_w, plot_h = w - left - 6, h - top - bottom
+    values = [v for _, v in points]
+    lo, hi = min(values), max(values)
+    pad = max((hi - lo) * 0.15, 1.0)
+    lo, hi = lo - pad, hi + pad
+    span = max((last - first).days, 1)
+
+    def x(d: date) -> float:
+        return left + plot_w * (d - first).days / span
+
+    def y(v: float) -> float:
+        return top + plot_h - plot_h * (v - lo) / (hi - lo)
+
+    title = f"Weight from {first.strftime('%b')} {first.day} to {last.strftime('%b')} {last.day}"
+    parts = [
+        f'<svg class="chart weight" viewBox="0 0 {w} {h}" role="img" aria-label="{e(title)}">',
+        f'<line class="axis" x1="{left}" x2="{w}" y1="{top + plot_h}" y2="{top + plot_h}"/>',
+    ]
+    for v in (min(values), max(values)):
+        parts.append(
+            f'<text class="tick" x="{left - 4}" y="{y(v) + 3:.1f}" text-anchor="end">'
+            f"{v:,.1f}</text>"
+        )
+    if len(points) > 1:
+        line = " ".join(f"{x(d):.1f},{y(v):.1f}" for d, v in points)
+        parts.append(f'<polyline class="line" points="{line}"/>')
+    for d, v in points:
+        parts.append(
+            f'<circle class="dot" cx="{x(d):.1f}" cy="{y(v):.1f}" r="2.5">'
+            f"<title>{e(d.strftime('%a %b'))} {d.day}: {v:,.1f} lb</title></circle>"
+        )
+    for d, anchor in ((first, "start"), (last, "end")):
+        parts.append(
+            f'<text class="tick" x="{x(d):.1f}" y="{h - 4}" text-anchor="{anchor}">'
+            f"{d.month}/{d.day}</text>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def lb_text(kg: float) -> str:
+    """A weight in lb, always to 0.1 (a scale reading of 183.0 shows as 183.0)."""
+    return f"{logic.weight_out(kg)['lb']:,.1f}{NBSP}lb"
+
+
+def change_text(kg: float) -> str:
+    """A weight change in lb with its sign (HTML): "&minus;1.2 lb", "+0.4 lb", "no change"."""
+    lb = logic.weight_out(abs(kg))["lb"]
+    if lb == 0:
+        return "no change"
+    return f"{'&minus;' if kg < 0 else '+'}{num(lb, 1)}{NBSP}lb"
+
+
+def weight_item(row, tz: str) -> str:
+    """One weigh-in in the Weight page's list: time, where it came from, the weight. With the
+    script, swipe it left to delete it (after asking)."""
+    local = logic.local_iso(row["measured_at"], tz)
+    when = datetime.fromisoformat(local)
+    label = f"{when.strftime('%a %b')} {when.day}, {clock(local)}"
+    url = f"{WEIGHT}/{row['id']}"
+    delete = (
+        f'<form class="swipe-action js-only" method="post" action="{url}/delete"'
+        f' data-confirm="Delete the weigh-in from {e(label)}?">'
+        f'<button type="submit" aria-label="Delete the weigh-in from {e(label)}">Delete'
+        "</button></form>"
+    )
+    return (
+        f'<li id="weight-{row["id"]}" class="swipe">{delete}'
+        '<div class="swipe-body" data-swipe><div class="row">'
+        f'<span>{e(label)}<br><span class="small muted">'
+        f"{e(WEIGHT_SOURCES.get(row['source'], ''))}</span></span>"
+        f'<span class="kcal">{lb_text(row["kg"])}</span></div></div></li>'
+    )
+
+
 # --- Pages ----------------------------------------------------------------------------------
 
 HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -408,7 +490,12 @@ HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <script src="{p}/static/app.js?v={js_version}" defer></script>{scripts}
 <title>{title}</title></head><body{body_class}>"""
 
-NAV = (("today", "", "Today"), ("history", "/history", "History"), ("foods", "/foods", "Foods"))
+NAV = (
+    ("today", "", "Today"),
+    ("history", "/history", "History"),
+    ("foods", "/foods", "Foods"),
+    ("weight", "/weight", "Weight"),
+)
 
 
 def render(
@@ -1220,6 +1307,7 @@ PROBLEMS = {
     "portion": f"A portion needs a name and grams more than 0 and at most {MAX_GRAMS:,}.",
     "photo": "That file isn't a photo Chomp can read. Try a JPEG or PNG.",
     "photo_big": "That photo is too big. Try one under 20 MB.",
+    "weight": "Weight must be a number of pounds, like 182.4.",
 }
 PHOTO_TOASTS = {"saved": "Photo saved.", "removed": "Photo removed."}
 
@@ -4518,6 +4606,128 @@ def add_routes(
                 return go(SAVED)
         log.info("dashboard: deleted meal template %d", template["id"])
         return go(f"{SAVED}?{urlencode({'removed': template['name']})}")
+
+    # --- Weight (#94) ---
+
+    @server.custom_route(WEIGHT, methods=["GET", "POST"])
+    async def weight_view(request: Request) -> Response:
+        """Body weight in lb: the latest weigh-in and the change over the range, a line of
+        each weighed day, a form to add one, and every weigh-in (swipe left to delete)."""
+        if request.method == "POST":
+            if (no := refused(request, "Add weigh-ins")) is not None:
+                return no
+            form = await request.form()
+            back = str(form.get("days", "30"))
+            try:
+                when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
+            except ValueError as err:
+                return go(f"{WEIGHT}?{urlencode({'days': back, 'problem': str(err)})}")
+            try:
+                kg = logic.to_kg(float(str(form.get("lb", "")).strip()), "lb")
+            except ValueError:
+                return go(f"{WEIGHT}?{urlencode({'days': back, 'problem': 'weight'})}")
+            with connect(request) as conn:
+                row = store.add_weight(conn, when, kg, "app")
+            log.info("dashboard: added weigh-in %d", row["id"])
+            return go(f"{WEIGHT}?{urlencode({'days': back, 'added': row['id']})}")
+
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        span = int_param(params.get("days")) or 30
+        if span not in dict(WEIGHT_RANGES):
+            span = 30
+        last = today()
+        first = last - timedelta(days=span - 1)
+        lo, _ = logic.local_day_bounds(first, tz)
+        _, hi = logic.local_day_bounds(last, tz)
+        with connect(request) as conn:
+            rows = store.weights_between(conn, lo, hi)
+            latest = store.latest_weight(conn)
+        by_day = {logic.local_date(r["measured_at"], tz): r["kg"] for r in rows}
+
+        banner = ""
+        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
+            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        elif int_param(params.get("added")) is not None:
+            banner = toast("<span>Weigh-in saved.</span>", "status")
+        elif params.get("removed"):
+            banner = toast("<span>Weigh-in deleted.</span>", "status")
+        tabs = "".join(
+            f'<a href="{WEIGHT}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
+            for n, label in WEIGHT_RANGES
+        )
+        parts = [f'<h1>Weight</h1><nav class="segment">{tabs}</nav>', banner]
+
+        if latest is not None:
+            local = logic.local_iso(latest["measured_at"], tz)
+            when = datetime.fromisoformat(local)
+            change = ""
+            if rows:
+                change = (
+                    f'<p class="small">{change_text(rows[-1]["kg"] - rows[0]["kg"])}'
+                    f' <span class="muted">over {dict(WEIGHT_RANGES)[span]}</span></p>'
+                )
+            parts.append(
+                '<section class="card summary"><div class="big weight">'
+                f"{lb_text(latest['kg'])}</div>"
+                f'<p class="muted small">Latest, {e(when.strftime("%a %b"))} {when.day},'
+                f" {clock(local)}</p>{change}</section>"
+            )
+        if by_day:
+            points = [(d, logic.weight_out(kg)["lb"]) for d, kg in by_day.items()]
+            parts.append(f'<section class="card">{weight_chart(points, first, last)}</section>')
+
+        now = datetime.now(ZoneInfo(tz))
+        parts.append(
+            f'<form class="card stack" method="post" action="{WEIGHT}">'
+            "<h2>Add a weigh-in</h2>"
+            f'<input type="hidden" name="days" value="{span}">'
+            '<label>Weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
+            ' required placeholder="182.4"></label>'
+            f'<div class="pair"><label>Time<input type="time" name="time"'
+            f' value="{now.strftime("%H:%M")}" required></label>'
+            f'<label>Date<input type="date" name="date" value="{now.date().isoformat()}"'
+            f' max="{now.date().isoformat()}" required></label></div>'
+            '<button type="submit">Save</button></form>'
+        )
+
+        if rows:
+            hint = '<p class="small muted js-only hint">Swipe a weigh-in left to delete it.</p>'
+            items = "".join(weight_item(r, tz) for r in reversed(rows))
+            parts.append(
+                f'<section class="card"><h2>Weigh-ins</h2>{hint}<ul class="entries">{items}'
+                "</ul></section>"
+            )
+        elif latest is None:
+            parts.append(
+                '<section class="card empty"><p>No weigh-ins yet.</p><p class="muted small">'
+                "Your scale's readings arrive from Apple Health once your phone is set up, or"
+                " tell Claude “I weighed 182.4 this morning”.</p></section>"
+            )
+        else:
+            parts.append(
+                '<section class="card empty"><p>No weigh-ins in this period.</p></section>'
+            )
+        return render(
+            "Weight",
+            "".join(parts),
+            "weight",
+            signed_in=provider is not None,
+            user=account(request),
+        )
+
+    @server.custom_route(WEIGHT + "/{weight_id:int}/delete", methods=["POST"])
+    async def weight_delete(request: Request) -> Response:
+        if (no := refused(request, "Delete weigh-ins")) is not None:
+            return no
+        with connect(request) as conn:
+            try:
+                row = store.delete_weight(conn, request.path_params["weight_id"])
+            except store.NotFound:
+                return go(WEIGHT)
+        log.info("dashboard: deleted weigh-in %d", row["id"])
+        return go(f"{WEIGHT}?removed=1")
 
     @server.custom_route(f"{PREFIX}/history", methods=["GET"])
     async def history(request: Request) -> Response:

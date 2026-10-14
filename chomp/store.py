@@ -1320,3 +1320,94 @@ def _restore(conn: sqlite3.Connection, table: str, row_id: int, values: dict) ->
             f"INSERT INTO {table} (id, {', '.join(cols)}) VALUES (?{', ?' * len(cols)})",
             (row_id, *(values[c] for c in cols)),
         )
+
+
+# --- Body weight (#94) ----------------------------------------------------------------------
+
+WEIGHT_COLS = "id, measured_at, kg, source"
+
+
+@dataclass
+class WeightCounts:
+    added: int = 0
+    updated: int = 0
+    unchanged: int = 0
+
+
+def add_weights(
+    conn: sqlite3.Connection, readings: Iterable[tuple[str, float]], source: str
+) -> WeightCounts:
+    """Save (UTC measured_at, kg) weigh-ins for the connection's user. A reading at a time
+    already saved replaces it, so a phone resending the same readings changes nothing. The
+    phone ("health") never brings back a weigh-in the person deleted; chat or the app does."""
+    user_id = user_of(conn)
+    counts = WeightCounts()
+    with transaction(conn):
+        for measured_at, kg in readings:
+            row = conn.execute(
+                "SELECT id, kg, deleted FROM weights WHERE user_id = ? AND measured_at = ?",
+                (user_id, measured_at),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO weights (user_id, measured_at, kg, source) VALUES (?, ?, ?, ?)",
+                    (user_id, measured_at, kg, source),
+                )
+                counts.added += 1
+            elif row["deleted"] and source == "health":
+                counts.unchanged += 1
+            elif row["deleted"]:
+                conn.execute(
+                    "UPDATE weights SET kg = ?, source = ?, deleted = 0 WHERE id = ?",
+                    (kg, source, row["id"]),
+                )
+                counts.added += 1
+            elif abs(row["kg"] - kg) > 1e-6:
+                conn.execute(
+                    "UPDATE weights SET kg = ?, source = ? WHERE id = ?", (kg, source, row["id"])
+                )
+                counts.updated += 1
+            else:
+                counts.unchanged += 1
+    return counts
+
+
+def add_weight(conn: sqlite3.Connection, measured_at: str, kg: float, source: str) -> sqlite3.Row:
+    """Save one weigh-in (replacing one at the same time) and return its row."""
+    add_weights(conn, [(measured_at, kg)], source)
+    return conn.execute(
+        f"SELECT {WEIGHT_COLS} FROM weights WHERE user_id = ? AND measured_at = ?",
+        (user_of(conn), measured_at),
+    ).fetchone()
+
+
+def weights_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:
+    """The user's weigh-ins in UTC [start, end), oldest first."""
+    return conn.execute(
+        f"SELECT {WEIGHT_COLS} FROM weights WHERE user_id = ? AND NOT deleted"
+        " AND measured_at >= ? AND measured_at < ? ORDER BY measured_at",
+        (user_of(conn), start, end),
+    ).fetchall()
+
+
+def latest_weight(conn: sqlite3.Connection, before: str | None = None) -> sqlite3.Row | None:
+    """The user's most recent weigh-in, or the last one before a UTC time."""
+    return conn.execute(
+        f"SELECT {WEIGHT_COLS} FROM weights WHERE user_id = ? AND NOT deleted"
+        " AND measured_at < ? ORDER BY measured_at DESC LIMIT 1",
+        (user_of(conn), before or "9999"),
+    ).fetchone()
+
+
+def delete_weight(conn: sqlite3.Connection, weight_id: int) -> sqlite3.Row:
+    """Delete one of the user's weigh-ins and return it. The row stays, marked deleted, so
+    the phone resending it doesn't bring it back."""
+    with transaction(conn):
+        row = conn.execute(
+            f"SELECT {WEIGHT_COLS} FROM weights WHERE id = ? AND user_id = ? AND NOT deleted",
+            (weight_id, user_of(conn)),
+        ).fetchone()
+        if row is None:
+            raise NotFound(f"no weigh-in {weight_id}")
+        conn.execute("UPDATE weights SET deleted = 1 WHERE id = ?", (weight_id,))
+    return row

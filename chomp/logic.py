@@ -452,15 +452,21 @@ def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> s
             "eaten_at is required: ask the user what time they ate this, or pass 'now' if "
             "they are eating it now"
         )
+    return parse_time(value, tz, now, "eaten_at")
+
+
+def parse_time(value: str, tz: str, now: datetime | None = None, field: str = "time") -> str:
+    """A time to storage format: "now", ISO 8601 with an offset (or Z), or local ISO 8601 in
+    `tz`. A bare date is rejected so nothing lands at midnight by accident."""
     text = value.strip()
     if text.lower() == "now":
         return format_utc(now or datetime.now(UTC))
     if len(text) <= 10:
-        raise ValueError(f"eaten_at needs a time as well as a date, got {value!r}")
+        raise ValueError(f"{field} needs a time as well as a date, got {value!r}")
     try:
         dt = datetime.fromisoformat(text.replace("z", "Z"))
     except ValueError as e:
-        raise ValueError(f"eaten_at must be ISO 8601 like 2026-10-05T08:30, got {value!r}") from e
+        raise ValueError(f"{field} must be ISO 8601 like 2026-10-05T08:30, got {value!r}") from e
     if dt.tzinfo is None:
         zone = ZoneInfo(tz)
         local = dt.replace(tzinfo=zone)
@@ -468,7 +474,7 @@ def parse_eaten_at(value: str | None, tz: str, now: datetime | None = None) -> s
         # a round trip through UTC exposes that.
         if local.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != dt:
             raise ValueError(
-                f"eaten_at {value!r} does not exist in {tz} (clocks skip that hour); "
+                f"{field} {value!r} does not exist in {tz} (clocks skip that hour); "
                 "ask the user for the time again"
             )
         dt = local
@@ -569,3 +575,35 @@ def label_mismatch(
         if diff > MISMATCH_FLOOR[k] and diff > tolerance * max(abs(a), abs(b)):
             out.append(k)
     return out
+
+
+# --- Body weight (#94) ----------------------------------------------------------------------
+
+KG_PER_LB = 0.45359237
+WEIGHT_UNITS = {
+    "kg": 1.0,
+    "kgs": 1.0,
+    "lb": KG_PER_LB,
+    "lbs": KG_PER_LB,
+    "pound": KG_PER_LB,
+    "pounds": KG_PER_LB,
+}
+WEIGHT_MAX_KG = 700
+
+
+def to_kg(value: float, unit: str) -> float:
+    """A body weight in kg from kg or lb. Raises ValueError for other units or odd values."""
+    factor = WEIGHT_UNITS.get(unit.strip().lower())
+    if factor is None:
+        raise ValueError(f"weight unit must be lb or kg, got {unit!r}")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"weight must be a positive number, got {value!r}")
+    kg = value * factor
+    if kg >= WEIGHT_MAX_KG:
+        raise ValueError(f"{value} {unit} is not a body weight")
+    return kg
+
+
+def weight_out(kg: float) -> dict[str, float]:
+    """A weight in both units, rounded for display: kg to 0.01, lb to 0.1."""
+    return {"kg": round(kg, 2), "lb": round(kg / KG_PER_LB, 1)}
