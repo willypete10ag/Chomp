@@ -1,7 +1,7 @@
 [project]
 name = "chomp"
 version = "0.1.0"
-description = "Self-hosted MCP server that Claude uses as a meal-logging backend"
+description = "Self-hosted meal log: MCP server for Claude and ChatGPT plus a web dashboard"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

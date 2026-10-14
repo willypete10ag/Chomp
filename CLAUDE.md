@@ -1,6 +1,6 @@
 # CLAUDE.md — Chomp
 
-Self-hosted MCP server that Claude uses as a meal-logging backend. See ARCHITECTURE.md (design, tools, flows) and SCHEMA.sql (source of truth for the DB).
+Self-hosted MCP server (Claude and ChatGPT connectors) and `/app` web dashboard for meal logging. See ARCHITECTURE.md (design, tools, flows) and SCHEMA.sql (source of truth for the DB).
 
 ## Stack
 Python 3.12 · `mcp` SDK v2 (`MCPServer`, which v1 called FastMCP; streamable HTTP) · SQLite · httpx · pytest · Docker Compose · uv · ruff
@@ -28,11 +28,11 @@ chomp/
   serving_fill.py  # serving sizes for used USDA generic foods from household measures
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
-  web.py           # /app web dashboard (server-rendered, sign-in, entry edits)
+  web.py           # /app web dashboard (server-rendered: Today, Foods, saved meals, recipes, goals)
   static/          # dashboard CSS, JS, icons, vendored ZXing barcode reader
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses
-.github/workflows/ # CI: pytest on push
+.github/workflows/ # CI: ruff, pytest, Docker build and health check
 Dockerfile         # slim, non-root (uid 10001)
 docker-compose.yml # chomp + nightly backup + cloudflared
 .env.example       # FDC_API_KEY, PUBLIC_URL + auth secrets, TUNNEL_TOKEN, backups, DB_PATH, PHOTOS_DIR, TZ
@@ -48,9 +48,9 @@ README.md
 - Secrets only via env. Nothing sensitive in logs.
 
 ## Git and progress tracking
-- Repo: private GitHub repo `Chomp`. Issues and Milestones (M0–M4) are the source of truth for progress; the milestone breakdown is in ARCHITECTURE.md.
-- At the start of a session, run `gh issue list --milestone "<current>"` and confirm which issue we're working on.
-- Branch per issue: `m1/search-food`. Commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, with the issue number (`feat: add search_food (#4)`). Close issues via `Closes #N`.
+- Repo: private GitHub repo `Chomp`. Open issues are the source of truth for what's next (milestones M0–M4 are done; `later` marks parked ideas).
+- At the start of a session, list the open issues and confirm which one we're working on.
+- Branch per issue, and every change goes through a PR to `main` (never stacked on another PR's branch). Commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, with the issue number (`feat: add search_food (#4)`). Close issues via `Closes #N`.
 - Update ARCHITECTURE.md or SCHEMA.sql in the same commit as the change that makes them stale.
 - Changes to locked decisions (stack, source chain, hosting, auth) get a `decision` issue first.
 - Never commit `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `.venv/`. Check `git status` before committing.

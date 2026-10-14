@@ -1,8 +1,53 @@
 # Chomp
 
-Self-hosted MCP server that Claude uses as a meal-logging backend. You talk to Claude (voice, text, photos of barcodes and labels); Claude calls Chomp's tools to look up macros and write entries to a SQLite database on your homelab.
+Self-hosted meal log you talk to. Tell Claude (or ChatGPT) what you ate by voice, text, or a
+photo of a barcode or nutrition label; it calls Chomp's MCP tools to look up the food, log it
+and report your totals. A web dashboard on the same server shows your day against your goals
+and lets you log and edit without a chat. Everything lives in one SQLite database on your
+homelab, reached through a Cloudflare Tunnel.
 
-Design lives in [ARCHITECTURE.md](ARCHITECTURE.md) and [SCHEMA.sql](SCHEMA.sql). Progress lives in GitHub Issues and Milestones (M0 to M4).
+Chomp never estimates nutrition: every calorie and macro comes from the database, USDA
+FoodData Central, Open Food Facts, a label, or numbers you give. Only amounts ("a handful")
+can be estimated, and those are marked.
+
+## What it does
+
+**In chat** (custom connector, 20 tools):
+
+- Log meals with the time you ate them, correct grams or swap a food, move or delete a meal.
+- Find foods in your own list first, then USDA (including dishes as eaten) and Open Food
+  Facts. Barcodes go through your saved foods, USDA Branded, then Open Food Facts; a miss asks
+  for a label photo.
+- Save foods from a label, a restaurant's published nutrition, or your own numbers. Foods
+  from Open Food Facts or the web stay unconfirmed until you approve them.
+- Remember your portions ("my handful of Cheez-Its is 30 g"), saved meals ("log my usual
+  breakfast") and homemade recipes (logged by the serving).
+- Daily and range totals with averages, progress against calorie and macro goals, fiber,
+  sugar, sodium, label details (fat types, cholesterol, added sugars) and 17 vitamins and
+  minerals.
+
+**On the dashboard** (`/app`, works on a phone and installs to the home screen):
+
+- **Today:** calories left as the big number, macro bars, meals by time. Arrows, a week strip
+  or a month calendar (dots on logged days, stars on days within 10% of every goal) move
+  between days. Tap a number for that day's Breakdown: calories by macro and meal, top foods,
+  full nutrition facts.
+- **Log and edit:** Add food in servings or grams with your portions as chips; change, move
+  or delete entries; rename, retime, combine or delete meals. Every change has Undo.
+- **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
+- **History:** 7, 30 and 90-day averages and charts.
+- **Foods:** your foods with photos, sorted by most logged, recent, calories and more; each
+  food has a page with nutrition facts, portions, Log it, Confirm, Edit and Delete. Add a new
+  food by searching USDA and Open Food Facts, scanning its barcode with the camera, reading a
+  label photo (tesseract on the server, no AI), or typing it in.
+- **Saved meals and Recipes:** build, edit and log them from the Foods tab.
+
+**Running it:** several people, each with their own log, goals, portions, saved meals and
+recipes (the food list is shared); OAuth sign-in for the Claude and ChatGPT connectors;
+nightly backups with photos; CSV and JSON export.
+
+Design lives in [ARCHITECTURE.md](ARCHITECTURE.md) and [SCHEMA.sql](SCHEMA.sql). Work is
+tracked in GitHub Issues; every change lands through a pull request to `main`.
 
 ## Development
 
@@ -29,7 +74,7 @@ With the server running and `FDC_API_KEY` set, open Inspector, choose transport
 "Streamable HTTP", URL `http://127.0.0.1:8000/mcp`, then Connect and open the Tools tab:
 
 1. `search_food` with `{"query": "scrambled eggs"}` and again with `{"query": "egg whites"}`; note a `food_id` from each.
-2. `log_entries` with `{"items": [{"food_id": <eggs>, "grams": 200}, {"food_id": <whites>, "grams": 300}], "meal_label": "breakfast"}`.
+2. `log_entries` with `{"items": [{"food_id": <eggs>, "grams": 200}, {"food_id": <whites>, "grams": 300}], "eaten_at": "now"}`.
 3. `update_entry` with the eggs' `entry_id` and `{"grams": 220}`.
 4. `get_day` with no arguments: the meal, its corrected totals, and the day's totals.
 
@@ -132,36 +177,19 @@ In ChatGPT's custom MCP server form, use your public `/mcp` URL and **OAuth** wi
 configured on Chomp, choose **client_secret_post**, and leave scopes blank. Keep the
 prefilled callback URL and discovered endpoints unchanged.
 
-The allowlist includes `https://chatgpt.com/connector/oauth/e3AEiu3ZZRkR` alongside both
-Claude callbacks. Deploy this version before connecting. A recreated connector with a
-different callback needs its exact URL added to the allowlist; do not use a wildcard.
-This enables OAuth authentication; ChatGPT voice-mode tool support is not verified.
+ChatGPT's callback must be on the exact allowlist, `CONNECTOR_CALLBACKS` in
+`chomp/auth.py` (it already holds one ChatGPT connector's and both Claude callbacks). A new
+or recreated ChatGPT connector gets its own callback URL: add that exact URL there, never a
+wildcard, and redeploy before connecting. ChatGPT voice-mode tool use is not verified.
 
 ### 7. Open the dashboard
 
-Go to `https://chomp.<your-domain>/app` and sign in with `AUTH_PASSWORD`. It shows today's
-meals against your targets (the arrows, the row of days and the date box move between days),
-7/30/90-day history charts, and your saved meals and foods. It works without
-Claude too: **+ Add food** logs a food or saved meal (and searches USDA when `FDC_API_KEY` is
-set, by itself when fewer than 3 of your foods match), tapping an item gives a number of servings or a grams slider, a move to another meal and delete, **Edit meal…**
-changes a meal's name, time or date or combines it with another, **Edit goals** sets your
-daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
-five-wrong-passwords lockout applies.
-
-**Foods > Add a new food** starts with **Search for a food**: it looks a name up in USDA
-FoodData Central (including dishes as eaten, like "chicken burrito") and Open Food Facts.
-Tap a result to add it to your foods and open its page; a USDA food counts as confirmed, an
-Open Food Facts one stays unconfirmed (amber) until you check it against the label. It also
-adds a food three ways, all ending in the same form: scan its
-barcode with the phone camera (or type the number under it), take a photo of the Nutrition
-Facts label, or type the values in. A barcode is looked up in USDA and Open Food Facts; check
-the values and save, and it counts as confirmed. A label photo is read on the server
-(tesseract, no AI) and each value gets a tick box: fix anything misread, tick each value, and
-only a food with every value ticked counts as confirmed. Typed-in foods stay unconfirmed
-(amber). The camera needs the HTTPS address; the first scan asks for camera access. Tap
-a food to open its page (nutrition facts, portions, Log it, Confirm, Edit, Rename, Delete).
-Press and hold it for a quick menu; swipe it left and tap Delete to delete it (for everyone;
-meals already logged keep their numbers), or swipe an amber one right and tap Confirm.
+Go to `https://chomp.<your-domain>/app` and sign in with your password (`AUTH_PASSWORD`
+for the owner). A sign-in lasts 30 days; the same five-wrong-passwords lockout applies. It
+works without Claude too (see [What it does](#what-it-does)); searching USDA from the
+dashboard needs `FDC_API_KEY`. The barcode camera needs the HTTPS address and asks for
+camera access on the first scan. Deleting a food deletes it for everyone, but meals already
+logged keep their numbers.
 
 On a phone, add it to the home screen so it opens like an app:
 
@@ -216,7 +244,9 @@ If they use ChatGPT, their connector gets its own callback URL, which must be ad
 cd ~/chomp && git pull && docker compose up -d --build
 ```
 
-Migrations run automatically on start. Take a backup first if the release notes mention one.
+Migrations run automatically on start. Take a backup first if the pull request mentions one.
+If the update changed any tools, start a new chat: an open chat keeps the connector's old tool
+list (ChatGPT may need its connector refreshed).
 
 ## Backups and restore
 
