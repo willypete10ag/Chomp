@@ -2,16 +2,16 @@
 
 ## Overview
 ```
-Me (Claude app: voice / text / photos)
+Me (Claude or ChatGPT app: voice / text / photos)
         │  conversation
         ▼
-Claude ──(custom connector, MCP over HTTPS)──▶ Cloudflare Tunnel ──▶ Chomp MCP server (Docker)
+Claude / ChatGPT ──(custom connector, MCP over HTTPS)──▶ Cloudflare Tunnel ──▶ Chomp MCP server (Docker)
                                                                     ├── SQLite (chomp.db)
                                                                     ├── USDA FoodData Central API
                                                                     └── Open Food Facts API
 Me (phone / browser) ──(HTTPS, /app)──▶ Cloudflare Tunnel ──▶ same server: web dashboard
 ```
-Claude handles conversation, speech, and vision (reading barcodes and nutrition labels from photos). Chomp handles lookup, math, storage, and totals. No LLM runs on the homelab.
+The assistant (Claude, or ChatGPT through the same connector) handles conversation, speech, and vision (reading barcodes and nutrition labels from photos). Chomp handles lookup, math, storage, and totals. No LLM runs on the homelab.
 
 ## Core flows
 
@@ -223,17 +223,17 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.
 
-- **Milestones:** one GitHub Milestone per milestone below (M0–M4). `Later` items are issues with the `later` label and no milestone.
+- **Milestones:** M0–M4 below were the initial build and are done. New work is plain issues; `Later` items carry the `later` label and no milestone.
 - **Issues:** one per bullet below. Closed by commits/PRs with `Closes #N`.
 - **Labels:** `tool`, `source`, `infra`, `security`, `bug`, `decision`, `later`.
 - **Project board (optional):** a GitHub Project with Todo / In progress / Done, filtered to this repo.
-- **Branches:** `m1/search-food`, `m3/cloudflare-tunnel`. Solo repo, so PRs are optional, but PRs give you a clean change record per issue.
+- **Branches and PRs:** one branch per issue, and every change lands through a pull request to `main` (never stacked on another PR's branch). CI must pass before merging.
 - **Commits:** `feat:`, `fix:`, `docs:`, `chore:` prefixes, with the issue number in the message.
-- **Tooling:** `uv` for env and lockfile, `ruff` for lint and format; CI runs `ruff check`, `ruff format --check`, and `pytest -q`.
+- **Tooling:** `uv` for env and lockfile, `ruff` for lint and format; CI runs `ruff check`, `ruff format --check`, `pytest -q`, and builds the Docker image to check it refuses to start without auth and passes its health check with it.
 - **Design docs:** this file, `SCHEMA.sql`, and `CLAUDE.md` live in the repo root. A change to a locked decision gets a `decision` issue first.
 - **Never committed:** `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `.venv/`, `__pycache__/`. Commit `.env.example` only.
 
-### Bootstrap
+### Bootstrap (how the repo was set up)
 ```bash
 git init -b main
 gh repo create Chomp --private --source=. --remote=origin
@@ -247,6 +247,9 @@ done
 Then create one issue per bullet below with `gh issue create --milestone "<name>" --label <label> --title "<bullet>"`.
 
 ## Milestones
+The initial build plan, all done. Later features (dashboard, users, portions, recipes, photos,
+saved meals) came from their own issues.
+
 **M0: Repo setup**
 - Create the private repo, `.gitignore`, `.env.example`, README stub
 - Get a USDA FoodData Central API key (api.data.gov) and store it in `.env`
