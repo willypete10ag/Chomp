@@ -355,7 +355,7 @@
   } catch (err) {
     folded = {};
   }
-  document.querySelectorAll("details[data-fold]").forEach(function (fold) {
+  function foldable(fold) {
     var name = fold.dataset.fold;
     if (folded[name] === 1) fold.open = false;
     else if (folded[name] === 0) fold.open = true;
@@ -367,7 +367,8 @@
         // private browsing: folding still works, it just isn't remembered
       }
     });
-  });
+  }
+  document.querySelectorAll("details[data-fold]").forEach(foldable);
 
   // Breakdown: a link to a section (tapping Protein on Today) opens the card it's in
   var reveal = function () {
@@ -399,7 +400,7 @@
   document.addEventListener("pointerdown", function (event) {
     if (shown && !shown.parentNode.contains(event.target)) hide();
   });
-  document.querySelectorAll("[data-swipe]").forEach(function (body) {
+  function swipeable(body) {
     var li = body.parentNode;
     var left = null; // Confirm, behind the food's left edge
     var right = null; // Delete, behind its right edge
@@ -523,7 +524,8 @@
         if (shown === body) hide();
       });
     });
-  });
+  }
+  document.querySelectorAll("[data-swipe]").forEach(swipeable);
 
   // The hold menu: the food lifts out of the list, a little larger, over the blurred and
   // dimmed page, with its actions underneath (above it near the bottom of the screen).
@@ -758,11 +760,81 @@
   });
 
   // Foods (#91): picking per 100 g / per serving or a sort shows it, no Go button needed
-  document.querySelectorAll("select[data-autosubmit]").forEach(function (select) {
+  function autosubmit(select) {
     select.addEventListener("change", function () {
       select.form.submit();
     });
-  });
+  }
+  document.querySelectorAll("select[data-autosubmit]").forEach(autosubmit);
+
+  // Foods (#97): results follow what's typed, a moment after typing stops, without
+  // reloading the page. Only your saved foods are searched; USDA and Open Food Facts
+  // wait for a tap on "Search databases". An older answer never replaces a newer one.
+  var live = document.querySelector("form[data-live-search]");
+  var results = document.querySelector("[data-results]");
+  if (live && results && window.fetch) {
+    var box = live.querySelector("input[name=q]");
+    var clear = live.querySelector("[data-clear]");
+    var timer = null;
+    var asked = 0;
+    var pending = null;
+    var current = box.value.trim();
+    // `typing`: the last word may be half typed ("chob" finds Chobani)
+    function show(q, typing) {
+      var mine = ++asked;
+      if (pending) pending.abort();
+      pending = window.AbortController ? new AbortController() : null;
+      var url = live.action + (q ? "?" + new URLSearchParams({ q: q }).toString() : "");
+      fetch(url + (q ? "&" : "?") + "part=1" + (typing && q ? "&typing=1" : ""), {
+        credentials: "same-origin",
+        signal: pending ? pending.signal : undefined,
+      }).then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      }).then(function (html) {
+        if (mine !== asked) return;
+        pending = null;
+        results.innerHTML = html;
+        results.querySelectorAll("details[data-fold]").forEach(foldable);
+        results.querySelectorAll("[data-swipe]").forEach(swipeable);
+        results.querySelectorAll("select[data-autosubmit]").forEach(autosubmit);
+        if (clear) clear.hidden = !q;
+        try {
+          history.replaceState(history.state, "", url);
+        } catch (err) {
+          // the address just keeps the old search
+        }
+      }).catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        // Offline or signed out: the Search button still works
+      });
+    }
+    box.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        var q = box.value.trim();
+        if (q === current) return;
+        current = q;
+        show(q, true);
+      }, 250);
+    });
+    live.addEventListener("submit", function (event) {
+      event.preventDefault();
+      clearTimeout(timer);
+      current = box.value.trim();
+      show(current);
+    });
+    if (clear) {
+      clear.addEventListener("click", function (event) {
+        event.preventDefault();
+        clearTimeout(timer);
+        box.value = "";
+        current = "";
+        show("");
+        box.focus();
+      });
+    }
+  }
 
   // The month view (#71): tapping the day's title opens it as a sheet over the page. Month
   // arrows and the year list load the next month into the sheet; a day opens that day.
@@ -936,6 +1008,54 @@
         else by.click();
       });
   });
+
+  // New food (#97): USDA results follow what's typed, a moment after typing stops.
+  // Open Food Facts allows only about 10 searches a minute, so it waits for Search.
+  var dbForm = document.querySelector("form[data-live-usda]");
+  var dbResults = document.querySelector("[data-db-results]");
+  if (dbForm && dbResults && window.fetch) {
+    var dbBox = dbForm.querySelector("input[name=q]");
+    var dbTimer = null;
+    var dbAsked = 0;
+    var dbPending = null;
+    var dbCurrent = dbBox.value.trim();
+    dbBox.addEventListener("input", function () {
+      clearTimeout(dbTimer);
+      dbTimer = setTimeout(function () {
+        var q = dbBox.value.trim();
+        if (q === dbCurrent) return;
+        dbCurrent = q;
+        var mine = ++dbAsked;
+        if (dbPending) dbPending.abort();
+        dbPending = null;
+        if (q.length < 3) {
+          // Too short to search: an answer still on its way, or shown, is for other words
+          dbResults.innerHTML = "";
+          return;
+        }
+        dbPending = window.AbortController ? new AbortController() : null;
+        var url = dbForm.action + "?" + new URLSearchParams({ q: q }).toString();
+        fetch(url + "&part=usda", {
+          credentials: "same-origin",
+          signal: dbPending ? dbPending.signal : undefined,
+        }).then(function (r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.text();
+        }).then(function (html) {
+          if (mine !== dbAsked) return;
+          dbPending = null;
+          dbResults.innerHTML = html;
+          try {
+            history.replaceState(history.state, "", url);
+          } catch (err) {
+            // the address just keeps the old search
+          }
+        }).catch(function () {
+          // Offline or aborted: the Search button still works
+        });
+      }, 500);
+    });
+  }
 
   document.querySelectorAll("form").forEach(changed);
 })();

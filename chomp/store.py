@@ -321,6 +321,22 @@ USED_FOOD = (
     " OR EXISTS (SELECT 1 FROM portions p WHERE p.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
 )
+
+
+def used_food_ids(conn: sqlite3.Connection, food_ids: Iterable[int]) -> set[int]:
+    """Which of these foods are in Foods (USED_FOOD), not just a cached search hit (#97)."""
+    ids = list(dict.fromkeys(food_ids))
+    if not ids:
+        return set()
+    marks = ", ".join("?" * len(ids))
+    return {
+        r[0]
+        for r in conn.execute(
+            f"SELECT f.id FROM foods f WHERE f.id IN ({marks}) AND {USED_FOOD}", ids
+        )
+    }
+
+
 # How many of this user's entries log the food, as column `uses` (one ? for the user id)
 USES = (
     "(SELECT count(*) FROM entries e JOIN meals m ON m.id = e.meal_id"
@@ -364,10 +380,12 @@ def search_foods(
     sort: str | None = None,
     desc: bool = True,
     per_serving: bool = False,
+    typing: bool = False,
 ) -> list[sqlite3.Row]:
     """Foods the user has used that match every word of the query (singular or plural):
     verified first, then by relevance; a `sort` (FOOD_SORTS, see food_order, as the Foods
-    page asks) orders them by it instead."""
+    page asks) orders them by it instead. With `typing` (Foods' search as you type, #97)
+    the last word may be half typed: "chob" finds Chobani, after the whole-word matches."""
     match = fts_query(query)
     if match is None:
         return []
@@ -382,13 +400,17 @@ def search_foods(
     )
     # Prefix-only hits ('eggplant' for 'egg') are dropped here, so read until enough remain
     found: list[sqlite3.Row] = []
+    begun: list[sqlite3.Row] = []  # typing: the last word only begins a word ('chob')
     for row in rows:
-        if text.match_score(query, f"{row['name']} {row['brand'] or ''}") == 1:
+        name = f"{row['name']} {row['brand'] or ''}"
+        if text.match_score(query, name) == 1:
             found.append(row)
             if len(found) == limit:
                 break
+        elif typing and text.typed_so_far(query, name):
+            begun.append(row)
     rows.close()
-    return found
+    return (found + begun)[:limit]
 
 
 def list_used_foods(

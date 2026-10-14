@@ -13,8 +13,8 @@ from typing import Any
 
 import httpx
 
-from chomp import logic, text
-from chomp.sources import FoodRecord, SourceError
+from chomp import logic
+from chomp.sources import FoodRecord, SourceError, rank
 from chomp.sources import gtin as gtins
 from chomp.sources.http import TTLCache, get_json
 
@@ -24,7 +24,7 @@ BASE_URL = "https://api.nal.usda.gov/fdc/v1"
 # Survey (FNDDS) foods are dishes as eaten, e.g. "chicken burrito" (#88)
 GENERIC_TYPES = ("Foundation", "SR Legacy", "Survey (FNDDS)")
 BRANDED = "Branded"
-TYPE_RANK = {"Foundation": 0, "SR Legacy": 1, "Survey (FNDDS)": 2, "Branded": 3}
+SURVEY_RETRY_SIZE = 25  # Survey foods are the largest hits; ask for fewer when retrying
 
 # FDC nutrient ids, best first. Foundation foods often lack 1008 (Energy) and 1005
 # (carbohydrate by difference) and report the Atwater / by-summation values instead.
@@ -229,9 +229,7 @@ def to_record(food: Mapping[str, Any]) -> FoodRecord | None:
     )
 
 
-def match_score(query: str, record: FoodRecord) -> float:
-    """Share of query words found in the food's name or brand, singular and plural alike."""
-    return text.match_score(query, f"{record.name} {record.brand or ''}")
+match_score = rank.coverage  # share of query words in the name or brand
 
 
 def apply_label_check(record: FoodRecord, detail: Mapping[str, Any]) -> FoodRecord:
@@ -317,23 +315,53 @@ class FDCClient:
         records = [to_record(f) for f in (data or {}).get("foods", [])]
         return [r for r in records if r is not None]
 
+    async def _generic(self, query: str, size: int) -> list[FoodRecord]:
+        """Generic foods for `query`. When the one request for all three generic types
+        fails or finds nothing, each group is asked for on its own (#97): live searches for
+        "chicken breast" and "whole milk" came back with no generic foods at all while the
+        same words in another order found plenty, and one failing type shouldn't hide
+        Foundation and SR Legacy foods."""
+        try:
+            found = await self.search(query, GENERIC_TYPES, page_size=size)
+        except SourceError as e:
+            if "rate limit" in str(e):
+                raise
+            log.warning("FDC generic search failed (%s); asking for each type on its own", e)
+        else:
+            if found:
+                return found
+            log.info("FDC generic search found nothing; asking for each type on its own")
+        found = []
+        errors: list[SourceError] = []
+        for types, n in ((GENERIC_TYPES[:2], size), (GENERIC_TYPES[2:], SURVEY_RETRY_SIZE)):
+            try:
+                found += await self.search(query, types, page_size=n)
+            except SourceError as e:
+                log.warning("FDC %s search failed: %s", "/".join(types), e)
+                errors.append(e)
+        if len(errors) == 2:
+            raise errors[0]
+        return found
+
     async def search_ranked(self, query: str, limit: int) -> list[FoodRecord]:
         """Best matches across generic and Branded foods, up to `limit`.
 
         FDC's own relevance order is loose (a search for "scrambled eggs" ranks egg whites
-        and egg bagels highly), so results are re-ranked by how many query words the food's
-        name and brand contain, then by how much of the name's lead (before the first comma)
-        is what the user asked for, so "milk" finds fluid milk before "Crackers, milk".
-        Remaining ties go to Foundation, then SR Legacy, then Survey (FNDDS), then Branded,
-        then FDC's order. Branded foods compete on the same terms, so naming a brand finds it.
+        and egg bagels highly), so candidates are re-ranked by `rank.rank`: every query word
+        first, the food the name leads with, the plain food before processed ones, generic
+        before Branded unless the query names the brand. Weak matches are dropped and
+        listings of one product grouped, so fewer than `limit` may come back.
         """
         results: list[list[FoodRecord]] = []
         errors: list[SourceError] = []
-        for types, size in ((GENERIC_TYPES, max(limit * 4, 50)), ((BRANDED,), limit)):
+        for kind, size in (("generic", max(limit * 4, 50)), ("branded", max(limit * 3, 25))):
             try:
-                results.append(await self.search(query, types, page_size=size))
+                if kind == "generic":
+                    results.append(await self._generic(query, size))
+                else:
+                    results.append(await self.search(query, (BRANDED,), page_size=size))
             except SourceError as e:  # one failed request shouldn't drop the other's hits
-                log.warning("FDC %s search failed: %s", "/".join(types), e)
+                log.warning("FDC %s search failed: %s", kind, e)
                 errors.append(e)
                 results.append([])
         if len(errors) == 2:
@@ -343,16 +371,7 @@ class FDCClient:
         candidates = [
             r for r in generic + branded if not (r.source_id in seen or seen.add(r.source_id))
         ]
-        order = {r.source_id: i for i, r in enumerate(candidates)}
-        candidates.sort(
-            key=lambda r: (
-                -match_score(query, r),
-                -text.head_score(query, r.name),
-                TYPE_RANK.get(r.data_type or "", 9),
-                order[r.source_id],
-            )
-        )
-        return candidates[:limit]
+        return rank.rank(query, candidates, limit)
 
     async def food(self, fdc_id: str) -> dict | None:
         return await self._get(f"/food/{fdc_id}", not_found_ok=True)

@@ -50,7 +50,7 @@ from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.photos import PhotoError, Photos
-from chomp.sources import SourceError
+from chomp.sources import SourceError, rank
 from chomp.sources import gtin as gtins
 from chomp.sources.fdc import FDCClient
 from chomp.sources.off import OFFClient
@@ -148,6 +148,13 @@ UNITS = {
 LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
 NBSP = "\u00a0"  # keeps a number on the same line as its unit
 MACROS = (("protein_g", "p", "P"), ("carbs_g", "c", "C"), ("fat_g", "f", "F"))
+# Where a New food result's saved food came from, when another source found it (#97)
+PROVENANCE = {
+    "fdc": "from USDA",
+    "off": "from Open Food Facts",
+    "label": "from a label",
+    "manual": "typed in",
+}
 SOURCES = {"fdc": "USDA", "off": "Open Food Facts", "label": "Label", "manual": "Manual"}
 
 
@@ -1590,28 +1597,59 @@ def pick_item(
     )
 
 
-def found_item(row, back: str, photo: str = "") -> str:
+def found_item(
+    row,
+    back: str,
+    photo: str = "",
+    *,
+    searched: str = "",
+    saved: bool = False,
+    prep: str = "",
+    same_as: int = 0,
+) -> str:
     """A New food search result (#88): tapping it adds the food to Foods and opens its page.
-    A USDA food counts as confirmed once picked; an Open Food Facts one stays unconfirmed."""
+    A USDA food counts as confirmed once picked; an Open Food Facts one stays unconfirmed.
+
+    A result that is already in Foods (#97) says so and just opens it, so its photo,
+    corrections and confirmation stay as they are. When the hit resolved to a food from
+    another source than `searched` (the same barcode), it says where that food came from.
+    `prep` tags how it was prepared (Raw, Cooked, Breaded); `same_as` counts other
+    listings of the same product grouped into it."""
     n = logic.round_for_display(store.nutrients_of(row))
-    meta = [e(row["brand"])] if row["brand"] else []
+    meta = []
+    if saved:
+        meta.append('<span class="badge ok">In your foods</span>')
+    if prep:
+        meta.append(f'<span class="badge">{e(prep)}</span>')
+    if row["brand"]:
+        meta.append(e(row["brand"]))
+    if searched and row["source"] != searched:
+        meta.append(PROVENANCE.get(row["source"], ""))
     if row["verified"]:
         meta.append('<span class="badge ok">Confirmed</span>')
-    elif row["source"] == "off":
+    elif row["source"] != "fdc" or saved:
         meta.append('<span class="badge unsure">Unconfirmed</span>')
+    if same_as:
+        meta.append(f"+{same_as} identical listing{'s' if same_as > 1 else ''}")
+    inner = with_thumb(
+        photo,
+        row["name"],
+        f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
+        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+        f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+        f"<span>{macros_line(n)}</span></div>",
+    )
+    if saved:
+        return (
+            f'<li><a class="found" href="{e(food_url(row["id"], back))}"'
+            f' aria-label="Open {e(row["name"])}, already in your foods">{inner}</a></li>'
+        )
     return (
         f'<li><form method="post" action="{PREFIX}/foods/found">'
         f'<input type="hidden" name="food_id" value="{row["id"]}">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         f'<button type="submit" class="found" aria-label="Add {e(row["name"])}">'
-        + with_thumb(
-            photo,
-            row["name"],
-            f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
-            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-            f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
-            f"<span>{macros_line(n)}</span></div>",
-        )
+        + inner
         + "</button></form></li>"
     )
 
@@ -1746,6 +1784,20 @@ def recipes_fab() -> str:
         f'<a class="fab" href="{PREFIX}/recipes" aria-label="Recipes" title="Recipes">'
         f"{BOOK_ICON}</a>"
     )
+
+
+def elsewhere(q: str, *, typed: bool = False) -> str:
+    """Foods' way on when a food isn't saved yet (#97): search USDA and Open Food Facts for
+    the same words (only on a tap, never as you type), and with `typed` type it in with the
+    name filled in."""
+    links = [
+        f'<a class="button ghost" href="{PREFIX}/foods/new?{e(urlencode({"q": q}))}">'
+        f"Search databases for “{e(q)}”</a>"
+    ]
+    if typed:
+        query = urlencode({"how": "type", "name": q})
+        links.append(f'<a class="button ghost" href="{PREFIX}/foods/new?{e(query)}">Type it in</a>')
+    return f'<div class="elsewhere">{"".join(links)}</div>'
 
 
 def foods_switch(active: str) -> str:
@@ -3000,16 +3052,20 @@ def add_routes(
         clear = f'<a class="clear" href="{PREFIX}/foods/new">Clear</a>' if q else ""
         return (
             '<section class="card"><h2>Search for a food</h2>'
-            f'<form class="search" method="get" action="{PREFIX}/foods/new">'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="e.g. chicken burrito"'
-            ' aria-label="Search USDA and Open Food Facts" maxlength="100">'
+            f'<form class="search" method="get" action="{PREFIX}/foods/new"'
+            + (" data-live-usda" if usda else "")
+            + f'><input type="search" name="q" value="{e(q)}" placeholder="e.g. chicken burrito"'
+            ' aria-label="Search USDA and Open Food Facts" maxlength="100" autocomplete="off">'
             f'<button type="submit">Search</button>{clear}</form>'
             f'<p class="small muted">Looks in {where}. Tap a food to add it to your'
-            " foods.</p></section>" + results
+            " foods.</p></section>"
+            f'<div data-db-results aria-live="polite">{results}</div>'
         )
 
-    async def search_online(conn, q: str) -> str:
-        """Both sources at once, cached into foods so every result has an id."""
+    async def search_online(conn, q: str, *, with_off: bool = True) -> str:
+        """Both sources at once, cached into foods so every result has an id. Without
+        `with_off` (USDA as you type, #97) Open Food Facts waits for the Search button: it
+        allows only about 10 searches a minute."""
         found: dict[str, list] = {"fdc": [], "off": []}
         failed: set[str] = set()
 
@@ -3023,8 +3079,18 @@ def add_routes(
         async with anyio.create_task_group() as tg:
             if usda:
                 tg.start_soon(run, "fdc", fdc.search_ranked)
-            tg.start_soon(run, "off", off.search)
+            if with_off:
+                tg.start_soon(run, "off", off.search)
         back = new_food_url(q=q)
+        rows: dict[str, list] = {"fdc": [], "off": []}
+        for source in rows:
+            for rec in found[source]:
+                try:
+                    row, _ = store.cache_record(conn, rec)
+                except ValueError:  # one bad upstream record mustn't sink the search
+                    continue
+                rows[source].append((row, rec))
+        saved = store.used_food_ids(conn, (row["id"] for v in rows.values() for row, _ in v))
         seen: set[int] = set()
         out = []
         for source, title, note in (
@@ -3038,16 +3104,24 @@ def add_routes(
             if source == "fdc" and not usda:
                 continue
             items = []
-            for rec in found[source]:
-                try:
-                    row, _ = store.cache_record(conn, rec)
-                except ValueError:  # one bad upstream record mustn't sink the search
-                    continue
-                if row["id"] in seen:
+            for row, rec in rows[source]:
+                if row["id"] in seen:  # the same food, found by both (same barcode)
                     continue
                 seen.add(row["id"])
-                items.append(found_item(row, back, photo_src(row["id"])))
-            if source in failed:
+                items.append(
+                    found_item(
+                        row,
+                        back,
+                        photo_src(row["id"]),
+                        searched=source,
+                        saved=row["id"] in saved,
+                        prep=rank.preparation(row["name"]),
+                        same_as=rec.same_as,
+                    )
+                )
+            if source == "off" and not with_off:
+                note = "Tap Search to look in Open Food Facts too."
+            elif source in failed:
                 note = f"{title} isn't reachable right now. Try again in a minute."
             elif not items:
                 note = f"No matches in {title}."
@@ -3080,9 +3154,17 @@ def add_routes(
         params = request.query_params
         typed = params.get("barcode", "").strip()[:40]
         if params.get("how") == "type":
-            form = FoodForm("manual", {}, barcode=typed)
+            # From Foods' "Type it in" (#97), the name searched for comes along
+            name = " ".join(params.get("name", "").split())[:FOOD_NAME_MAX]
+            form = FoodForm("manual", {}, barcode=typed, name=name)
             return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
         q = " ".join(params.get("q", "").split())[:100]
+        if params.get("part") == "usda":  # the script's USDA search as you type (#97)
+            if not (q and usda):
+                return HTMLResponse("", headers=SECURITY_HEADERS)
+            with connect(request) as conn:
+                results = await search_online(conn, q, with_off=False)
+            return HTMLResponse(results, headers=SECURITY_HEADERS)
         if q:
             with connect(request) as conn:
                 results = await search_online(conn, q)
@@ -4547,26 +4629,36 @@ def add_routes(
         banner += food_toasts(request.query_params)
         with connect(request) as conn:
             if q:
-                rows = store.search_foods(conn, q, FOODS_LIMIT, sort, desc, per_serving)
+                rows = store.search_foods(
+                    conn, q, FOODS_LIMIT, sort, desc, per_serving, typing=bool(params.get("typing"))
+                )
             else:
                 rows = store.list_used_foods(conn, FOODS_LIMIT, sort, desc, per_serving)
             # Recipes (#82) have their own page; their food rows are only for logging
             recipe_foods = store.recipe_food_ids(conn)
             rows = [r for r in rows if r["id"] not in recipe_foods]
 
-        clear = f'<a class="clear" href="{PREFIX}/foods">Clear</a>' if q else ""
+        clear = (
+            f'<a class="clear" href="{PREFIX}/foods" data-clear{"" if q else " hidden"}>Clear</a>'
+        )
         parts = [
             "<h1>Foods</h1>",
             foods_switch("foods"),
             banner,
-            f'<form class="search" method="get" action="{PREFIX}/foods">'
+            f'<form class="search" method="get" action="{PREFIX}/foods" role="search"'
+            " data-live-search>"
             f'<input type="search" name="q" value="{e(q)}" placeholder="Your foods"'
-            ' aria-label="Search your foods">'
+            ' aria-label="Search your foods" maxlength="100" autocomplete="off">'
             f'<button type="submit">Search</button>{clear}</form>',
             f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
         ]
+        found = []
         if q and not rows:
-            parts.append(f'<section class="card empty"><p>Nothing matches “{e(q)}”.</p></section>')
+            found.append(
+                f'<section class="card empty"><p>Nothing in your foods matches “{e(q)}”.</p>'
+                + elsewhere(q, typed=True)
+                + "</section>"
+            )
         if rows:
             heading = "Foods" if q else "Your foods"
             day = today()
@@ -4588,9 +4680,15 @@ def add_routes(
                 " for more. Swipe left to delete, or right to confirm an amber one.</p>"
             )
             bar = sort_bar(q, sort, desc, per_serving)
-            parts.append(fold("foods", heading, f'{bar}{hint}<ul class="entries">{items}</ul>'))
+            found.append(fold("foods", heading, f'{bar}{hint}<ul class="entries">{items}</ul>'))
+            if q:
+                found.append(elsewhere(q))
         elif not q:
-            parts.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+            found.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+        results = "".join(found)
+        if params.get("part") == "1":  # the script's search as you type (#97)
+            return HTMLResponse(results, headers=SECURITY_HEADERS)
+        parts.append(f'<div data-results aria-live="polite">{results}</div>')
         parts.append(recipes_fab())
         response = render(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)

@@ -135,7 +135,8 @@ async def test_ranking_prefers_names_matching_every_word(upstream, fdc):
     )
     upstream.add(SEARCH, {"foods": []}, match=BRANDED)
     recs = await fdc.search_ranked("scrambled eggs", limit=4)
-    assert [r.source_id for r in recs] == ["4", "5", "1", "2"]
+    # eggs that aren't scrambled don't fill the list once scrambled ones are found (#97)
+    assert [r.source_id for r in recs] == ["4", "5"]
 
 
 @pytest.mark.anyio
@@ -151,7 +152,7 @@ async def test_named_brand_beats_generic(upstream, fdc):
         match=BRANDED,
     )
     recs = await fdc.search_ranked("chobani greek yogurt", limit=2)
-    assert [r.source_id for r in recs] == ["20", "10"]
+    assert [r.source_id for r in recs] == ["20"]  # another brand's isn't what was asked for
 
 
 def test_match_score_handles_plurals_both_ways():

@@ -408,6 +408,10 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .search { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
 .search input { flex: 1; min-width: 0; }
 .search .clear { padding: .5rem; }
+/* Foods (#97): when a food isn't saved yet, search the databases or type it in */
+.elsewhere { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0 1rem; }
+.elsewhere .button { flex: 1 1 12rem; }
+.card .elsewhere { margin-bottom: 0; }
 .error { color: var(--over); }
 .login { max-width: 20rem; margin: 3rem auto; text-align: center; }
 .login img { border-radius: 16px; }
@@ -667,9 +671,9 @@ a.macro:active, a.hero:active { background: var(--track); }
 .photo-form label.busy > span::after { content: "…"; }
 .photo-form label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* New food search results (#88): the whole row is the button */
-button.found {
+button.found, a.found {
   display: block; width: 100%; text-align: left; background: none; color: inherit;
-  padding: 0; min-height: 0; border-radius: 0; font-weight: inherit;
+  padding: 0; min-height: 0; border-radius: 0; font-weight: inherit; text-decoration: none;
 }
 
 /* Recipes (#82): a book in the bottom corner of Foods opens them */

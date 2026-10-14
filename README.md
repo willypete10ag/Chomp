@@ -37,9 +37,11 @@ can be estimated, and those are marked.
 - **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
 - **History:** 7, 30 and 90-day averages and charts.
 - **Foods:** your foods with photos, sorted by most logged, recent, calories and more; each
-  food has a page with nutrition facts, portions, Log it, Confirm, Edit and Delete. Add a new
-  food by searching USDA and Open Food Facts, scanning its barcode with the camera, reading a
-  label photo (tesseract on the server, no AI), or typing it in.
+  food has a page with nutrition facts, portions, Log it, Confirm, Edit and Delete. Search
+  filters as you type; a food that isn't there is one tap from a database search or typing it
+  in. Add a new food by searching USDA (as you type) and Open Food Facts, with the plain food
+  first, scanning its barcode with the camera, reading a label photo (tesseract on the
+  server, no AI), or typing it in.
 - **Saved meals and Recipes:** build, edit and log them from the Foods tab.
 
 **Running it:** several people, each with their own log, goals, portions, saved meals and

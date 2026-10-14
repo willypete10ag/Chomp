@@ -101,8 +101,18 @@ estimated flag (#75) stays only while its grams are unchanged.
 New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
 `/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run
-side by side and cached into `foods`. Tapping a result marks it saved and opens its page;
-a USDA food counts as confirmed once picked, an Open Food Facts one stays unconfirmed. Below
+side by side and cached into `foods`. Both sources' hits go through `sources/rank.py` (#97,
+shared with `search_food` and Add food): every query word first, then the food the name leads
+with, then the plain food before processed or prepared ones the query didn't name (breaded,
+dried, "with bacon"), then generic before Branded unless the query names the brand. A hit
+missing query words others have is dropped, and listings of one product (same barcode, or the
+same name, brand and nutrition) are shown once. When FDC refuses the one generic request, each
+generic type is asked for on its own. Results are tagged Raw, Cooked or Breaded from their
+names. USDA alone is searched as you type (`?part=usda`, after a pause and from three
+letters); Open Food Facts waits for Search. Tapping a result marks it saved and opens its page;
+a USDA food counts as confirmed once picked, an Open Food Facts one stays unconfirmed. A
+result already in Foods says so and just opens it, keeping its photo, corrections and
+confirmation, and says where it came from when another source's barcode found it. Below
 that it adds a shared food three ways, all through one form of per-serving values: a barcode (scanned with the camera by `static/scan.js` and the vendored
 ZXing reader `static/zxing.min.js`, since the CSP allows only same-origin scripts; or typed),
 looked up through the same chain as `lookup_barcode` (`chomp/barcode.py`); a nutrition label
@@ -144,7 +154,7 @@ local-only mode everything is the owner's.
 ## MCP tools
 | Tool | Purpose | Key args |
 |---|---|---|
-| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (Foundation, SR Legacy, Survey (FNDDS) dishes as eaten (#88), and Branded; ranked by query words matched, then how much of the name before its first comma the query names, then Foundation, SR Legacy, Survey, Branded). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
+| `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (Foundation, SR Legacy, Survey (FNDDS) dishes as eaten (#88), and Branded; ranked by `sources/rank.py` (#97): query words matched, then how much of the name before its first comma the query names, then plain before processed, then generic before Branded unless the brand is named, then Foundation, SR Legacy, Survey, Branded; weak matches dropped, listings of one product grouped). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
 | `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |

@@ -43,15 +43,16 @@ def off_searches(upstream) -> list:
 async def test_off_search_ranks_and_drops_unusable_products(upstream, off):
     upstream.add(OFF_SEARCH, fixture_json("off/search_hummus.json"))
     recs = await off.search("classic hummus", 5)
-    # no nutrition and no code are dropped; the full word match leads
-    assert [r.name for r in recs] == ["Classic hummus", "Hummus chips"]
+    # no nutrition and no code are dropped, and so is a weaker match (#97)
+    assert [r.name for r in recs] == ["Classic hummus"]
     top = recs[0]
     assert (top.source, top.source_id, top.gtin) == ("off", "5000112637922", "05000112637922")
     assert top.brand == "Sabra" and top.serving_g == 30
     assert top.nutrients["kcal"] == 267 and top.nutrients["sodium_mg"] == pytest.approx(433)
-    assert recs[1].gtin is None  # a code that isn't a valid barcode still caches
+    chips = next(r for r in await off.search("hummus", 5) if r.name == "Hummus chips")
+    assert chips.gtin is None  # a code that isn't a valid barcode still caches
     await off.search("classic hummus", 5)
-    assert len(off_searches(upstream)) == 1  # cached
+    assert len(off_searches(upstream)) == 2  # the repeat came from the cache; only "hummus" was new
     params = off_searches(upstream)[0].url.params
     assert params["search_terms"] == "classic hummus" and params["json"] == "1"
 

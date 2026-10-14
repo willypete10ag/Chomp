@@ -35,6 +35,18 @@ def match_score(query: str, text: str) -> float:
     return sum(w in have for w in wanted) / len(wanted)
 
 
+def typed_so_far(query: str, text: str) -> bool:
+    """Whether text could be what's being typed: every word but the last is in it, and the
+    last, maybe half-typed ("chob"), begins one of its words (#97)."""
+    wanted = words(query)
+    if not wanted:
+        return False
+    *done, last = wanted
+    have = words(text)
+    stems = {stem(w) for w in have}
+    return all(stem(w) in stems for w in done) and any(w.startswith(last) for w in have)
+
+
 def head_score(query: str, name: str) -> float:
     """Share of the name's lead words (before the first comma) that the query asked for.
 
@@ -45,6 +57,10 @@ def head_score(query: str, name: str) -> float:
     if not lead:
         return 0.0
     wanted = {stem(w) for w in words(query)}
+    if "," not in name and lead[-1] in wanted:
+        # A product name without commas ends with what it is ("Semi skimmed milk", but
+        # "Milk chocolate"), so ending with a word asked for counts as leading with it (#97)
+        return 1.0
     return sum(w in wanted for w in lead) / len(lead)
 
 
