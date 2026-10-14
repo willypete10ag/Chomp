@@ -154,6 +154,8 @@ new food with that name.
 
 **Foods > Add a new food** starts with **Search for a food**: it looks a name up in USDA
 FoodData Central (including dishes as eaten, like "chicken burrito") and Open Food Facts.
+USDA results update as you type; Open Food Facts (about 10 searches a minute) joins in when
+you tap Search.
 The plain food leads (plain chicken breast before nuggets, fluid milk before powders) unless
 you name the brand or preparation, each result is tagged Raw, Cooked or Breaded when its name
 says so, and a food you already have is marked **In your foods** and just opens.

@@ -108,7 +108,8 @@ dried, "with bacon"), then generic before Branded unless the query names the bra
 missing query words others have is dropped, and listings of one product (same barcode, or the
 same name, brand and nutrition) are shown once. When FDC refuses the one generic request, each
 generic type is asked for on its own. Results are tagged Raw, Cooked or Breaded from their
-names. Tapping a result marks it saved and opens its page;
+names. USDA alone is searched as you type (`?part=usda`, after a pause and from three
+letters); Open Food Facts waits for Search. Tapping a result marks it saved and opens its page;
 a USDA food counts as confirmed once picked, an Open Food Facts one stays unconfirmed. A
 result already in Foods says so and just opens it, keeping its photo, corrections and
 confirmation, and says where it came from when another source's barcode found it. Below

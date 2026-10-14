@@ -3052,16 +3052,20 @@ def add_routes(
         clear = f'<a class="clear" href="{PREFIX}/foods/new">Clear</a>' if q else ""
         return (
             '<section class="card"><h2>Search for a food</h2>'
-            f'<form class="search" method="get" action="{PREFIX}/foods/new">'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="e.g. chicken burrito"'
-            ' aria-label="Search USDA and Open Food Facts" maxlength="100">'
+            f'<form class="search" method="get" action="{PREFIX}/foods/new"'
+            + (" data-live-usda" if usda else "")
+            + f'><input type="search" name="q" value="{e(q)}" placeholder="e.g. chicken burrito"'
+            ' aria-label="Search USDA and Open Food Facts" maxlength="100" autocomplete="off">'
             f'<button type="submit">Search</button>{clear}</form>'
             f'<p class="small muted">Looks in {where}. Tap a food to add it to your'
-            " foods.</p></section>" + results
+            " foods.</p></section>"
+            f'<div data-db-results aria-live="polite">{results}</div>'
         )
 
-    async def search_online(conn, q: str) -> str:
-        """Both sources at once, cached into foods so every result has an id."""
+    async def search_online(conn, q: str, *, with_off: bool = True) -> str:
+        """Both sources at once, cached into foods so every result has an id. Without
+        `with_off` (USDA as you type, #97) Open Food Facts waits for the Search button: it
+        allows only about 10 searches a minute."""
         found: dict[str, list] = {"fdc": [], "off": []}
         failed: set[str] = set()
 
@@ -3075,7 +3079,8 @@ def add_routes(
         async with anyio.create_task_group() as tg:
             if usda:
                 tg.start_soon(run, "fdc", fdc.search_ranked)
-            tg.start_soon(run, "off", off.search)
+            if with_off:
+                tg.start_soon(run, "off", off.search)
         back = new_food_url(q=q)
         rows: dict[str, list] = {"fdc": [], "off": []}
         for source in rows:
@@ -3114,7 +3119,9 @@ def add_routes(
                         same_as=rec.same_as,
                     )
                 )
-            if source in failed:
+            if source == "off" and not with_off:
+                note = "Tap Search to look in Open Food Facts too."
+            elif source in failed:
                 note = f"{title} isn't reachable right now. Try again in a minute."
             elif not items:
                 note = f"No matches in {title}."
@@ -3152,6 +3159,12 @@ def add_routes(
             form = FoodForm("manual", {}, barcode=typed, name=name)
             return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
         q = " ".join(params.get("q", "").split())[:100]
+        if params.get("part") == "usda":  # the script's USDA search as you type (#97)
+            if not (q and usda):
+                return HTMLResponse("", headers=SECURITY_HEADERS)
+            with connect(request) as conn:
+                results = await search_online(conn, q, with_off=False)
+            return HTMLResponse(results, headers=SECURITY_HEADERS)
         if q:
             with connect(request) as conn:
                 results = await search_online(conn, q)

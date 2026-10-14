@@ -1009,5 +1009,47 @@
       });
   });
 
+  // New food (#97): USDA results follow what's typed, a moment after typing stops.
+  // Open Food Facts allows only about 10 searches a minute, so it waits for Search.
+  var dbForm = document.querySelector("form[data-live-usda]");
+  var dbResults = document.querySelector("[data-db-results]");
+  if (dbForm && dbResults && window.fetch) {
+    var dbBox = dbForm.querySelector("input[name=q]");
+    var dbTimer = null;
+    var dbAsked = 0;
+    var dbPending = null;
+    var dbCurrent = dbBox.value.trim();
+    dbBox.addEventListener("input", function () {
+      clearTimeout(dbTimer);
+      dbTimer = setTimeout(function () {
+        var q = dbBox.value.trim();
+        if (q === dbCurrent || q.length < 3) return;
+        dbCurrent = q;
+        var mine = ++dbAsked;
+        if (dbPending) dbPending.abort();
+        dbPending = window.AbortController ? new AbortController() : null;
+        var url = dbForm.action + "?" + new URLSearchParams({ q: q }).toString();
+        fetch(url + "&part=usda", {
+          credentials: "same-origin",
+          signal: dbPending ? dbPending.signal : undefined,
+        }).then(function (r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.text();
+        }).then(function (html) {
+          if (mine !== dbAsked) return;
+          dbPending = null;
+          dbResults.innerHTML = html;
+          try {
+            history.replaceState(history.state, "", url);
+          } catch (err) {
+            // the address just keeps the old search
+          }
+        }).catch(function () {
+          // Offline or aborted: the Search button still works
+        });
+      }, 500);
+    });
+  }
+
   document.querySelectorAll("form").forEach(changed);
 })();
