@@ -5,15 +5,21 @@ iOS Shortcut) posts readings to POST /ingest/health. Each person has their own i
 made with `chomp user ingest-token NAME`; it is stored as a SHA-256 hash, can only add that
 person's health readings, and is refused everywhere else (as OAuth tokens are refused here).
 
-Two payload shapes are accepted:
+These payload shapes are accepted:
 
     Health Auto Export:  {"data": {"metrics": [{"name": "weight_&_body_mass", "units": "lb",
                            "data": [{"date": "2026-10-13 07:02:11 -0400", "qty": 182.4}]}]}}
     Simple (Shortcuts):  {"weight": [{"date": "2026-10-13T07:02:11-04:00", "value": 182.4,
-                           "unit": "lb"}]}
+                           "unit": "lb"}], "steps": [{"date": "2026-10-13", "value": 8123}]}
+    Flat (one Shortcut): {"date": "2026-10-13", "steps": 8123, "active_kcal": 412,
+                           "distance_mi": 3.8, "weight_lb": 182.4,
+                           "weight_date": "2026-10-13T07:02:11-04:00"}
 
-Readings are de-duplicated by person and time, so the phone may resend overlapping windows.
-Metrics Chomp doesn't keep yet are counted and ignored.
+Weight is kept per weigh-in. Activity (steps, active and resting energy, walking + running
+distance, exercise minutes, flights) is kept per time bucket: Health Auto Export with Summarize
+Data sends one reading per day (or hour) of the metric, and a simple date with no time is that
+day's total. Readings are de-duplicated by person, metric and time, so the phone may resend
+overlapping windows. Metrics Chomp doesn't keep are counted and ignored.
 """
 
 from __future__ import annotations
@@ -25,8 +31,8 @@ import re
 import secrets
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -44,7 +50,37 @@ MAX_BODY = 10 * 1024 * 1024  # a long history backfill is still well under this
 MAX_PROBLEMS = 5
 # Health Auto Export calls weight "weight_&_body_mass"; names are compared without punctuation
 WEIGHT_METRICS = {"weight_body_mass", "weight", "body_mass"}
+# Health Auto Export's names (and the simple shape's keys) for the activity Chomp keeps
+ACTIVITY_METRICS = {
+    "step_count": "steps",
+    "steps": "steps",
+    "active_energy": "active_kcal",
+    "active_energy_burned": "active_kcal",
+    "basal_energy_burned": "resting_kcal",
+    "resting_energy": "resting_kcal",
+    "walking_running_distance": "distance_m",
+    "distance_walking_running": "distance_m",
+    "distance": "distance_m",
+    "apple_exercise_time": "exercise_min",
+    "exercise_time": "exercise_min",
+    "exercise_minutes": "exercise_min",
+    "flights_climbed": "flights",
+    "flights": "flights",
+}
+# A Shortcut's flat fields (README, step 9): the day's totals so far for "date", and the
+# latest weigh-in taken at "weight_date"
+FLAT_ACTIVITY = {
+    "steps": ("steps", None),
+    "flights": ("flights", None),
+    "active_kcal": ("active_kcal", "kcal"),
+    "resting_kcal": ("resting_kcal", "kcal"),
+    "exercise_min": ("exercise_min", "min"),
+    "distance_mi": ("distance_m", "mi"),
+    "distance_km": ("distance_m", "km"),
+}
+FLAT_WEIGHT = {"weight_lb": "lb", "weight_kg": "kg"}
 HAE_DATE = "%Y-%m-%d %H:%M:%S %z"
+DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 # --- Tokens ---------------------------------------------------------------------------------
@@ -111,6 +147,8 @@ class PayloadError(ValueError):
 @dataclass
 class Parsed:
     weights: dict[str, float] = field(default_factory=dict)  # UTC measured_at -> kg
+    # (metric, UTC start of its bucket) -> amount in the stored unit
+    activity: dict[tuple[str, str], float] = field(default_factory=dict)
     rejected: int = 0
     problems: list[str] = field(default_factory=list)
     ignored: dict[str, int] = field(default_factory=dict)  # metric name -> readings
@@ -121,15 +159,20 @@ class Parsed:
             self.problems.append(problem)
 
 
-def parse_date(value: Any, tz: str) -> str:
+def parse_date(value: Any, tz: str, *, day_ok: bool = False) -> str:
     """A reading's time to storage format: Health Auto Export's "2026-10-13 07:02:11 -0400",
-    or ISO 8601 (local in `tz` when it has no offset)."""
+    or ISO 8601 (local in `tz` when it has no offset). With day_ok, a bare date is the start
+    of that local day (a day's total)."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"missing date: {value!r}")
+    text = value.strip()
     try:
-        return logic.format_utc(datetime.strptime(value.strip(), HAE_DATE))
+        return logic.format_utc(datetime.strptime(text, HAE_DATE))
     except ValueError:
-        return logic.parse_time(value, tz, field="date")
+        pass
+    if day_ok and DAY_RE.fullmatch(text):
+        return logic.local_day_bounds(date.fromisoformat(text), tz)[0]
+    return logic.parse_time(text, tz, field="date")
 
 
 def metric_key(name: str) -> str:
@@ -158,6 +201,23 @@ def _weight(parsed: Parsed, item: Any, unit: Any, tz: str) -> None:
         parsed.reject(f"weight: {e}")
 
 
+def _activity(parsed: Parsed, metric: str, item: Any, unit: Any, tz: str) -> None:
+    try:
+        if not isinstance(item, dict):
+            raise ValueError(f"not a reading: {item!r}")
+        unit = item.get("unit", item.get("units", unit))
+        if unit is not None and not isinstance(unit, str):
+            raise ValueError(f"unknown unit {unit!r}")
+        qty = logic.to_activity(metric, _number(item.get("qty", item.get("value"))), unit)
+        parsed.activity[(metric, parse_date(item.get("date"), tz, day_ok=True))] = qty
+    except ValueError as e:
+        parsed.reject(f"{metric}: {e}")
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def _items(value: Any) -> list:
     if isinstance(value, list):
         return value
@@ -165,7 +225,8 @@ def _items(value: Any) -> list:
 
 
 def parse(payload: Any, tz: str) -> Parsed:
-    """Read the weigh-ins (and count anything else) from either payload shape."""
+    """Read the weigh-ins and activity (and count anything else) from either payload
+    shape."""
     if not isinstance(payload, dict):
         raise PayloadError("expected a JSON object")
     parsed = Parsed()
@@ -178,19 +239,48 @@ def parse(payload: Any, tz: str) -> Parsed:
                 continue
             name = str(metric.get("name", "")).strip()
             readings = _items(metric.get("data"))
-            if metric_key(name) in WEIGHT_METRICS:
+            key = metric_key(name)
+            if key in WEIGHT_METRICS:
                 for item in readings:
                     _weight(parsed, item, metric.get("units"), tz)
+            elif key in ACTIVITY_METRICS:
+                for item in readings:
+                    _activity(parsed, ACTIVITY_METRICS[key], item, metric.get("units"), tz)
             else:
                 parsed.ignored[name or "?"] = parsed.ignored.get(name or "?", 0) + len(readings)
         for other in ("workouts", "stateOfMind", "ecg", "symptoms"):
             if items := _items(data.get(other)):
                 parsed.ignored[other] = parsed.ignored.get(other, 0) + len(items)
-    elif "weight" in payload:  # simple
-        for item in _items(payload["weight"]):
-            _weight(parsed, item, None, tz)
-    else:
-        raise PayloadError("no readings found: expected data.metrics or weight")
+    else:  # simple: lists of readings, or a Shortcut's flat fields
+        found = False
+        for name, value in payload.items():
+            key = metric_key(str(name))
+            if isinstance(value, dict | list):
+                if key in WEIGHT_METRICS:
+                    for item in _items(value):
+                        _weight(parsed, item, None, tz)
+                elif key in ACTIVITY_METRICS:
+                    for item in _items(value):
+                        _activity(parsed, ACTIVITY_METRICS[key], item, None, tz)
+                else:
+                    continue
+            elif key in FLAT_ACTIVITY or key in FLAT_WEIGHT:
+                if _blank(value):  # a Shortcut sends "" when Health has none today
+                    found = True
+                    continue
+                value = value.replace(",", "") if isinstance(value, str) else value
+                if key in FLAT_WEIGHT:
+                    item = {"date": payload.get("weight_date"), "value": value}
+                    _weight(parsed, item, FLAT_WEIGHT[key], tz)
+                else:
+                    metric, unit = FLAT_ACTIVITY[key]
+                    item = {"date": payload.get("date"), "value": value}
+                    _activity(parsed, metric, item, unit, tz)
+            else:
+                continue
+            found = True
+        if not found:
+            raise PayloadError("no readings found: expected data.metrics, weight or steps")
     return parsed
 
 
@@ -231,22 +321,26 @@ def add_routes(server: MCPServer, settings: Settings) -> None:
         except (ValueError, PayloadError) as e:  # JSONDecodeError is a ValueError
             return _error(str(e) if isinstance(e, PayloadError) else "body is not JSON", 400)
         with closing(db.connect(settings.db_path, user_id)) as conn:
-            counts = store.add_weights(conn, parsed.weights.items(), "health")
+            weights = store.add_weights(conn, parsed.weights.items(), "health")
+            activity = store.add_activity(
+                conn, ((m, start, qty) for (m, start), qty in parsed.activity.items())
+            )
         log.info(
-            "ingest for user %d: weights %d added, %d updated, %d unchanged; %d rejected",
+            "ingest for user %d: weights %d added, %d updated, %d unchanged;"
+            " activity %d added, %d updated, %d unchanged; %d rejected",
             user_id,
-            counts.added,
-            counts.updated,
-            counts.unchanged,
+            weights.added,
+            weights.updated,
+            weights.unchanged,
+            activity.added,
+            activity.updated,
+            activity.unchanged,
             parsed.rejected,
         )
         return JSONResponse(
             {
-                "weights": {
-                    "added": counts.added,
-                    "updated": counts.updated,
-                    "unchanged": counts.unchanged,
-                },
+                "weights": asdict(weights),
+                "activity": asdict(activity),
                 "rejected": parsed.rejected,
                 "problems": parsed.problems,
                 "ignored": parsed.ignored,

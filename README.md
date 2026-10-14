@@ -240,29 +240,78 @@ dashboard is the same address; their password opens their log. To change someone
 If they use ChatGPT, their connector gets its own callback URL, which must be added to
 `CONNECTOR_CALLBACKS` in `chomp/auth.py` first (see "Add the ChatGPT connector").
 
-### 9. Send weight from your iPhone (Apple Health)
+### 9. Send weight and activity from your iPhone (Apple Health)
 
-A smart scale that writes to Apple Health (VeSync does) can reach Chomp on its own: an iPhone
-app posts new readings to `https://chomp.<your-domain>/ingest/health`. Make each person's
-token on the server; it is shown once, and running it again replaces the old one:
+Apple Health has no web API, so an iPhone Shortcut reads it and posts to
+`https://chomp.<your-domain>/ingest/health`: your latest weigh-in (a scale like VeSync writes
+it to Health) and today's steps, active and resting energy, exercise minutes, walking +
+running distance and flights climbed. First make each person's token on the server; it is
+shown once, and running it again replaces the old one:
 
 ```bash
 docker compose exec chomp chomp user ingest-token Will
 docker compose exec chomp chomp user ingest-token Will --revoke   # stop accepting it
 ```
 
-The token can only add that person's health data; it opens nothing else. Then on that
-person's iPhone, pick one:
+The token can only add that person's health data; it opens nothing else. Keep it in a
+password manager, not in chat. Then build the Shortcut on that person's iPhone, in the
+**Shortcuts** app (built in, free). Tap **+** at the top right, name it `Send to Chomp`, and
+add these actions in order (type each action's name in the search box at the bottom):
 
-- **Health Auto Export**: add a REST API automation with the URL above, JSON format, the
-  Weight & Body Mass metric, and a header `Authorization` = `Bearer <token>`.
-- **iOS Shortcut**: find the latest Weight samples, build
-  `{"weight": [{"date": "<ISO 8601 date>", "value": <number>, "unit": "lb"}]}`, and send it
-  with Get Contents of URL (POST, same header), from a daily personal automation.
+1. **Find Health Samples**. Tap *Type* and pick *Weight*. Turn on *Sort by* *Start Date*,
+   *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*. Tap the output under
+   the action (*Health Samples*) and rename it `Weight`.
+2. **Format Date**. Tap *Date*, pick the `Weight` variable, then tap it again and choose
+   *Start Date*. Set *Date Format* to *ISO 8601* and turn on *Include ISO 8601 Time*. Rename
+   its output `Weighed`.
+3. **Find Health Samples** again, *Type* *Steps*. Tap *Add Filter*, set it to *Start Date*
+   *is today*, and set *Group By* to *Day*. Rename the output `Steps`.
+4. Repeat step 3 for each of: *Active Energy* (rename it `Active`), *Resting Energy*
+   (`Resting`), *Exercise Minutes* (`Exercise`), *Walking + Running Distance* (`Distance`;
+   set its *Unit* to *mi*) and *Flights Climbed* (`Flights`). Skip any you don't care about.
+5. **Format Date**. Leave *Date* as *Current Date*, set *Date Format* to *Custom* and type
+   `yyyy-MM-dd`. Rename the output `Today`.
+6. **Get Contents of URL**. URL: `https://chomp.<your-domain>/ingest/health`. Tap the arrow
+   to show more: *Method* *POST*; under *Headers* add `Authorization` with the value
+   `Bearer ` followed by the token (one space after Bearer); *Request Body* *JSON*, and add
+   these fields (*Text* or *Number* as shown, each set to the variable, then tap the
+   variable and choose *Value* where it says so):
 
-Sending the same readings again is harmless: Chomp keeps one weigh-in per time. The reply
-says how many were added, updated or unchanged. Don't put Cloudflare Access in front of
-`/ingest` (the phone can't sign in to it). Ask Claude "what do I weigh?" to check.
+   | Field | Type | Value |
+   |---|---|---|
+   | `date` | Text | `Today` |
+   | `steps` | Number | `Steps` › Value |
+   | `active_kcal` | Number | `Active` › Value |
+   | `resting_kcal` | Number | `Resting` › Value |
+   | `exercise_min` | Number | `Exercise` › Value |
+   | `distance_mi` | Number | `Distance` › Value |
+   | `flights` | Number | `Flights` › Value |
+   | `weight_lb` | Number | `Weight` › Value |
+   | `weight_date` | Text | `Weighed` |
+
+7. Optional: **Show Result** with the *Contents of URL*, to see Chomp's answer while setting up.
+
+Tap ▶ to run it. The first time, iPhone asks to let the Shortcut read Health data and to
+connect to your Chomp address: allow both. Chomp answers with how many readings it added,
+updated or already had; the dashboard's **Activity** and **Weight** tabs show them, with when
+the phone last sent.
+
+Then make it run by itself: **Automation** tab > **+** > **App** > choose an app you open a
+few times a day (Messages, Hevy) > *Is Opened* > *Run Immediately* > pick `Send to Chomp`.
+iPhone keeps Health data locked while the phone is locked, so a time-of-day automation can
+fail at night; one that runs when you open an app always finds it unlocked. Each run sends
+today's totals so far and replaces what it sent before, so running it often is harmless.
+
+**Instead, with Health Auto Export** (an App Store app; its automations are a paid upgrade):
+add a REST API automation with the URL above, JSON format, a header `Authorization` =
+`Bearer <token>`, and the metrics you want. For activity, turn on *Summarize Data*, set *Time
+Grouping* to *Day* and leave *Date Range* on *Default* (not *Since Last Sync*, which would
+send part of a day as the whole day). Keep weight in its own automation without summarizing,
+so weigh-ins keep their times.
+
+Sending the same readings again is harmless: Chomp keeps one weigh-in per time and one total
+per day for each activity metric. Don't put Cloudflare Access in front of `/ingest` (the
+phone can't sign in to it). Ask Claude "what do I weigh?" or "how many steps today?" to check.
 
 ### 10. Import workouts from Hevy
 

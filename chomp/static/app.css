@@ -436,6 +436,7 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .chart { display: block; width: 100%; height: auto; }
 .chart .axis { stroke: var(--line); }
 .chart .bar.kcal { fill: var(--kcal); } .chart .bar.protein_g { fill: var(--protein); }
+.chart .bar.steps { fill: var(--accent); }
 .chart .target { stroke: var(--muted); stroke-dasharray: 4 3; }
 .chart .tick { fill: var(--muted); font-size: 10px; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
@@ -454,14 +455,19 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 
 /* Bottom tab bar */
 .tabs {
-  position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center;
-  background: var(--card); border-top: 1px solid var(--line);
+  position: fixed; left: 0; right: 0; bottom: 0; display: flex; overflow-x: auto;
+  background: var(--card); border-top: 1px solid var(--line); scrollbar-width: none;
   padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
+.tabs::-webkit-scrollbar { display: none; }
+/* Six tabs: they share the width, and a screen too narrow for them scrolls sideways (the
+   auto margins center them when there's room and give way when there isn't) */
 .tabs a {
-  flex: 1; max-width: 10rem; text-align: center; padding: .9rem 0; color: var(--muted);
-  text-decoration: none; font-weight: 600;
+  flex: 1 0 auto; max-width: 10rem; text-align: center; padding: .9rem .45rem;
+  color: var(--muted); text-decoration: none; font-weight: 600; font-size: .85rem;
 }
+.tabs a:first-child { margin-left: auto; }
+.tabs a:last-child { margin-right: auto; }
 .tabs a[aria-current] { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
 footer { text-align: center; padding: .5rem 0 1rem; }
 

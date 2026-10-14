@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from chomp import logic
 
 KG_PER_LB = logic.KG_PER_LB
-M_PER_MILE = 1609.344
+M_PER_MILE = logic.M_PER_MILE
 MAX_PROBLEMS = 5
 DATE_FORMATS = (
     "%d %b %Y, %H:%M",

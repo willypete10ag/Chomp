@@ -11,7 +11,7 @@ chomp/
   server.py        # MCPServer app + tool registrations, /health
   auth.py          # OAuth 2.1 server + bearer token, consent page (password picks the user)
   users.py         # users and their scrypt passwords (`chomp user add`)
-  health.py        # /ingest/health: phone posts Apple Health data (weight) with an ingest token
+  health.py        # /ingest/health: phone posts Apple Health data (weight, activity) with an ingest token
   hevy.py          # Hevy workout CSV export parser (workouts are imported, Hevy has no free API)
   cli.py           # `chomp` command: serve, backup, restore, export, user (+ ingest-token), import-hevy
   backup.py        # nightly SQLite backup with retention, restore
@@ -31,7 +31,7 @@ chomp/
   serving_fill.py  # serving sizes for used USDA generic foods from household measures
   logic.py         # per-100g math, snapshots, totals, local-day boundaries
   text.py          # word matching (plural folding) for search ranking
-  web.py           # /app web dashboard (server-rendered: Today, Foods, saved meals, recipes, goals)
+  web.py           # /app web dashboard (server-rendered: Today, History, Foods, Weight, Workouts, Activity, saved meals, recipes, goals)
   static/          # dashboard CSS, JS, icons, vendored ZXing barcode reader
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses

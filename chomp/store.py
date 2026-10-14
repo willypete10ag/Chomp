@@ -1550,3 +1550,54 @@ def delete_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:
         row = get_workout(conn, workout_id)
         conn.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
     return row
+
+
+# --- Activity (#94) -------------------------------------------------------------------------
+
+
+def add_activity(
+    conn: sqlite3.Connection, readings: Iterable[tuple[str, str, float]]
+) -> ImportCounts:
+    """Save (metric, UTC start_at, qty) activity readings for the connection's user. The
+    phone resends a bucket as it fills up (today's steps so far), so a reading for a bucket
+    already saved replaces it."""
+    user_id = user_of(conn)
+    counts = ImportCounts()
+    with transaction(conn):
+        for metric, start_at, qty in readings:
+            row = conn.execute(
+                "SELECT id, qty FROM activity WHERE user_id = ? AND metric = ? AND start_at = ?",
+                (user_id, metric, start_at),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO activity (user_id, metric, start_at, qty) VALUES (?, ?, ?, ?)",
+                    (user_id, metric, start_at, qty),
+                )
+                counts.added += 1
+            elif abs(row["qty"] - qty) > 1e-6:
+                conn.execute(
+                    "UPDATE activity SET qty = ?, updated_at = datetime('now') WHERE id = ?",
+                    (qty, row["id"]),
+                )
+                counts.updated += 1
+            else:
+                counts.unchanged += 1
+    return counts
+
+
+def activity_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:
+    """The user's activity readings starting in UTC [start, end), oldest first."""
+    return conn.execute(
+        "SELECT metric, start_at, qty FROM activity WHERE user_id = ? AND start_at >= ?"
+        " AND start_at < ? ORDER BY start_at, metric",
+        (user_of(conn), start, end),
+    ).fetchall()
+
+
+def last_activity_sync(conn: sqlite3.Connection) -> str | None:
+    """When the phone last changed the user's activity (UTC storage format), or None."""
+    row = conn.execute(
+        "SELECT max(updated_at) FROM activity WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()
+    return row[0].replace(" ", "T") + "Z" if row[0] else None

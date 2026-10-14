@@ -68,7 +68,7 @@ def test_parse_time_names_the_field():
 
 
 def test_parses_health_auto_export():
-    steps = {"name": "step_count", "units": "count", "data": [{"date": "x", "qty": 1}] * 3}
+    steps = {"name": "heart_rate", "units": "count/min", "data": [{"date": "x", "qty": 1}] * 3}
     parsed = health.parse(
         hae(
             ("2026-10-13 07:02:11 -0400", 182.4),
@@ -81,7 +81,7 @@ def test_parses_health_auto_export():
         "2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3),
         "2026-10-14T10:58:00Z": pytest.approx(82.509, abs=1e-3),
     }
-    assert parsed.ignored == {"step_count": 3} and parsed.rejected == 0
+    assert parsed.ignored == {"heart_rate": 3} and parsed.rejected == 0
 
 
 def test_weight_metric_names_match_loosely():
@@ -208,7 +208,7 @@ def test_ingest_rejects_bad_bodies(http, token, monkeypatch):
     auth = {"Authorization": f"Bearer {token}"}
     r = http.post(health.PATH, content=b"{not json", headers=auth)
     assert r.status_code == 400 and r.json() == {"error": "body is not JSON"}
-    r = http.post(health.PATH, json={"steps": 3}, headers=auth)
+    r = http.post(health.PATH, json={"sleep": 3}, headers=auth)
     assert r.status_code == 400 and "no readings" in r.json()["error"]
     monkeypatch.setattr(health, "MAX_BODY", 100)
     big = {"weight": [{"date": "2026-10-13T07:00", "value": 80, "unit": "kg"}] * 20}

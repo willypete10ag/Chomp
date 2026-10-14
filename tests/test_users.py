@@ -88,7 +88,7 @@ def test_migration_gives_existing_data_to_the_owner(tmp_path):
             " VALUES ('x', '{}', '{}', 1)"
         )
     with closing(db.open_db(path, SCHEMA, MIGRATIONS, users.OWNER_ID)) as conn:
-        assert db.schema_version(conn) == 14
+        assert db.schema_version(conn) == 15
         # Rebuilding meals and meal_templates must not cascade into their children
         assert [e.grams for e in store.meal_entries(conn, 7)] == [100]
         assert store.get_template(conn, "usual")[1][0]["grams"] == 50
