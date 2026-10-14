@@ -434,6 +434,9 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .chart .bar.kcal { fill: var(--kcal); } .chart .bar.protein_g { fill: var(--protein); }
 .chart .target { stroke: var(--muted); stroke-dasharray: 4 3; }
 .chart .tick { fill: var(--muted); font-size: 10px; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.chart .dot { fill: var(--accent); }
+.big.weight { font-size: 2rem; }
 
 /* Bottom tab bar */
 .tabs {

@@ -47,7 +47,11 @@ time; tapping the calories or a macro opens that day's Breakdown at `/app/breakd
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
 nutrition facts, where tapping a nutrient lists the foods that gave the most; a food with no
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
-out), History (7/30/90-day averages and inline-SVG charts; each day links to its Breakdown)
+out), History (7/30/90-day averages and inline-SVG charts; each day links to its Breakdown),
+Weight (#94, `/app/weight`, the fourth tab: the latest weigh-in in lb, the change over 30 days,
+90 days or a year, an inline-SVG line of each weighed day's last weigh-in, an Add a weigh-in
+form (lb, time, date), and every weigh-in in the range with where it came from, swiped left to
+delete after asking; a minimal page, expected to move in a wider health redesign)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
 (most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
@@ -194,7 +198,9 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   `health` from the phone, `chat` from `log_weight`, `app` reserved for the dashboard). Stored in
   kg; `logic.to_kg` / `logic.weight_out` convert (lb to 0.1, kg to 0.01). One weigh-in per
   person per second: saving another at the same time replaces it, which de-duplicates the
-  phone's repeated sends.
+  phone's repeated sends. Deleting one (tool or Weight page) keeps the row with `deleted = 1`,
+  so the phone resending it doesn't bring it back; saving the same time from chat or the
+  page does.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
   iPhone posts readings to `POST /ingest/health`, either Health Auto Export's REST automation
   JSON (`data.metrics[]`, weight as `weight_body_mass` in lb or kg, dates like

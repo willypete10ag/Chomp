@@ -2,13 +2,15 @@
 -- Apple Health readings to /ingest/health (decided on #101).
 
 -- One weigh-in. Stored in kg; tools and pages convert. A phone resending the same reading
--- (same person and second) updates it instead of adding a duplicate.
+-- (same person and second) updates it instead of adding a duplicate. A deleted weigh-in is
+-- kept with deleted = 1 so the phone's next resend doesn't bring it back.
 CREATE TABLE weights (
     id           INTEGER PRIMARY KEY,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     measured_at  TEXT NOT NULL,                               -- UTC ISO 8601, second precision
     kg           REAL NOT NULL CHECK (kg > 0 AND kg < 700),
     source       TEXT NOT NULL CHECK (source IN ('health', 'chat', 'app')),
+    deleted      INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, measured_at)
 );

@@ -1456,7 +1456,8 @@ def build_server(
         weight_id: Annotated[int, Field(description="weight_id from get_weight")],
     ) -> Weight:
         """Delete one of the user's weigh-ins, only when they ask (a wrong reading, someone
-        else stepped on the scale). Returns the deleted weigh-in."""
+        else stepped on the scale). It stays deleted even if their phone sends it again.
+        Returns the deleted weigh-in."""
         with tool_errors(), connect() as conn:
             return _weight(store.delete_weight(conn, weight_id), tz)
 

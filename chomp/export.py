@@ -182,7 +182,7 @@ def to_json(
             }
             for w in _dicts(
                 conn,
-                "SELECT measured_at, kg, source FROM weights WHERE user_id = ?"
+                "SELECT measured_at, kg, source FROM weights WHERE user_id = ? AND NOT deleted"
                 " AND measured_at >= ? AND measured_at < ? ORDER BY measured_at",
                 (user_id, lo, hi),
             )

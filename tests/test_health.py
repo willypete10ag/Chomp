@@ -250,3 +250,18 @@ def test_users_cannot_delete_each_others_weights(settings, conn):
         row = store.add_weight(hers, "2026-10-13T11:00:00Z", 60, "app")
     with pytest.raises(store.NotFound):
         store.delete_weight(conn, row["id"])
+
+
+def test_deleted_weigh_in_stays_deleted_when_the_phone_resends(http, conn, token):
+    payload = hae(("2026-10-13 07:00:00 -0400", 250))  # someone else on the scale
+    post(http, payload, token)
+    row = store.latest_weight(conn)
+    store.delete_weight(conn, row["id"])
+    r = post(http, payload, token)
+    assert r.json()["weights"] == {"added": 0, "updated": 0, "unchanged": 1}
+    assert store.latest_weight(conn) is None
+    with pytest.raises(store.NotFound):
+        store.delete_weight(conn, row["id"])
+    # Logged on purpose (chat or the app), the same time comes back
+    store.add_weight(conn, "2026-10-13T11:00:00Z", 110, "chat")
+    assert store.latest_weight(conn)["kg"] == 110
