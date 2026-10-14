@@ -1023,10 +1023,16 @@
       clearTimeout(dbTimer);
       dbTimer = setTimeout(function () {
         var q = dbBox.value.trim();
-        if (q === dbCurrent || q.length < 3) return;
+        if (q === dbCurrent) return;
         dbCurrent = q;
         var mine = ++dbAsked;
         if (dbPending) dbPending.abort();
+        dbPending = null;
+        if (q.length < 3) {
+          // Too short to search: an answer still on its way, or shown, is for other words
+          dbResults.innerHTML = "";
+          return;
+        }
         dbPending = window.AbortController ? new AbortController() : null;
         var url = dbForm.action + "?" + new URLSearchParams({ q: q }).toString();
         fetch(url + "&part=usda", {
