@@ -209,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"{counts.added} workouts added, {counts.updated} updated,"
                 f" {counts.unchanged} already there; {parsed.rejected} rows skipped"
+                + (f" ({parsed.incomplete} workouts left out)" if parsed.incomplete else "")
             )
             for problem in parsed.problems:
                 print(f"  {problem}")

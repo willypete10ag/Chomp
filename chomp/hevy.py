@@ -5,7 +5,8 @@ CSV it exports (Profile > Settings > Export & Import Data > Export Workouts): on
     set_index, set_type, weight_lbs, reps, distance_miles, duration_seconds, rpe
 
 (weight_kg and distance_km instead with metric units). Times are local, like "13 Oct 2026,
-07:15". Rows are grouped into workouts by title and start time. Pure parsing; no I/O.
+07:15". Rows are grouped into workouts by title and start time; a workout with a bad row is left
+out whole, so it never replaces a complete copy saved before. Pure parsing; no I/O.
 """
 
 from __future__ import annotations
@@ -64,7 +65,8 @@ class Workout:
 @dataclass
 class Parsed:
     workouts: list[Workout] = field(default_factory=list)
-    rejected: int = 0
+    rejected: int = 0  # bad rows
+    incomplete: int = 0  # workouts left out because one of their rows was bad
     problems: list[str] = field(default_factory=list)
 
     def reject(self, line: int, problem: str) -> None:
@@ -134,48 +136,59 @@ def parse(data: bytes | str, tz: str) -> Parsed:
 
     parsed = Parsed()
     by_key: dict[tuple[str, str], Workout] = {}
+    broken: set[tuple[str, str]] = set()  # workouts with a bad row: left out whole
     counters: dict[tuple[tuple[str, str], str], int] = {}
     for line, row in enumerate(reader, start=2):
+        key = None
         try:
             title = _text(row.get("title")) or "Workout"
             started = parse_time(row.get("start_time") or "", tz)
+            key = (started, title)
             exercise = _text(row.get("exercise_title"))
             if exercise is None:
                 raise ValueError("no exercise")
-            key = (started, title)
-            workout = by_key.get(key)
-            if workout is None:
-                end = _text(row.get("end_time"))
-                workout = Workout(
-                    started_at=started,
-                    title=title,
-                    ended_at=parse_time(end, tz) if end else None,
-                    description=_text(row.get("description")),
-                )
-                by_key[key] = workout
+            end = _text(row.get("end_time"))
+            ended = parse_time(end, tz) if end else None
             set_type = (_text(row.get("set_type")) or "normal").lower()
             weight = _number(row.get(weight_col))
             distance = _number(row.get(distance_col))
             index = _int(row.get("set_index"))
-            if index is None:  # number sets per exercise in file order
-                index = counters.get((key, exercise), 0)
-            counters[(key, exercise)] = index + 1
-            workout.sets.append(
-                WorkoutSet(
-                    exercise=exercise,
-                    set_index=index,
-                    set_type=set_type if set_type in SET_TYPES else "normal",
-                    weight_kg=None if weight is None else weight * weight_factor,
-                    reps=_int(row.get("reps")),
-                    distance_m=None if distance is None else distance * distance_factor,
-                    duration_s=_number(row.get("duration_seconds")),
-                    rpe=_number(row.get("rpe")),
-                    superset_id=_int(row.get("superset_id")),
-                    exercise_notes=_text(row.get("exercise_notes")),
-                )
+            one = WorkoutSet(
+                exercise=exercise,
+                set_index=0,
+                set_type=set_type if set_type in SET_TYPES else "normal",
+                weight_kg=None if weight is None else weight * weight_factor,
+                reps=_int(row.get("reps")),
+                distance_m=None if distance is None else distance * distance_factor,
+                duration_s=_number(row.get("duration_seconds")),
+                rpe=_number(row.get("rpe")),
+                superset_id=_int(row.get("superset_id")),
+                exercise_notes=_text(row.get("exercise_notes")),
             )
         except ValueError as e:
             parsed.reject(line, str(e))
+            if key is not None:
+                broken.add(key)
+            continue
+        if index is None:  # number sets per exercise in file order
+            index = counters.get((key, exercise), 0)
+        counters[(key, exercise)] = index + 1
+        one.set_index = index
+        workout = by_key.get(key)
+        if workout is None:
+            workout = Workout(
+                started_at=started,
+                title=title,
+                ended_at=ended,
+                description=_text(row.get("description")),
+            )
+            by_key[key] = workout
+        workout.sets.append(one)
+    # A workout missing a set would replace a complete one saved earlier, so it waits for a
+    # clean export instead
+    parsed.incomplete = len(broken)
+    for key in broken:
+        by_key.pop(key, None)
     parsed.workouts = sorted(by_key.values(), key=lambda w: w.started_at)
     if not parsed.workouts and not parsed.rejected:
         raise HevyError("the export has no workouts in it")

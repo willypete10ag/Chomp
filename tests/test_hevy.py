@@ -49,13 +49,25 @@ def test_metric_exports_and_bad_rows():
         + '"Pull","1 Oct 2026, 18:00","1 Oct 2026, 19:00","","Row",,,0,"normal",80,8,,,\n'
         + '"Pull","1 Oct 2026, 18:00","1 Oct 2026, 19:00","","Run",,,0,"normal",,,5,1500,\n'
         + '"Pull","yesterday","","","Row",,,1,"normal",80,8,,,\n'
-        + '"Pull","1 Oct 2026, 18:00","","","Row",,,2,"normal",-5,8,,,\n'
-        + '"Pull","1 Oct 2026, 18:00","","","",,,3,"normal",80,8,,,\n'
+        + '"Legs","2 Oct 2026, 18:00","","","Squat",,,0,"normal",100,5,,,\n'
+        + '"Legs","2 Oct 2026, 18:00","","","Squat",,,1,"normal",-5,8,,,\n'
+        + '"Legs","2 Oct 2026, 18:00","","","",,,2,"normal",80,8,,,\n'
     )
     parsed = hevy.parse(text, TZ)
-    (pull,) = parsed.workouts
+    (pull,) = parsed.workouts  # Legs has bad rows, so it's left out whole
     assert pull.sets[0].weight_kg == 80 and pull.sets[1].distance_m == 5000
-    assert parsed.rejected == 3 and parsed.problems[0].startswith("row 4:")
+    assert parsed.rejected == 3 and parsed.incomplete == 1
+    assert parsed.problems[0].startswith("row 4:")
+
+
+def test_a_workout_with_a_bad_row_never_replaces_a_saved_one(conn):
+    store.import_workouts(conn, hevy.parse(CSV, TZ).workouts, "hevy")
+    broken = CSV.replace(b'"normal",185,6,,,8.5', b'"normal",oops,6,,,8.5')
+    parsed = hevy.parse(broken, TZ)
+    assert [w.title for w in parsed.workouts] == ["Legs"] and parsed.incomplete == 1
+    counts = store.import_workouts(conn, parsed.workouts, "hevy")
+    assert (counts.added, counts.updated, counts.unchanged) == (0, 0, 1)
+    assert conn.execute("SELECT count(*) FROM workout_sets").fetchone()[0] == 8
 
 
 def test_rejects_files_that_are_not_hevy_exports():

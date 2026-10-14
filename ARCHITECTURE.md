@@ -216,8 +216,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   `chomp import-hevy FILE [--user NAME]`. Each user's `workouts` (UTC `started_at`, title,
   description) hold `workout_sets` in order (exercise, notes, superset, set index, type, kg,
   reps, metres, seconds, RPE). A workout is identified by its start time, so re-importing a
-  newer export adds new workouts, replaces changed ones and skips the rest; bad rows are
-  skipped and counted. Volume (`logic.workout_volume_kg`) is weight × reps over working sets.
+  newer export adds new workouts, replaces changed ones and skips the rest. A workout with
+  a bad row is left out whole (and counted), so it never replaces a complete saved copy. Volume (`logic.workout_volume_kg`) is weight × reps over working sets.
 - Body weight (#94, migration 0013): each user's `weights` (UTC `measured_at`, `kg`, `source`:
   `health` from the phone, `chat` from `log_weight`, `app` reserved for the dashboard). Stored in
   kg; `logic.to_kg` / `logic.weight_out` convert (lb to 0.1, kg to 0.01). One weigh-in per

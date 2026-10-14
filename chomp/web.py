@@ -4750,7 +4750,10 @@ def add_routes(
             if same:
                 extra.append(f"{same} already here")
             if skipped:
-                extra.append(f"{skipped} rows skipped")
+                extra.append(
+                    f"{skipped} skipped because a row couldn't be read; fix it in Hevy and"
+                    " export again"
+                )
             text += f" ({', '.join(extra)})." if extra else "."
             banner = toast(f"<span>{e(text)}</span>", "status")
         elif params.get("removed"):
@@ -4811,13 +4814,14 @@ def add_routes(
         with connect(request) as conn:
             counts = store.import_workouts(conn, parsed.workouts, "hevy")
         log.info(
-            "dashboard: Hevy import, %d added, %d updated, %d unchanged, %d rows skipped",
+            "dashboard: Hevy import, %d added, %d updated, %d unchanged, %d left out (%d bad rows)",
             counts.added,
             counts.updated,
             counts.unchanged,
+            parsed.incomplete,
             parsed.rejected,
         )
-        done = f"{counts.added}-{counts.updated}-{counts.unchanged}-{parsed.rejected}"
+        done = f"{counts.added}-{counts.updated}-{counts.unchanged}-{parsed.incomplete}"
         return go(f"{WORKOUTS}?days=365&imported={done}")
 
     @server.custom_route(WORKOUTS + "/{workout_id:int}", methods=["GET"])

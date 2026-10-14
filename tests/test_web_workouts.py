@@ -65,6 +65,11 @@ def test_bad_uploads_are_refused(http, conn, monkeypatch):
     monkeypatch.setattr("chomp.web.HEVY_MAX", 100)
     page = follow(http, upload(http, CSV))
     assert "too big" in page
+    monkeypatch.setattr("chomp.web.HEVY_MAX", 20 * 1024 * 1024)
+    page = follow(http, upload(http, CSV.replace(b'"normal",225,5', b'"normal",x,5')))
+    assert "Imported 1 new workout (1 skipped because a row couldn" in page
+    assert [w["title"] for w in store.workouts_between(conn, "2026", "2027")] == ["Push Day"]
+    conn.execute("DELETE FROM workouts")
     no_origin = http.post("/app/workouts/import", files={"csv": ("w.csv", CSV, "text/csv")})
     assert no_origin.status_code == 403
     assert store.workouts_between(conn, "2026", "2027") == []
