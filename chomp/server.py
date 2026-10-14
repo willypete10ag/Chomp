@@ -476,6 +476,38 @@ class WorkoutHistory(BaseModel):
     total_workouts: int
 
 
+class ActivityAmounts(BaseModel):
+    """Activity from Apple Health. A field is null when the phone sent none of it."""
+
+    steps: int | None = None
+    active_kcal: float | None = Field(None, description="Active energy burned")
+    resting_kcal: float | None = Field(None, description="Resting (basal) energy burned")
+    burned_kcal: float | None = Field(None, description="Active + resting, when both are known")
+    exercise_min: float | None = Field(None, description="Apple exercise minutes")
+    distance_mi: float | None = Field(None, description="Walking + running distance")
+    distance_km: float | None = None
+    flights: int | None = Field(None, description="Flights of stairs climbed")
+
+
+class DayActivity(ActivityAmounts):
+    date: str
+
+
+class ActivityHistory(BaseModel):
+    start: str
+    end: str
+    per_day: list[DayActivity] = Field(
+        description="Each day with any activity, oldest first; today's is so far"
+    )
+    average_per_day: ActivityAmounts | None = Field(
+        description="Each metric's average over the range's days that have it, today left out "
+        "since it isn't over"
+    )
+    last_sync: str | None = Field(
+        description="When the phone last sent new activity (local time), even if before start"
+    )
+
+
 # --- Helpers --------------------------------------------------------------------------------
 
 
@@ -535,6 +567,27 @@ def _workout(row, sets, tz: str, exercise: str | None = None) -> WorkoutOut:
         description=row["description"],
         volume_lb=logic.weight_out(logic.workout_volume_kg(sets))["lb"],
         exercises=list(groups.values()),
+    )
+
+
+def _activity(day: dict[str, float]) -> ActivityAmounts:
+    """A day's (or an average's) activity totals, rounded for display."""
+
+    def r(metric: str, places: int = 0) -> float | None:
+        value = day.get(metric)
+        return None if value is None else round(value, places)
+
+    distance = day.get("distance_m")
+    burned = logic.burned_kcal(day)
+    return ActivityAmounts(
+        steps=None if "steps" not in day else round(day["steps"]),
+        active_kcal=r("active_kcal"),
+        resting_kcal=r("resting_kcal"),
+        burned_kcal=None if burned is None else round(burned),
+        exercise_min=r("exercise_min"),
+        distance_mi=None if distance is None else round(logic.miles(distance), 2),
+        distance_km=None if distance is None else round(distance / 1000, 2),
+        flights=None if "flights" not in day else round(day["flights"]),
     )
 
 
@@ -1575,6 +1628,47 @@ def build_server(
                 end=last.isoformat(),
                 workouts=out[:WORKOUTS_MAX],
                 total_workouts=len(out),
+            )
+
+    @server.tool(annotations=READ_ONLY)
+    def get_activity(
+        start: Annotated[
+            str | None, Field(description="First local date, YYYY-MM-DD. Omit for 7 days ago.")
+        ] = None,
+        end: Annotated[
+            str | None, Field(description="Last local date, inclusive. Omit for today.")
+        ] = None,
+    ) -> ActivityHistory:
+        """The user's daily activity from Apple Health over a date range: steps, active and
+        resting energy burned (and their sum), exercise minutes, walking + running distance
+        and flights climbed, with each metric's daily average.
+
+        Use for "how many steps today?", "how active was I this week?", or next to
+        get_totals to compare calories eaten with calories burned. The numbers are Apple
+        Health's, sent by the user's phone; report them as given. If there are none, their
+        phone isn't sending activity yet: say so rather than guessing.
+        """
+        with tool_errors(), connect() as conn:
+            last = logic.parse_local_date(end, tz)
+            first = logic.parse_local_date(start, tz) if start else last - timedelta(days=6)
+            days = logic.date_range(first, last)
+            if len(days) > WEIGHT_MAX_DAYS:
+                raise ValueError(f"range is {len(days)} days; the maximum is {WEIGHT_MAX_DAYS}")
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
+            by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
+            synced = store.last_activity_sync(conn)
+            today = logic.parse_local_date(None, tz)
+            average = logic.activity_average({d: v for d, v in by_day.items() if d != today})
+            return ActivityHistory(
+                start=first.isoformat(),
+                end=last.isoformat(),
+                per_day=[
+                    DayActivity(date=d.isoformat(), **_activity(v).model_dump())
+                    for d, v in by_day.items()
+                ],
+                average_per_day=_activity(average) if average else None,
+                last_sync=logic.local_iso(synced, tz) if synced else None,
             )
 
     @server.tool(annotations=READ_ONLY)

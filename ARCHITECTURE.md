@@ -56,7 +56,11 @@ Workouts (#94, `/app/workouts`, the fifth tab: workouts imported from Hevy over 
 days or a year with their count and pounds lifted, an Import from Hevy card (open until there
 are workouts) that takes the CSV export, and each workout's title, date, length, exercises and
 volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
-F and D, and RPE; swipe left deletes after asking)
+F and D, and RPE; swipe left deletes after asking),
+Activity (#94, `/app/activity`, the sixth tab: today's steps, active energy, exercise minutes,
+miles and flights, calories burned so far when resting energy is known, and when the phone
+last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days; the daily average over
+the range's full days; and each day's numbers, newest first)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
 (most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
@@ -179,6 +183,7 @@ local-only mode everything is the owner's.
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
 | `save_recipe` / `get_recipe` / `delete_recipe` | The user's homemade recipes (#82): ingredients from foods with grams, steps, servings it makes; returns nutrition per serving and the recipe's `food_id` for `log_entries` | `name`, `servings`, `ingredients`, `steps?` / `name?` (omit to list) / `recipe_id` |
 | `get_workouts` | Strength workouts imported from Hevy (#94) over a range (default the last 30 days, at most 60 listed), newest first, each with its exercises and sets (lb and kg, reps, set type, RPE) and volume; `exercise` narrows to workouts with a matching exercise and lists only its sets | `start?`, `end?`, `exercise?` |
+| `get_activity` | Daily activity from Apple Health (#94) over a range (default the last 7 days): steps, active and resting energy and their sum, exercise minutes, walking + running distance (mi and km), flights; each metric's daily average over full days; when the phone last sent | `start?`, `end?` |
 | `log_weight` / `get_weight` / `delete_weight` | Body weight (#94): record a weigh-in the user mentions; read weigh-ins over a range (default the last 30 days) with each day's last, the change, the average and the latest; delete a wrong one. Values in kg and lb | `weight`, `unit`, `measured_at?` / `start?`, `end?` / `weight_id` |
 
 Tool descriptions matter: they are Claude's only documentation. Each should say when to use it and that macros must come from tools, never estimates.
@@ -225,13 +230,30 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   phone's repeated sends. Deleting one (tool or Weight page) keeps the row with `deleted = 1`,
   so the phone resending it doesn't bring it back; saving the same time from chat or the
   page does.
+- Activity (#94, migration 0015): each user's `activity` readings (metric, `period`, UTC
+  `start_at` of its time bucket, `qty` in the stored unit: `steps`, `active_kcal`,
+  `resting_kcal`, `distance_m`, `exercise_min`, `flights`; `logic.to_activity` converts kJ,
+  mi, km, hours and so on). `period` is `day` for a whole day's total (the Shortcut's bare
+  date, or Health Auto Export readings that all start at local midnight) and `part` for
+  hours. A day's total in local time (`logic.activity_by_day`) is its `day` reading or the
+  sum of its parts, whichever was sent last (`updated_at`, bumped on every send, changed or
+  not), so switching between the two never adds them up. One reading per person, metric,
+  period and bucket start: the phone resends today's growing total and it replaces the last
+  one. Averages leave out today, which isn't over.
+  Burned is active + resting, only when both arrived. The numbers are Apple Health's.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
-  iPhone posts readings to `POST /ingest/health`, either Health Auto Export's REST automation
-  JSON (`data.metrics[]`, weight as `weight_&_body_mass` in lb or kg (names compared without punctuation), dates like
-  `2026-10-13 07:02:11 -0400`) or a simple `{"weight": [{"date", "value", "unit"}]}` an iOS
-  Shortcut can build (ISO 8601; no offset = `TZ`). Bad readings are skipped and reported;
-  metrics Chomp doesn't keep yet are counted under `ignored`. The reply gives added, updated
-  and unchanged counts.
+  iPhone posts readings to `POST /ingest/health`, in one of three shapes. Health Auto Export's
+  REST automation JSON (`data.metrics[]`, weight as `weight_&_body_mass` in lb or kg, activity
+  as `step_count`, `active_energy`, `basal_energy_burned`, `walking_running_distance`,
+  `apple_exercise_time`, `flights_climbed`; names compared without punctuation; dates like
+  `2026-10-13 07:02:11 -0400`). Simple lists, `{"weight": [{"date", "value", "unit"}],
+  "steps": [{"date": "2026-10-13", "value": 8123}]}` (ISO 8601, no offset = `TZ`; a bare
+  date is that day's total). Or the flat fields of the iOS Shortcut in README step 9:
+  `date` (the day) with `steps`, `active_kcal`, `resting_kcal`, `exercise_min`,
+  `distance_mi`/`distance_km`, `flights`, and `weight_lb`/`weight_kg` with `weight_date`;
+  empty fields (nothing in Health) are skipped. Bad readings are skipped and reported;
+  metrics Chomp doesn't keep are counted under `ignored`. The reply gives added, updated and
+  unchanged counts for weights and activity.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
@@ -268,7 +290,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 
 ## Backup and export
 - `chomp backup --daily` (the Compose `backup` service) copies the DB nightly at `BACKUP_AT` with SQLite's online backup API (same as `sqlite3 .backup`), integrity-checks the copy, and keeps the newest `BACKUP_KEEP` in `BACKUP_HOST_DIR`. `chomp restore FILE --yes` replaces the DB with a backup after saving the current one. Food photos are copied to `BACKUP_HOST_DIR/photos` (new and changed files only; none deleted there), and a restore keeps photos only for foods the restored database has (a food added later could otherwise hand its id, and photo, to a new food), filling gaps from the backup and moving the old folder aside.
-- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates, recipes, targets, workouts with their sets and weigh-ins. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
+- `chomp export --format csv|json [--user NAME]`: CSV is one row per entry; JSON holds foods, meals with entries, portions, templates, recipes, targets, workouts with their sets, weigh-ins and activity readings. Both cover one user (the owner by default) and take inclusive local `--start`/`--end`.
 
 ## Repo and progress tracking
 Private GitHub repo: `Chomp`. Progress lives in GitHub, not in chat history or a markdown checklist.

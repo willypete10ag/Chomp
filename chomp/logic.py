@@ -621,3 +621,88 @@ def best_set(sets: Iterable[Mapping]) -> Mapping | None:
     """The heaviest working set (most reps breaking a tie), or None without weighted sets."""
     weighted = [s for s in sets if s["set_type"] != "warmup" and s["weight_kg"] and s["reps"]]
     return max(weighted, key=lambda s: (s["weight_kg"], s["reps"]), default=None)
+
+
+# --- Activity (#94) -------------------------------------------------------------------------
+
+M_PER_MILE = 1609.344
+_KCAL = {"kcal": 1.0, "cal": 1.0, "kj": 1 / KJ_PER_KCAL}
+_COUNT = {"": 1.0, "count": 1.0}
+# Stored unit per metric, and the units a phone may send it in
+ACTIVITY_UNITS: dict[str, dict[str, float]] = {
+    "steps": {**_COUNT, "steps": 1.0},
+    "active_kcal": _KCAL,
+    "resting_kcal": _KCAL,
+    "distance_m": {"m": 1.0, "km": 1000.0, "mi": M_PER_MILE, "ft": 0.3048, "yd": 0.9144},
+    "exercise_min": {"min": 1.0, "s": 1 / 60, "sec": 1 / 60, "h": 60.0, "hr": 60.0},
+    "flights": {**_COUNT, "flights": 1.0},
+}
+ACTIVITY_METRICS = tuple(ACTIVITY_UNITS)
+# Most one reading (a day at most) can hold; more is a misread or the wrong metric
+ACTIVITY_MAX = {
+    "steps": 200_000,
+    "active_kcal": 20_000,
+    "resting_kcal": 20_000,
+    "distance_m": 500_000,
+    "exercise_min": 1440,
+    "flights": 5_000,
+}
+
+
+def to_activity(metric: str, value: float, unit: str | None) -> float:
+    """An activity reading in the metric's stored unit (steps, kcal, metres, minutes,
+    flights). Raises ValueError for unknown units or impossible values."""
+    factor = ACTIVITY_UNITS[metric].get((unit or "").strip().lower())
+    if factor is None:
+        raise ValueError(f"unknown unit {unit!r}")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"not a usable amount: {value!r}")
+    qty = value * factor
+    if qty > ACTIVITY_MAX[metric]:
+        raise ValueError(f"{value:g}{' ' + unit if unit else ''} is too much for one reading")
+    return qty
+
+
+def is_local_midnight(utc: str, tz: str) -> bool:
+    return datetime.fromisoformat(local_iso(utc, tz)).time() == time()
+
+
+def activity_by_day(rows: Iterable[Mapping], tz: str) -> dict[date, dict[str, float]]:
+    """Each local day's total per metric from (metric, period, start_at, qty, updated_at)
+    rows, in day order. A day's "part" buckets (hours) add up; a "day" reading is the whole
+    day. When a day has both for a metric (the phone switched from one to the other), the
+    kind sent most recently counts, a whole day winning a tie."""
+    sums: dict[tuple[date, str, str], list] = {}  # (day, metric, period) -> [total, newest]
+    for r in rows:
+        key = (local_date(r["start_at"], tz), r["metric"], r["period"])
+        total = sums.setdefault(key, [0.0, ""])
+        total[0] += r["qty"]
+        total[1] = max(total[1], r["updated_at"])
+    out: dict[date, dict[str, float]] = {}
+    for (day, metric, period), (qty, newest) in sorted(sums.items()):
+        other = sums.get((day, metric, "part" if period == "day" else "day"))
+        if other is not None and (other[1] > newest or (other[1] == newest and period == "part")):
+            continue
+        out.setdefault(day, {})[metric] = qty
+    return out
+
+
+def activity_average(days: Mapping[date, Mapping[str, float]]) -> dict[str, float]:
+    """Each metric's average over the days that have it."""
+    out = {}
+    for metric in ACTIVITY_METRICS:
+        values = [d[metric] for d in days.values() if metric in d]
+        if values:
+            out[metric] = sum(values) / len(values)
+    return out
+
+
+def burned_kcal(day: Mapping[str, float]) -> float | None:
+    """Active plus resting energy, when the phone sent both."""
+    if "active_kcal" in day and "resting_kcal" in day:
+        return day["active_kcal"] + day["resting_kcal"]
+    return None
+
+
+def miles(metres: float) -> float:
+    return metres / M_PER_MILE

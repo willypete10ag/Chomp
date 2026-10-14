@@ -67,6 +67,8 @@ WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here
 WORKOUTS = f"{PREFIX}/workouts"  # Workouts page (#94)
 HEVY_MAX = 20 * 1024 * 1024
 SET_MARKS = {"warmup": "W", "failure": "F", "dropset": "D"}
+ACTIVITY = f"{PREFIX}/activity"  # Activity page (#94)
+ACTIVITY_RANGES = ((7, "7 days"), (30, "30 days"), (90, "90 days"))
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
@@ -352,9 +354,15 @@ def meter(percent: float | None, kind: str, *, warn_over: bool = False, tone: st
 
 
 def bar_chart(
-    points: list[tuple[date, float | None]], target: float | None, kind: str, title: str
+    points: list[tuple[date, float | None]],
+    target: float | None,
+    kind: str,
+    title: str,
+    *,
+    link: bool = True,
 ) -> str:
-    """Inline SVG bars, one per day (a link to that day); an optional dashed target line."""
+    """Inline SVG bars, one per day (with link, a link to that day's meals); an optional
+    dashed target line."""
     w, h, top, bottom = 320, 150, 14, 18
     plot = h - top - bottom
     values = [v for _, v in points if v]
@@ -374,11 +382,11 @@ def bar_chart(
         x = i * slot + (slot - bar) / 2
         if v:
             label = f"{d.strftime('%a %b')} {d.day}: {num(v)}"
-            parts.append(
-                f'<a href="{PREFIX}?date={d.isoformat()}"><rect class="bar {kind}" x="{x:.1f}"'
-                f' y="{y(v):.1f}" width="{bar:.1f}" height="{top + plot - y(v):.1f}">'
-                f"<title>{e(label)}</title></rect></a>"
+            rect = (
+                f'<rect class="bar {kind}" x="{x:.1f}" y="{y(v):.1f}" width="{bar:.1f}"'
+                f' height="{top + plot - y(v):.1f}"><title>{e(label)}</title></rect>'
             )
+            parts.append(f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if link else rect)
         last = i == len(points) - 1
         if (len(points) - 1 - i) % step == 0 or last:
             text = d.strftime("%a")[0] if len(points) <= 7 else f"{d.month}/{d.day}"
@@ -574,6 +582,41 @@ def hevy_form(opened: bool) -> str:
     return fold("hevy", "Import from Hevy", body, opened=opened)
 
 
+def activity_bits(day: Mapping[str, float]) -> list[str]:
+    """A day's activity other than steps, as short phrases (HTML)."""
+    bits = []
+    if "active_kcal" in day:
+        bits.append(f"{num(day['active_kcal'])}{NBSP}kcal active")
+    if (burned := logic.burned_kcal(day)) is not None:
+        bits.append(f"{num(burned)}{NBSP}kcal burned")
+    if "exercise_min" in day:
+        bits.append(f"{num(day['exercise_min'])}{NBSP}min exercise")
+    if "distance_m" in day:
+        bits.append(f"{num(logic.miles(day['distance_m']), 1)}{NBSP}mi")
+    if "flights" in day:
+        flights = round(day["flights"])
+        bits.append(f"{flights}{NBSP}flight{'' if flights == 1 else 's'}")
+    return bits
+
+
+def steps_text(day: Mapping[str, float]) -> str:
+    return f"{num(day['steps'])}{NBSP}steps" if "steps" in day else "&ndash;"
+
+
+def activity_item(day: date, values: Mapping[str, float], today: date) -> str:
+    """One day in the Activity page's list: the date and steps, then the rest."""
+    bits = activity_bits(values)
+    rest = f'<div class="small muted">{" · ".join(bits)}</div>' if bits else ""
+    return (
+        f'<li><div class="row"><span>{e(day_title(day, today))}</span>'
+        f'<span class="kcal">{steps_text(values)}</span></div>{rest}</li>'
+    )
+
+
+def stat(value: str, label: str) -> str:
+    return f'<div><div class="big">{value}</div><div class="muted small">{label}</div></div>'
+
+
 # --- Pages ----------------------------------------------------------------------------------
 
 HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -596,6 +639,7 @@ NAV = (
     ("foods", "/foods", "Foods"),
     ("weight", "/weight", "Weight"),
     ("workouts", "/workouts", "Workouts"),
+    ("activity", "/activity", "Activity"),
 )
 
 
@@ -4872,6 +4916,103 @@ def add_routes(
         return go(f"{WORKOUTS}?removed=1")
 
     # --- Weight (#94) ---
+
+    @server.custom_route(ACTIVITY, methods=["GET"])
+    async def activity_view(request: Request) -> Response:
+        """Activity from Apple Health: today's steps and the rest, a bar of steps per day over
+        7, 30 or 90 days, daily averages, and each day's numbers."""
+        if not signed_in(request):
+            return to_login(request)
+        span = int_param(request.query_params.get("days")) or 7
+        if span not in dict(ACTIVITY_RANGES):
+            span = 7
+        last = today()
+        first = last - timedelta(days=span - 1)
+        lo, _ = logic.local_day_bounds(first, tz)
+        _, hi = logic.local_day_bounds(last, tz)
+        with connect(request) as conn:
+            by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
+            synced = store.last_activity_sync(conn)
+        tabs = "".join(
+            f'<a href="{ACTIVITY}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
+            for n, label in ACTIVITY_RANGES
+        )
+        parts = [f'<h1>Activity</h1><nav class="segment">{tabs}</nav>']
+        if synced is None:
+            parts.append(
+                '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
+                "Steps, energy, exercise minutes, distance and flights arrive from Apple Health"
+                " once your phone sends them (README, step 9).</p></section>"
+            )
+            return render(
+                "Activity",
+                "".join(parts),
+                "activity",
+                signed_in=provider is not None,
+                user=account(request),
+            )
+
+        now = by_day.get(last, {})
+        local = logic.local_iso(synced, tz)
+        when = datetime.fromisoformat(local)
+        sent = (
+            f"{clock(local)} today"
+            if when.date() == last
+            else f"{e(when.strftime('%a %b'))} {when.day}, {clock(local)}"
+        )
+        stats = [
+            stat(num(now.get("active_kcal")), "kcal active"),
+            stat(num(now.get("exercise_min")), "min exercise"),
+            stat(
+                num(logic.miles(now["distance_m"]), 1) if "distance_m" in now else num(None),
+                "miles",
+            ),
+            stat(num(now.get("flights")), "flights"),
+        ]
+        burned = logic.burned_kcal(now)
+        parts.append(
+            '<section class="card summary">'
+            f'<div class="big weight">{num(now.get("steps"))}</div>'
+            '<p class="muted small">steps today</p>'
+            f'<div class="grid2">{"".join(stats)}</div>'
+            + (
+                f'<p class="small">{num(burned)}{NBSP}kcal burned so far'
+                ' <span class="muted">(active + resting)</span></p>'
+                if burned is not None
+                else ""
+            )
+            + f'<p class="muted small">Last sent from your phone {sent}</p></section>'
+        )
+        days = logic.date_range(first, last)
+        if any("steps" in v for v in by_day.values()):
+            points = [(d, by_day.get(d, {}).get("steps")) for d in days]
+            title = f"Steps per day over {dict(ACTIVITY_RANGES)[span]}"
+            parts.append(
+                '<section class="card"><h2>Steps</h2>'
+                f"{bar_chart(points, None, 'steps', title, link=False)}</section>"
+            )
+        done = {d: v for d, v in by_day.items() if d != last}
+        if average := logic.activity_average(done):
+            bits = activity_bits(average)
+            parts.append(
+                '<section class="card"><div class="row"><h2>Daily average</h2>'
+                f'<span class="kcal">{steps_text(average)}</span></div>'
+                + (f'<p class="small muted">{" · ".join(bits)}</p>' if bits else "")
+                + f'<p class="small muted">Over {len(done)} full'
+                f" day{'' if len(done) == 1 else 's'} with data.</p></section>"
+            )
+        if by_day:
+            items = "".join(activity_item(d, by_day[d], last) for d in reversed(by_day))
+            parts.append(f'<section class="card"><ul class="entries">{items}</ul></section>')
+        else:
+            parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
+        return render(
+            "Activity",
+            "".join(parts),
+            "activity",
+            signed_in=provider is not None,
+            user=account(request),
+        )
 
     @server.custom_route(WEIGHT, methods=["GET", "POST"])
     async def weight_view(request: Request) -> Response:

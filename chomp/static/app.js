@@ -1058,4 +1058,11 @@
   }
 
   document.querySelectorAll("form").forEach(changed);
+
+  // On a screen too narrow for every tab the bar scrolls; keep the current one in sight
+  var tabsBar = document.querySelector(".tabs");
+  var currentTab = tabsBar && tabsBar.querySelector("[aria-current]");
+  if (currentTab && tabsBar.scrollWidth > tabsBar.clientWidth) {
+    tabsBar.scrollLeft = currentTab.offsetLeft + currentTab.offsetWidth - tabsBar.clientWidth;
+  }
 })();
