@@ -148,8 +148,15 @@ changes a meal's name, time or date or combines it with another, **Edit goals** 
 daily calories and splits them between protein, carbs and fat on one bar, and every change shows an **Undo** button. A sign-in lasts 30 days; the same
 five-wrong-passwords lockout applies.
 
+**Foods** searches your saved foods as you type. When the food isn't there, **Search
+databases** looks the same words up in USDA and Open Food Facts, and **Type it in** starts a
+new food with that name.
+
 **Foods > Add a new food** starts with **Search for a food**: it looks a name up in USDA
 FoodData Central (including dishes as eaten, like "chicken burrito") and Open Food Facts.
+The plain food leads (plain chicken breast before nuggets, fluid milk before powders) unless
+you name the brand or preparation, each result is tagged Raw, Cooked or Breaded when its name
+says so, and a food you already have is marked **In your foods** and just opens.
 Tap a result to add it to your foods and open its page; a USDA food counts as confirmed, an
 Open Food Facts one stays unconfirmed (amber) until you check it against the label. It also
 adds a food three ways, all ending in the same form: scan its

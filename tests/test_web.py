@@ -432,9 +432,9 @@ def test_foods_and_templates(http, conn, logged):
     assert "Nicknames" not in r.text
     assert "Clear" in r.text
     r = http.get("/app/foods", params={"q": "breakfast"})
-    assert "Usual breakfast" not in r.text and "Nothing matches" in r.text
+    assert "Usual breakfast" not in r.text and "Nothing in your foods matches" in r.text
     r = http.get("/app/foods", params={"q": "zzz"})
-    assert "Nothing matches" in r.text
+    assert "Nothing in your foods matches" in r.text
     r = http.get("/app/foods", params={"q": "<script>"})
     assert "<script>" not in r.text and "&lt;script&gt;" in r.text
 

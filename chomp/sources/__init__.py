@@ -26,3 +26,4 @@ class FoodRecord:
     serving_desc: str | None = None
     flags: list[str] = field(default_factory=list)
     image_url: str | None = None  # product photo (OFF only), for the food's picture (#74)
+    same_as: int = 0  # other listings of this product a search grouped into it (#97)

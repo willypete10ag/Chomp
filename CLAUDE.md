@@ -22,6 +22,7 @@ chomp/
     fdc.py         # USDA FoodData Central client
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
+    rank.py        # search hit ranking, weak-match trimming and grouping (FDC and OFF)
   barcode.py       # barcode chain (saved -> FDC -> OFF), shared by the tool and dashboard
   label.py         # nutrition label photo OCR (tesseract) and its text parser
   photos.py        # food photos: files, Open Food Facts fill and backfill

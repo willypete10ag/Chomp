@@ -11,8 +11,8 @@ from typing import Any
 
 import httpx
 
-from chomp import logic, text
-from chomp.sources import FoodRecord, SourceError
+from chomp import logic
+from chomp.sources import FoodRecord, SourceError, rank
 from chomp.sources import gtin as gtins
 from chomp.sources.http import TTLCache, get_json
 
@@ -199,8 +199,10 @@ class OFFClient:
         return None
 
     async def search(self, query: str, limit: int) -> list[FoodRecord]:
-        """Products whose name matches `query`, best word match first, up to `limit`.
-        Products without usable per-100 g nutrition are dropped. Raises SourceError."""
+        """Products whose name matches `query`, ranked and grouped like USDA's hits
+        (`rank.rank`), up to `limit`. OFF matches on more than the name, so products whose
+        name and brand have none of the query's words are dropped, as are products without
+        usable per-100 g nutrition. Raises SourceError."""
         key = ("search", query.lower(), limit)
         cached = self._cache.get(key)
         if cached is not None:
@@ -228,15 +230,7 @@ class OFFClient:
             rec = to_record(product, gtins.lenient(str(product["code"])))
             if rec is not None:
                 records.append(rec)
-        order = {id(r): i for i, r in enumerate(records)}
-        records.sort(
-            key=lambda r: (
-                -text.match_score(query, f"{r.name} {r.brand or ''}"),
-                -text.head_score(query, r.name),
-                order[id(r)],
-            )
-        )
-        records = records[:limit]
+        records = rank.rank(query, records, limit)
         self._cache.put(key, records)
         return records
 

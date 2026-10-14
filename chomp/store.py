@@ -321,6 +321,22 @@ USED_FOOD = (
     " OR EXISTS (SELECT 1 FROM portions p WHERE p.food_id = f.id)"
     " OR EXISTS (SELECT 1 FROM meal_template_items t WHERE t.food_id = f.id))"
 )
+
+
+def used_food_ids(conn: sqlite3.Connection, food_ids: Iterable[int]) -> set[int]:
+    """Which of these foods are in Foods (USED_FOOD), not just a cached search hit (#97)."""
+    ids = list(dict.fromkeys(food_ids))
+    if not ids:
+        return set()
+    marks = ", ".join("?" * len(ids))
+    return {
+        r[0]
+        for r in conn.execute(
+            f"SELECT f.id FROM foods f WHERE f.id IN ({marks}) AND {USED_FOOD}", ids
+        )
+    }
+
+
 # How many of this user's entries log the food, as column `uses` (one ? for the user id)
 USES = (
     "(SELECT count(*) FROM entries e JOIN meals m ON m.id = e.meal_id"

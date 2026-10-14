@@ -45,6 +45,10 @@ def head_score(query: str, name: str) -> float:
     if not lead:
         return 0.0
     wanted = {stem(w) for w in words(query)}
+    if "," not in name and lead[-1] in wanted:
+        # A product name without commas ends with what it is ("Semi skimmed milk", but
+        # "Milk chocolate"), so ending with a word asked for counts as leading with it (#97)
+        return 1.0
     return sum(w in wanted for w in lead) / len(lead)
 
 
