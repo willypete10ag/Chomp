@@ -1411,3 +1411,142 @@ def delete_weight(conn: sqlite3.Connection, weight_id: int) -> sqlite3.Row:
             raise NotFound(f"no weigh-in {weight_id}")
         conn.execute("UPDATE weights SET deleted = 1 WHERE id = ?", (weight_id,))
     return row
+
+
+# --- Workouts (#94) -------------------------------------------------------------------------
+
+SET_COLS = (
+    "position, exercise, exercise_notes, superset_id, set_index, set_type, weight_kg, reps,"
+    " distance_m, duration_s, rpe"
+)
+WORKOUT_COLS = "id, started_at, ended_at, title, description, source"
+
+
+@dataclass
+class ImportCounts:
+    added: int = 0
+    updated: int = 0
+    unchanged: int = 0
+
+
+def _set_rows(workout) -> list[tuple]:
+    return [
+        (
+            i,
+            s.exercise,
+            s.exercise_notes,
+            s.superset_id,
+            s.set_index,
+            s.set_type,
+            s.weight_kg,
+            s.reps,
+            s.distance_m,
+            s.duration_s,
+            s.rpe,
+        )
+        for i, s in enumerate(workout.sets)
+    ]
+
+
+def _same(a: tuple, b: tuple) -> bool:
+    return all(
+        abs(x - y) < 1e-6 if isinstance(x, float) and isinstance(y, float) else x == y
+        for x, y in zip(a, b, strict=True)
+    )
+
+
+def import_workouts(conn: sqlite3.Connection, workouts: Iterable, source: str) -> ImportCounts:
+    """Save parsed workouts (hevy.Workout) for the connection's user. A workout already saved
+    at the same start time is replaced, so importing a newer export of the same history
+    only adds what's new."""
+    user_id = user_of(conn)
+    counts = ImportCounts()
+    with transaction(conn):
+        for w in workouts:
+            rows = _set_rows(w)
+            head = (w.ended_at, w.title, w.description)
+            old = conn.execute(
+                "SELECT id, ended_at, title, description FROM workouts"
+                " WHERE user_id = ? AND started_at = ?",
+                (user_id, w.started_at),
+            ).fetchone()
+            if old is not None:
+                old_rows = [
+                    tuple(r)
+                    for r in conn.execute(
+                        f"SELECT {SET_COLS} FROM workout_sets WHERE workout_id = ?"
+                        " ORDER BY position",
+                        (old["id"],),
+                    )
+                ]
+                same_sets = len(old_rows) == len(rows) and all(
+                    _same(a, b) for a, b in zip(old_rows, rows, strict=True)
+                )
+                if same_sets and tuple(old)[1:] == head:
+                    counts.unchanged += 1
+                    continue
+                conn.execute(
+                    "UPDATE workouts SET ended_at = ?, title = ?, description = ? WHERE id = ?",
+                    (*head, old["id"]),
+                )
+                conn.execute("DELETE FROM workout_sets WHERE workout_id = ?", (old["id"],))
+                workout_id = old["id"]
+                counts.updated += 1
+            else:
+                workout_id = conn.execute(
+                    "INSERT INTO workouts (user_id, started_at, ended_at, title, description,"
+                    " source) VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, w.started_at, *head, source),
+                ).lastrowid
+                counts.added += 1
+            conn.executemany(
+                f"INSERT INTO workout_sets (workout_id, {SET_COLS})"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(workout_id, *r) for r in rows],
+            )
+    return counts
+
+
+def workouts_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:
+    """The user's workouts starting in UTC [start, end), newest first."""
+    return conn.execute(
+        f"SELECT {WORKOUT_COLS} FROM workouts WHERE user_id = ? AND started_at >= ?"
+        " AND started_at < ? ORDER BY started_at DESC",
+        (user_of(conn), start, end),
+    ).fetchall()
+
+
+def get_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        f"SELECT {WORKOUT_COLS} FROM workouts WHERE id = ? AND user_id = ?",
+        (workout_id, user_of(conn)),
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"no workout {workout_id}")
+    return row
+
+
+def workout_sets(conn: sqlite3.Connection, workout_ids: Iterable[int]) -> dict[int, list]:
+    """Each workout's sets in order, keyed by workout id. Callers pass ids they already read
+    for this user (workouts_between, get_workout)."""
+    ids = list(workout_ids)
+    out: dict[int, list] = {i: [] for i in ids}
+    for chunk in range(0, len(ids), 500):
+        part = ids[chunk : chunk + 500]
+        marks = ", ".join("?" * len(part))
+        for r in conn.execute(
+            f"SELECT workout_id, {SET_COLS} FROM workout_sets WHERE workout_id IN ({marks})"
+            " ORDER BY workout_id, position",
+            part,
+        ):
+            out[r["workout_id"]].append(r)
+    return out
+
+
+def delete_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:
+    """Delete one of the user's workouts and its sets; returns it. Importing an export that
+    still has it brings it back."""
+    with transaction(conn):
+        row = get_workout(conn, workout_id)
+        conn.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
+    return row

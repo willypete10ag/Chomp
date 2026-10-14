@@ -91,8 +91,8 @@ def _dicts(conn: sqlite3.Connection, sql: str, params=()) -> list[dict]:
 def to_json(
     conn: sqlite3.Connection, tz: str, start: date | None = None, end: date | None = None
 ) -> dict:
-    """Everything in the log as plain data. A date range limits meals and weigh-ins; foods,
-    portions, templates, recipes and targets are always included in full."""
+    """Everything in the log as plain data. A date range limits meals, workouts and
+    weigh-ins; foods, portions, templates, recipes and targets are always included in full."""
     lo, hi = _bounds(start, end, tz)
     meals: dict[int, dict] = {}
     for r in _entries(conn, lo, hi):
@@ -174,6 +174,7 @@ def to_json(
         "meal_templates": templates,
         "recipes": recipes,
         "targets": dict(targets) if targets else None,
+        "workouts": _workouts(conn, user_id, lo, hi, tz),
         "weights": [
             {
                 "measured_at": logic.local_iso(w["measured_at"], tz),
@@ -188,6 +189,28 @@ def to_json(
             )
         ],
     }
+
+
+def _workouts(conn: sqlite3.Connection, user_id: int, lo: str, hi: str, tz: str) -> list:
+    out = []
+    for w in _dicts(
+        conn,
+        "SELECT id, started_at, ended_at, title, description, source FROM workouts"
+        " WHERE user_id = ? AND started_at >= ? AND started_at < ? ORDER BY started_at",
+        (user_id, lo, hi),
+    ):
+        sets = _dicts(
+            conn,
+            "SELECT exercise, exercise_notes, superset_id, set_index, set_type, weight_kg, reps,"
+            " distance_m, duration_s, rpe FROM workout_sets WHERE workout_id = ?"
+            " ORDER BY position",
+            (w.pop("id"),),
+        )
+        for key in ("started_at", "ended_at"):
+            if w[key]:
+                w[key] = logic.local_iso(w[key], tz)
+        out.append({**w, "sets": sets})
+    return out
 
 
 def write_json(

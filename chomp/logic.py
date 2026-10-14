@@ -607,3 +607,17 @@ def to_kg(value: float, unit: str) -> float:
 def weight_out(kg: float) -> dict[str, float]:
     """A weight in both units, rounded for display: kg to 0.01, lb to 0.1."""
     return {"kg": round(kg, 2), "lb": round(kg / KG_PER_LB, 1)}
+
+
+# --- Workouts (#94) -------------------------------------------------------------------------
+
+
+def workout_volume_kg(sets: Iterable[Mapping]) -> float:
+    """Total weight lifted: weight x reps over the working sets (warm-ups left out)."""
+    return sum((s["weight_kg"] or 0) * (s["reps"] or 0) for s in sets if s["set_type"] != "warmup")
+
+
+def best_set(sets: Iterable[Mapping]) -> Mapping | None:
+    """The heaviest working set (most reps breaking a tie), or None without weighted sets."""
+    weighted = [s for s in sets if s["set_type"] != "warmup" and s["weight_kg"] and s["reps"]]
+    return max(weighted, key=lambda s: (s["weight_kg"], s["reps"]), default=None)

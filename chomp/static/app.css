@@ -441,6 +441,16 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .chart .dot { fill: var(--accent); }
 .big.weight { font-size: 2rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; text-align: center; }
+.sets { list-style: none; margin: 0; padding: 0; }
+.sets li { padding: .45rem 0; border-top: 1px solid var(--line); }
+.sets li:first-child { border-top: 0; }
+.setno {
+  display: inline-block; min-width: 1.6rem; text-align: center; font-weight: 700;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.setno.warmup { color: var(--carbs-text); } .setno.failure { color: var(--over); }
+.setno.dropset { color: var(--protein); }
 
 /* Bottom tab bar */
 .tabs {

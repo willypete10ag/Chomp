@@ -77,6 +77,7 @@ ADDS = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=
 CHANGES = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
 TOTALS_MAX_DAYS = 366
 WEIGHT_MAX_DAYS = 3 * 366
+WORKOUTS_MAX = 60  # workouts listed by get_workouts; total_workouts counts them all
 
 
 # --- Output models --------------------------------------------------------------------------
@@ -442,6 +443,39 @@ class WeightHistory(BaseModel):
     latest: Weight | None = Field(description="The most recent weigh-in, even if before start")
 
 
+class WorkoutSetOut(BaseModel):
+    set_type: Literal["normal", "warmup", "failure", "dropset"]
+    weight_lb: float | None = None
+    weight_kg: float | None = None
+    reps: int | None = None
+    distance_m: float | None = None
+    duration_s: float | None = None
+    rpe: float | None = None
+
+
+class ExerciseOut(BaseModel):
+    name: str
+    notes: str | None = None
+    sets: list[WorkoutSetOut]
+
+
+class WorkoutOut(BaseModel):
+    workout_id: int
+    title: str
+    started_at: str = Field(description="Local time with offset")
+    duration_min: float | None
+    description: str | None = None
+    volume_lb: float = Field(description="Weight x reps over working sets, warm-ups left out")
+    exercises: list[ExerciseOut]
+
+
+class WorkoutHistory(BaseModel):
+    start: str
+    end: str
+    workouts: list[WorkoutOut] = Field(description="Newest first")
+    total_workouts: int
+
+
 # --- Helpers --------------------------------------------------------------------------------
 
 
@@ -465,6 +499,43 @@ def _weight(row, tz: str) -> Weight:
 
 def _change(kg: float) -> WeightChange:
     return WeightChange(**logic.weight_out(kg))
+
+
+def _workout(row, sets, tz: str, exercise: str | None = None) -> WorkoutOut:
+    """A workout with its sets grouped by exercise, in order. With `exercise`, only the
+    exercises whose name contains it."""
+    groups: dict[str, ExerciseOut] = {}
+    for s in sets:
+        if exercise and exercise.lower() not in s["exercise"].lower():
+            continue
+        group = groups.setdefault(
+            s["exercise"], ExerciseOut(name=s["exercise"], notes=s["exercise_notes"], sets=[])
+        )
+        kg = s["weight_kg"]
+        group.sets.append(
+            WorkoutSetOut(
+                set_type=s["set_type"],
+                weight_kg=None if kg is None else logic.weight_out(kg)["kg"],
+                weight_lb=None if kg is None else logic.weight_out(kg)["lb"],
+                reps=s["reps"],
+                distance_m=s["distance_m"],
+                duration_s=s["duration_s"],
+                rpe=s["rpe"],
+            )
+        )
+    minutes = None
+    if row["ended_at"]:
+        delta = logic.parse_utc(row["ended_at"]) - logic.parse_utc(row["started_at"])
+        minutes = round(delta.total_seconds() / 60)
+    return WorkoutOut(
+        workout_id=row["id"],
+        title=row["title"],
+        started_at=logic.local_iso(row["started_at"], tz),
+        duration_min=minutes,
+        description=row["description"],
+        volume_lb=logic.weight_out(logic.workout_volume_kg(sets))["lb"],
+        exercises=list(groups.values()),
+    )
 
 
 def _amounts(conn, items: list[LogItem]) -> list[tuple[int, float, bool]]:
@@ -1460,6 +1531,51 @@ def build_server(
         Returns the deleted weigh-in."""
         with tool_errors(), connect() as conn:
             return _weight(store.delete_weight(conn, weight_id), tz)
+
+    @server.tool(annotations=READ_ONLY)
+    def get_workouts(
+        start: Annotated[
+            str | None, Field(description="First local date, YYYY-MM-DD. Omit for 30 days ago.")
+        ] = None,
+        end: Annotated[
+            str | None, Field(description="Last local date, inclusive. Omit for today.")
+        ] = None,
+        exercise: Annotated[
+            str | None,
+            Field(
+                description="Only workouts with an exercise whose name contains this, e.g. "
+                "'bench press'; only that exercise's sets are listed"
+            ),
+        ] = None,
+    ) -> WorkoutHistory:
+        """The user's strength workouts (imported from Hevy) over a date range, newest first:
+        title, time, duration, volume, and each exercise's sets (weight in lb and kg, reps,
+        set type, RPE).
+
+        Use for "what did I do at the gym this week?", "what did I bench last time?" (pass
+        exercise and a wide range), or progress on a lift. Workouts arrive when the user
+        imports their Hevy export on the dashboard's Workouts page; if none are there, say
+        so rather than guessing.
+        """
+        with tool_errors(), connect() as conn:
+            last = logic.parse_local_date(end, tz)
+            first = logic.parse_local_date(start, tz) if start else last - timedelta(days=29)
+            days = logic.date_range(first, last)
+            if len(days) > WEIGHT_MAX_DAYS:
+                raise ValueError(f"range is {len(days)} days; the maximum is {WEIGHT_MAX_DAYS}")
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
+            rows = store.workouts_between(conn, lo, hi)
+            sets = store.workout_sets(conn, (r["id"] for r in rows))
+            out = [_workout(r, sets[r["id"]], tz, exercise) for r in rows]
+            if exercise:
+                out = [w for w in out if w.exercises]
+            return WorkoutHistory(
+                start=first.isoformat(),
+                end=last.isoformat(),
+                workouts=out[:WORKOUTS_MAX],
+                total_workouts=len(out),
+            )
 
     @server.tool(annotations=READ_ONLY)
     def get_totals(

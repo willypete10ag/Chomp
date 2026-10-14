@@ -4,6 +4,8 @@
     chomp backup [--daily]     back up the database now, or nightly at BACKUP_AT
     chomp restore FILE --yes   replace the database with a backup (stop the server first)
     chomp export --format csv|json [--user NAME] [--start D] [--end D] [-o FILE]
+    chomp import-hevy FILE [--user NAME]
+                               import a Hevy workout CSV export (repeats are skipped)
     chomp user list            who keeps a log here
     chomp user add NAME        add a person with their own log and password (asks for it)
     chomp user password NAME   change someone's password (signs them out everywhere)
@@ -25,7 +27,7 @@ from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
-from chomp import auth, backup, db, export, health, users
+from chomp import auth, backup, db, export, health, hevy, store, users
 from chomp.config import Settings
 
 
@@ -68,6 +70,10 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     e.add_argument("--end", type=_date, help="last local date, inclusive")
     e.add_argument("-o", "--output", help="file to write (default: standard output)")
     e.add_argument("--user", help="whose log to export (default: the owner)")
+
+    h = sub.add_parser("import-hevy", help="import a Hevy workout CSV export")
+    h.add_argument("file", help="the CSV from Hevy's Export Workouts, or - for standard input")
+    h.add_argument("--user", help="whose workouts these are (default: the owner)")
 
     u = sub.add_parser("user", help="manage the people who keep a log here")
     us = u.add_subparsers(dest="action", required=True)
@@ -190,9 +196,32 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     n = write(conn, sys.stdout, settings.tz, args.start, args.end)
             log.info("exported %d %s", n, "entries" if args.format == "csv" else "meals")
+        elif args.command == "import-hevy":
+            data = sys.stdin.buffer.read() if args.file == "-" else Path(args.file).read_bytes()
+            parsed = hevy.parse(data, settings.tz)
+            with closing(
+                db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)
+            ) as conn:
+                conn.user_id = (
+                    users.get_by_name(conn, args.user)["id"] if args.user else users.OWNER_ID
+                )
+                counts = store.import_workouts(conn, parsed.workouts, "hevy")
+            print(
+                f"{counts.added} workouts added, {counts.updated} updated,"
+                f" {counts.unchanged} already there; {parsed.rejected} rows skipped"
+            )
+            for problem in parsed.problems:
+                print(f"  {problem}")
         elif args.command == "user":
             user_command(args, settings)
-    except (auth.AuthConfigError, backup.BackupError, db.MigrationError, users.UserError) as err:
+    except (
+        auth.AuthConfigError,
+        backup.BackupError,
+        db.MigrationError,
+        hevy.HevyError,
+        users.UserError,
+        OSError,
+    ) as err:
         log.error("%s", err)
         return 1
     return 0
