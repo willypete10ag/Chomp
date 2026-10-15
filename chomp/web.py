@@ -697,6 +697,37 @@ def stat(value: str, label: str) -> str:
     return f'<div><div class="big">{value}</div><div class="muted small">{label}</div></div>'
 
 
+def activity_summary(
+    values: Mapping[str, float], label: str, so_far: str = "", note: str = ""
+) -> str:
+    """The Activity page's top card (#105): steps as the big number, then active and resting
+    energy, exercise and miles, for one day or as daily averages over a range."""
+    stats = [
+        stat(num(values.get("active_kcal")), "kcal active"),
+        stat(num(values.get("resting_kcal")), "kcal resting"),
+        stat(num(values.get("exercise_min")), "min exercise"),
+        stat(
+            num(logic.miles(values["distance_m"]), 1) if "distance_m" in values else num(None),
+            "miles",
+        ),
+    ]
+    burned = logic.burned_kcal(values)
+    return (
+        '<section class="card summary">'
+        f'<div class="big weight">{num(values.get("steps"))}</div>'
+        f'<p class="muted small">{e(label)}</p>'
+        f'<div class="grid2">{"".join(stats)}</div>'
+        + (
+            f'<p class="small">{num(burned)}{NBSP}kcal burned{so_far}'
+            ' <span class="muted">(active + resting)</span></p>'
+            if burned is not None
+            else ""
+        )
+        + (f'<p class="small muted">{e(note)}</p>' if note else "")
+        + "</section>"
+    )
+
+
 # --- Pages ----------------------------------------------------------------------------------
 
 HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -749,19 +780,24 @@ def progress_pills(active: str) -> str:
     return f'<nav class="pills" aria-label="Progress">{links}</nav>'
 
 
-def range_control(url: str, span: int) -> str:
-    """7D 30D 60D 1Y All, the same on every Progress screen (#105)."""
+TODAY_RANGE = (1, "Today", "today")  # Activity's first choice: one day's numbers
+
+
+def range_control(url: str, span: int, with_today: bool = False) -> str:
+    """7D 30D 60D 1Y All, the same on every Progress screen (#105); Activity adds Today."""
+    choices = ((TODAY_RANGE,) if with_today else ()) + RANGES
     links = "".join(
         f'<a href="{url}?days={n}" aria-label="{words}"'
         f"{' aria-current=page' if n == span else ''}>{short}</a>"
-        for n, short, words in RANGES
+        for n, short, words in choices
     )
     return f'<nav class="segment" aria-label="Time range">{links}</nav>'
 
 
-def pick_range(value: str | None, default: int) -> int:
+def pick_range(value: str | None, default: int, with_today: bool = False) -> int:
     span = int_param(value)
-    return span if span in {n for n, *_ in RANGES} else default
+    allowed = {n for n, *_ in RANGES} | ({TODAY_RANGE[0]} if with_today else set())
+    return span if span in allowed else default
 
 
 def range_words(span: int, first: date) -> str:
@@ -5103,17 +5139,19 @@ def add_routes(
 
     @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
     async def activity_view(request: Request) -> Response:
-        """Activity from Apple Health: the latest day's steps and the rest, a bar of steps per
-        day (per week or month over long ranges), daily averages, and each day's numbers."""
+        """Activity from Apple Health. Today (the default): the latest day's steps and the
+        rest. A longer range: the daily averages over its full days, a bar of steps per day
+        (per week or month over long ranges), and each day's numbers."""
         if not signed_in(request):
             return to_login(request)
-        span = pick_range(request.query_params.get("days"), 7)
+        span = pick_range(request.query_params.get("days"), 1, with_today=True)
         last = today()
         with connect(request) as conn:
             first = (
                 first_day(store.first_activity_at(conn), last)
                 if span == 0
-                else last - timedelta(days=span - 1)
+                # Today looks back a week for the latest day with numbers
+                else last - timedelta(days=max(span, 7) - 1)
             )
             lo, _ = logic.local_day_bounds(first, tz)
             _, hi = logic.local_day_bounds(last, tz)
@@ -5122,7 +5160,7 @@ def add_routes(
         parts = [
             page_head("Progress"),
             progress_pills("activity"),
-            range_control(ACTIVITY_PAGE, span),
+            range_control(ACTIVITY_PAGE, span, with_today=True),
         ]
         if synced is None:
             parts.append(
@@ -5133,45 +5171,37 @@ def add_routes(
             )
             return progress_page(request, "Activity", "".join(parts), "steps")
 
-        # Just after midnight today is still empty: show the latest day with numbers this card
-        # shows (flights alone don't count)
-        seen = [d for d, v in by_day.items() if v.keys() & SUMMARY_METRICS]
-        shown = max(seen, default=last)
-        now = by_day.get(shown, {})
-        near = shown >= last - timedelta(days=1)  # today or yesterday
-        on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
         parts.append(
             fresh_tag(
                 f"{INTEGRATIONS}#health", "heart-pulse", "Apple Health", sent_text(synced, last)
             )
         )
-        stats = [
-            stat(num(now.get("active_kcal")), "kcal active"),
-            stat(num(now.get("resting_kcal")), "kcal resting"),
-            stat(num(now.get("exercise_min")), "min exercise"),
-            stat(
-                num(logic.miles(now["distance_m"]), 1) if "distance_m" in now else num(None),
-                "miles",
-            ),
-        ]
-        burned = logic.burned_kcal(now)
-        parts.append(
-            '<section class="card summary">'
-            f'<div class="big weight">{num(now.get("steps"))}</div>'
-            f'<p class="muted small">steps {e(on)}</p>'
-            f'<div class="grid2">{"".join(stats)}</div>'
-            + (
-                f'<p class="small">{num(burned)}{NBSP}kcal burned'
-                + (" so far" if shown == last else "")
-                + ' <span class="muted">(active + resting)</span></p>'
-                if burned is not None
-                else ""
+        if span == 1:
+            # Just after midnight today is still empty: show the latest day with numbers this
+            # card shows (flights alone don't count)
+            seen = [d for d, v in by_day.items() if v.keys() & SUMMARY_METRICS]
+            shown = max(seen, default=last)
+            near = shown >= last - timedelta(days=1)  # today or yesterday
+            on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
+            parts.append(
+                activity_summary(
+                    by_day.get(shown, {}), f"steps {on}", " so far" if shown == last else ""
+                )
             )
-            + "</section>"
-        )
+            return progress_page(request, "Activity", "".join(parts), "steps")
+
+        # A range: today is still going, so the averages are over its full days
         days = logic.date_range(first, last)
         done = {d: v for d, v in by_day.items() if d != last}
         average = logic.activity_average(done)
+        count = f"{len(done)} full day{'' if len(done) == 1 else 's'} with data"
+        parts.append(
+            activity_summary(
+                average,
+                f"steps a day {range_words(span, first)}",
+                note=f"Daily averages over {count}." if done else "No full days with data yet.",
+            )
+        )
         if any("steps" in v for v in by_day.values()):
             unit = logic.chart_unit(len(days))
             points = logic.bucket_days(((d, by_day.get(d, {}).get("steps")) for d in days), unit)
@@ -5189,15 +5219,6 @@ def add_routes(
             )
             note = "" if unit == "day" else f' <small class="muted">average by {unit}</small>'
             parts.append(f'<section class="card"><h2>Steps{note}</h2>{chart}</section>')
-        if average:
-            bits = activity_bits(average)
-            parts.append(
-                '<section class="card"><div class="row"><h2>Daily average</h2>'
-                f'<span class="kcal">{steps_text(average)}</span></div>'
-                + (f'<p class="small muted">{" · ".join(bits)}</p>' if bits else "")
-                + f'<p class="small muted">Over {len(done)} full'
-                f" day{'' if len(done) == 1 else 's'} with data.</p></section>"
-            )
         if by_day:
             # Years of an imported export would be thousands of rows: the latest 100 days
             recent = list(reversed(by_day))[:ACTIVITY_LIST_MAX]

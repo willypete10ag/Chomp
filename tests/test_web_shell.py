@@ -69,6 +69,7 @@ def test_every_progress_area_has_the_same_ranges(http):
         for n, short in ((7, "7D"), (30, "30D"), (60, "60D"), (365, "1Y")):
             assert f'href="/app/progress/{area}?days={n}"' in page and f">{short}<" in page
         assert "?days=90" not in page
+        assert ('?days=1"' in page) == (area == "activity"), area  # only Activity has Today
         assert 'aria-label="all time" aria-current=page>All<' in page, area
         assert f'href="/app/progress/{area}" aria-current=page>' in page  # its pill
 

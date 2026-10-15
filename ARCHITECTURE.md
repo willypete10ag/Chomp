@@ -66,11 +66,10 @@ Training (#94, `/app/progress/training`: workouts imported from Hevy over the ra
 count and pounds lifted, the latest workout's date, and each workout's title, date, length, exercises and
 volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
-Activity (#94, `/app/progress/activity`: today's (or, until today has numbers, the latest day's) steps, active and resting energy,
+Activity (#94, `/app/progress/activity`, whose range control starts with Today (`?days=1`, the default): today's (or, until today has numbers, the latest day's) steps, active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
-last sent; an inline-SVG bar of steps per day over the range (the week's bars show
-their counts, longer ranges a dashed daily-average line); the daily
-average over the range's full days; each day's numbers, newest first (the latest 100); the Hevy and Health import forms turn into a spinner with a seconds
+last sent; on a longer range the same tiles show daily averages over its full days, then an inline-SVG bar of steps per day over the range (the week's bars show
+their counts, longer ranges a dashed daily-average line); and each day's numbers, newest first (the latest 100); the Hevy and Health import forms turn into a spinner with a seconds
 count while they upload)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
