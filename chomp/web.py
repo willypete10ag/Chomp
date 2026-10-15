@@ -5147,12 +5147,14 @@ def add_routes(
         span = pick_range(request.query_params.get("days"), 1, with_today=True)
         last = today()
         with connect(request) as conn:
-            first = (
-                first_day(store.first_activity_at(conn), last)
-                if span == 0
-                # Today looks back a week for the latest day with numbers
-                else last - timedelta(days=max(span, 7) - 1)
-            )
+            if span == 0:
+                first = first_day(store.first_activity_at(conn), last)
+            elif span == 1:
+                # Today falls back to the latest day with numbers, however long ago
+                latest = store.latest_activity_at(conn, SUMMARY_METRICS)
+                first = min(logic.local_date(latest, tz), last) if latest else last
+            else:
+                first = last - timedelta(days=span - 1)
             lo, _ = logic.local_day_bounds(first, tz)
             _, hi = logic.local_day_bounds(last, tz)
             by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)

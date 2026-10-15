@@ -391,6 +391,13 @@ def test_activity_page_shows_yesterday_until_today_has_numbers(http, conn):
     store.add_activity(conn, [("steps", "day", midnight(3), 5000)])
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
     assert "steps on " in page and '<div class="big weight">5,000</div>' in page
+    # A phone that stopped sending weeks ago: still its latest day, not dashes for today
+    conn.execute("DELETE FROM activity")
+    store.add_activity(
+        conn, [("steps", "day", midnight(20), 7000), ("flights", "day", midnight(2), 1)]
+    )
+    page = http.get("/app/progress/activity").text.replace("\xa0", " ")
+    assert "steps on " in page and '<div class="big weight">7,000</div>' in page
 
 
 def test_activity_page_shows_today_chart_average_and_days(http, conn):
