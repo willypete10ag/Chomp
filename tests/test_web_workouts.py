@@ -80,3 +80,45 @@ def test_bad_uploads_are_refused(http, conn, monkeypatch):
     assert no_origin.status_code == 403
     assert store.workouts_between(conn, "2026", "2027") == []
     assert hevy.parse(CSV, "America/New_York").workouts  # the fixture itself is fine
+
+
+def workout_days_ago(n: int, title: str, kg: float, reps: int = 5) -> hevy.Workout:
+    from datetime import UTC, datetime, timedelta
+
+    from chomp import logic
+
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(days=n, hours=1)
+    return hevy.Workout(
+        logic.format_utc(start),
+        title,
+        logic.format_utc(start + timedelta(minutes=50)),
+        sets=[
+            hevy.WorkoutSet("Bench Press", 0, "warmup", kg / 2, 10),
+            hevy.WorkoutSet("Bench Press", 1, "normal", kg, reps),
+        ],
+    )
+
+
+def test_training_stats_volume_heat_strip_bests_and_weeks(http, conn):
+    store.import_workouts(
+        conn,
+        [
+            workout_days_ago(40, "Old push", 80),  # the previous 30 days
+            workout_days_ago(9, "Push A", 90),
+            workout_days_ago(2, "Push B", 100),
+        ],
+        "hevy",
+    )
+    sign_in(http)
+    page = http.get("/app/progress/training").text.replace("\xa0", " ")
+    assert ">Workouts<" in page and "▲" in page and "100% <span>vs prev 30D" in page
+    assert ">Average length<" in page and "50 min" in page
+    assert 'class="chart bars train"' in page and "Volume <small>by week</small>" in page
+    assert 'class="heat train"' in page and "of the last 91 days" in page
+    # Bench's best is the newest, a record over the old one, so it's marked PR
+    assert "Personal bests" in page and '<span class="badge pr">PR</span> Bench Press' in page
+    assert "220.5 lb &times; 5" in page
+    assert "This week" in page or "Last week" in page or "Week of" in page
+    assert page.count('class="swipe"') == 2  # only this range's workouts are listed
+    page = http.get("/app/progress/training?days=0").text
+    assert "vs prev" not in page and page.count('class="swipe"') == 3

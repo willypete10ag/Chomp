@@ -381,12 +381,12 @@ def test_activity_today_is_today_even_before_the_phone_sends_it(http, conn):
     sign_in(http)
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
     # Nothing sent for today yet: today at 0, not yesterday's numbers
-    assert '<div class="big weight">0</div>' in page and "steps today" in page
+    assert '<div class="display">0<span class="unit">steps' in page and "steps today" in page
     assert "9,963" not in page and "yesterday" not in page.lower()
     assert "0 kcal burned so far" in page
     store.add_activity(conn, [("steps", "day", midnight(0), 12)])
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
-    assert '<div class="big weight">12</div>' in page and "steps today" in page
+    assert '<div class="display">12<span class="unit">steps' in page
     assert "Yesterday" in http.get("/app/progress/activity?days=7").text  # still in a range
 
 
@@ -411,36 +411,57 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
     # Today, the default: just today's numbers
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
     assert 'aria-label="today" aria-current=page>Today<' in page
-    assert '<div class="big weight">2,345</div>' in page and "steps today" in page
-    assert "900</div>" in page and "kcal resting" in page
+    assert '<div class="display">2,345<span class="unit">steps' in page
+    assert ">Resting kcal<" in page and ">900<" in page
     assert "1,000 kcal burned so far" in page and "<b>Apple Health</b> ·" in page
     assert 'class="bar steps"' not in page and "Yesterday" not in page
-    # A range: the tiles are daily averages over its full days, then the chart and the days
+    # A range: the hero is the daily average over its full days, then the chart and days
     page = http.get("/app/progress/activity?days=7").text.replace("\xa0", " ")
-    assert '<div class="big weight">10,000</div>' in page and "steps a day over 7 days" in page
-    assert "Daily averages over 2 full days with data." in page and "so far" not in page
-    assert "450</div>" in page and "1,750</div>" in page  # active and resting, from yesterday
-    assert page.count('class="bar steps"') == 3 and '<a href="/app?date=' not in page
+    assert '<div class="display">10,000' in page and "steps a day over 7 days" in page
+    assert "Best day" in page and "12,000 steps" in page and "of 6 full days" in page
+    assert ">450<" in page and ">1,750<" in page  # active and resting, from yesterday
+    # Today's bar is drawn but hatched: it's still going
+    assert page.count('class="bar steps') == 3 and 'class="bar steps partial"' in page
+    assert "avg 10,000</text>" in page
     assert "Yesterday" in page and "8,000 steps" in page
-    assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi<" in page
+    assert "450 kcal active · 30 min exercise" in page
+    assert 'href="/app/progress/activity/day?date=' in page and "data-sheet" in page
     assert "flight" not in page  # kept, but not shown
-    # A week's bars show their numbers
-    assert 'text-anchor="middle">8,000</text>' in page and ">avg " not in page
     page = http.get("/app/progress/activity?days=30").text.replace("\xa0", " ")
-    assert page.count('class="bar steps"') == 4 and "over 3 full days with data." in page
-    assert '<div class="big weight">8,333</div>' in page  # the tiles follow the range
-    # longer ranges mark the daily average instead
-    assert "avg 8,333</text>" in page and 'text-anchor="middle">8,000</text>' not in page
+    assert page.count('class="bar steps') == 4 and '<div class="display">8,333' in page
+    # Another metric from the switcher
+    page = http.get("/app/progress/activity?days=7&metric=energy").text.replace("\xa0", " ")
+    assert 'metric=energy" aria-current=page>Energy<' in page and "active kcal a day" in page
+    assert 'class="bar burn' in page and '<div class="display">450' in page
+    assert "aria-current=page>Steps<" in http.get("/app/progress/activity?days=7&metric=x").text
     page = http.get("/app/progress/activity?days=12345").text  # falls back to Today
     assert "aria-current=page>Today<" in page
+    # A day's sheet: all its numbers, flights too
+    day = local_day(1).isoformat()
+    sheet = http.get(f"/app/progress/activity/day?date={day}&part=1").text.replace("\xa0", " ")
+    assert "<h2" in sheet and "<html" not in sheet and "8,000" in sheet
+    assert "2,200 kcal" in sheet and "3.5 mi" in sheet and "Flights climbed" in sheet
+    assert "<html" in http.get(f"/app/progress/activity/day?date={day}").text
+    assert http.get("/app/progress/activity/day?date=bad").status_code == 303
+
+
+def test_step_goal_shows_on_today_and_the_chart(http, conn):
+    store.add_activity(
+        conn, [("steps", "day", midnight(0), 5000), ("steps", "day", midnight(1), 9000)]
+    )
+    store.set_body_goals(conn, {"goal_weight_kg": None, "step_goal": 10000})
+    sign_in(http)
+    page = http.get("/app/progress/activity").text.replace("\xa0", " ")
+    assert "50% of your 10,000 step goal" in page and 'class="meter"' in page
+    assert "goal 10,000</text>" in http.get("/app/progress/activity?days=7").text
 
 
 def test_activity_page_with_nothing_in_range(http, conn):
     store.add_activity(conn, [("steps", "day", midnight(200), 5000)])
     sign_in(http)
     page = http.get("/app/progress/activity?days=7").text
-    assert "No activity in this period." in page and 'class="chart"' not in page
-    assert "No full days with data yet." in page
+    assert "No activity in this period." in page and "data-chart" not in page
+    assert "No steps in this period." in page
 
 
 # --- export ---------------------------------------------------------------------------------

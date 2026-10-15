@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -511,13 +512,16 @@ def chart_unit(days: int) -> str:
 
 
 def bucket_days(
-    points: Iterable[tuple[date, float | None]], unit: str
+    points: Iterable[tuple[date, float | None]], unit: str, how: str = "mean"
 ) -> list[tuple[date, float | None]]:
     """Daily values grouped by `unit` ("day", "week" from Monday, or "month"): each group's
     first day and the average over its days that have a value (None when none do). A day
-    with nothing logged is left out of the average, not counted as zero."""
+    with nothing logged is left out of the average, not counted as zero. With how="sum" a
+    group is its days' total instead (a week's training volume)."""
     if unit not in ("day", "week", "month"):
         raise ValueError(f"unknown unit {unit!r}")
+    if how not in ("mean", "sum"):
+        raise ValueError(f"unknown how {how!r}")
     groups: dict[date, list[float]] = {}
     for d, v in points:
         if unit == "week":
@@ -529,6 +533,8 @@ def bucket_days(
         values = groups.setdefault(key, [])
         if v is not None:
             values.append(v)
+    if how == "sum":
+        return [(k, sum(vs) if vs else None) for k, vs in groups.items()]
     return [(k, sum(vs) / len(vs) if vs else None) for k, vs in groups.items()]
 
 
@@ -736,3 +742,121 @@ def burned_kcal(day: Mapping[str, float]) -> float | None:
 
 def miles(metres: float) -> float:
     return metres / M_PER_MILE
+
+
+# --- Trends (#105) --------------------------------------------------------------------------
+
+TREND_DAYS = 10  # the weight trend's window: an exponential average over about 10 days
+ROLLING_DAYS = 7
+
+
+def previous_period(first: date, last: date) -> tuple[date, date]:
+    """The same number of days just before first..last, for "vs previous 30D"."""
+    days = (last - first).days + 1
+    return first - timedelta(days=days), first - timedelta(days=1)
+
+
+def change_percent(current: float | None, previous: float | None) -> float | None:
+    """How much current moved from previous, in percent; None when either is missing or
+    previous is 0 (there's nothing to compare against)."""
+    if current is None or not previous:
+        return None
+    return (current - previous) / previous * 100
+
+
+def rolling_average(
+    points: Iterable[tuple[date, float | None]], days: int = ROLLING_DAYS
+) -> list[tuple[date, float | None]]:
+    """Each day's average over the `days` days ending on it, counting only days that have a
+    value; None until a day in the window has one. Points must be consecutive days."""
+    window: list[float | None] = []
+    out = []
+    for d, v in points:
+        window = [*window, v][-days:]
+        values = [x for x in window if x is not None]
+        out.append((d, sum(values) / len(values) if values else None))
+    return out
+
+
+def weight_trend(
+    points: Iterable[tuple[date, float]], days: int = TREND_DAYS
+) -> list[tuple[date, float]]:
+    """A smoothed weight for each weighed day: an exponentially weighted average (about a
+    `days`-day window) that steps further toward a reading the longer it has been since the
+    last one, so a week without weighing doesn't drag. Several readings on one day count as
+    their average. Water swings fade; the direction stays."""
+    by_day: dict[date, list[float]] = {}
+    for d, v in points:
+        by_day.setdefault(d, []).append(v)
+    alpha = 2 / (days + 1)
+    out: list[tuple[date, float]] = []
+    for d in sorted(by_day):
+        value = sum(by_day[d]) / len(by_day[d])
+        if not out:
+            out.append((d, value))
+            continue
+        before, trend = out[-1]
+        weight = 1 - (1 - alpha) ** (d - before).days
+        out.append((d, trend + weight * (value - trend)))
+    return out
+
+
+def weekly_rate(trend: list[tuple[date, float]]) -> float | None:
+    """The trend's change per week from its first to its last day, or None when they're
+    less than a week apart (too short to call a rate)."""
+    if len(trend) < 2:
+        return None
+    (first, start), (last, end) = trend[0], trend[-1]
+    span = (last - first).days
+    return None if span < 7 else (end - start) / span * 7
+
+
+E1RM_MAX_REPS = 12  # past a dozen reps the estimate says more about endurance than strength
+
+
+def estimated_1rm(weight_kg: float | None, reps: int | None) -> float | None:
+    """The most you could lift once, estimated from a set (Epley: weight x (1 + reps/30)).
+    A single is itself; None without weight, without reps, or past E1RM_MAX_REPS."""
+    if not weight_kg or not reps or reps < 1 or reps > E1RM_MAX_REPS:
+        return None
+    return weight_kg if reps == 1 else weight_kg * (1 + reps / 30)
+
+
+@dataclass(frozen=True)
+class Best:
+    """An exercise's best set by estimated one-rep max: when and in which workout, and the
+    best it beat (None when it was the first time)."""
+
+    exercise: str
+    weight_kg: float
+    reps: int
+    e1rm_kg: float
+    day: date
+    workout_id: int
+    beat_kg: float | None
+
+
+def exercise_bests(workouts: Iterable[tuple[date, int, Iterable[Mapping]]]) -> list[Best]:
+    """Each exercise's best working set from (day, workout id, sets), oldest workout first.
+    Newest record first, so recent PRs lead. A later set has to beat the record, not tie it."""
+    bests: dict[str, Best] = {}
+    for day, workout_id, sets in workouts:
+        for s in sets:
+            if s["set_type"] == "warmup":
+                continue
+            e1rm = estimated_1rm(s["weight_kg"], s["reps"])
+            if e1rm is None:
+                continue
+            held = bests.get(s["exercise"])
+            if held is not None and e1rm <= held.e1rm_kg + 1e-9:
+                continue
+            bests[s["exercise"]] = Best(
+                s["exercise"],
+                s["weight_kg"],
+                s["reps"],
+                e1rm,
+                day,
+                workout_id,
+                None if held is None else held.e1rm_kg,
+            )
+    return sorted(bests.values(), key=lambda b: (b.day, b.e1rm_kg), reverse=True)

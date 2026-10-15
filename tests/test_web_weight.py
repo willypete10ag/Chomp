@@ -25,32 +25,51 @@ def test_empty_weight_page_explains_where_weights_come_from(http):
     page = http.get("/app/progress/weight").text
     assert 'href="/app/progress/weight" aria-current=page>Weight<' in page
     assert "No weigh-ins yet." in page and "Apple Health" in page
-    assert 'class="chart weight"' not in page
+    assert "chart lines weight" not in page
     assert "Add a weigh-in" in page
 
 
-def test_weight_page_shows_latest_change_chart_and_list(http, conn):
+def test_weight_page_shows_trend_change_chart_and_list(http, conn):
     store.add_weight(conn, days_ago(40), logic.to_kg(186, "lb"), "health")
     store.add_weight(conn, days_ago(10), logic.to_kg(184, "lb"), "health")
     store.add_weight(conn, days_ago(1), logic.to_kg(182.4, "lb"), "chat")
     sign_in(http)
     page = http.get("/app/progress/weight").text.replace("\xa0", " ")
-    assert '<div class="big weight">182.4 lb</div>' in page
-    assert "&minus;1.6 lb" in page and "over 30 days" in page  # 186 is outside 30 days
-    assert page.count('<circle class="dot"') == 2 and '<polyline class="line"' in page
+    # The hero is the trend, which lags behind the latest reading; the latest is named
+    trend = logic.weight_trend(
+        (logic.local_date(days_ago(n), "America/New_York"), logic.to_kg(lb, "lb"))
+        for n, lb in ((40, 186), (10, 184), (1, 182.4))
+    )
+    shown = f"{trend[-1][1] / logic.KG_PER_LB:,.1f}"
+    assert f'<div class="display">{shown}<span class="unit">lb</span>' in page
+    assert "Trend weight · latest 182.4 lb" in page
+    # 186 is outside 30 days, but the trend going into the range starts from it
+    change = (trend[-1][1] - trend[0][1]) / logic.KG_PER_LB
+    assert f"&minus;{abs(change):.1f} lb over 30 days" in page and "lb a week" in page
+    assert page.count('<circle class="reading"') == 2 and 'class="line trend"' in page
+    assert ">Lowest<" in page and "182.4 lb</div>" in page and "184.0 lb</div>" in page
     assert page.count('class="swipe"') == 2 and "Apple Health" in page and "Claude" in page
     assert 'data-confirm="Delete the weigh-in from' in page
     page = http.get("/app/progress/weight?days=60").text.replace("\xa0", " ")
-    assert page.count('<circle class="dot"') == 3 and "&minus;3.6 lb" in page
+    assert page.count('<circle class="reading"') == 3
     assert http.get("/app/progress/weight?days=12345").status_code == 200  # falls back to 30
     # All: back to the first weigh-in, however long ago, labeled by month and year
     store.add_weight(conn, days_ago(800), logic.to_kg(200, "lb"), "health")
     page = http.get("/app/progress/weight?days=0").text.replace("\xa0", " ")
     first = logic.local_date(days_ago(800), "America/New_York")
     assert 'href="/app/progress/weight?days=0" aria-label="all time" aria-current=page>All<' in page
-    assert page.count('<circle class="dot"') == 4 and "&minus;17.6 lb" in page
+    assert page.count('<circle class="reading"') == 4
     assert f"since {first.strftime('%b')} {first.year}" in page
     assert f">{first.strftime('%b')} {first.year}</text>" in page
+    assert "Vs before" in page  # All has no previous period
+
+
+def test_goal_weight_draws_a_line_and_counts_down(http, conn):
+    store.add_weight(conn, days_ago(1), logic.to_kg(182.4, "lb"), "app")
+    store.set_body_goals(conn, {"goal_weight_kg": logic.to_kg(175, "lb"), "step_goal": None})
+    sign_in(http)
+    page = http.get("/app/progress/weight").text.replace("\xa0", " ")
+    assert "goal 175.0 lb</text>" in page and "Goal 175.0 lb · 7.4 lb to go" in page
 
 
 def test_add_and_delete_a_weigh_in(http, conn):

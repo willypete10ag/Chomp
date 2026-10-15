@@ -1221,4 +1221,134 @@
     });
   });
   if (picks.length) showTheme();
+  // Charts (#105): press and drag across a chart, or use the arrow keys once it has focus,
+  // to read each point in the line above it; a crosshair marks it and the other bars dim.
+  // Letting go (or a tap) pins the point, with a link to its day where it has one; a tap
+  // anywhere else lets it go. Compare shows the previous period as outlined bars. The
+  // points come from the figure's data-points, written by chomp/charts.py.
+  document.querySelectorAll("[data-chart]").forEach(function (fig) {
+    var svg = fig.querySelector("svg.chart");
+    var line = fig.querySelector(".inspect");
+    var points;
+    try {
+      points = JSON.parse(fig.getAttribute("data-points"));
+    } catch (err) {
+      return;
+    }
+    if (!svg || !line || !points.length) return;
+    var summary = line.innerHTML;
+    var cross = svg.querySelector(".cross");
+    var width = svg.viewBox.baseVal.width;
+    var marks = {};
+    svg.querySelectorAll("[data-i]").forEach(function (m) {
+      marks[m.getAttribute("data-i")] = m;
+    });
+    var current = -1;
+    var pinned = false;
+    var dragging = false;
+
+    function add(tag, value) {
+      var el = document.createElement(tag);
+      el.textContent = value;
+      line.appendChild(el);
+      return el;
+    }
+    function show(i) {
+      if (marks[current]) marks[current].classList.remove("on");
+      current = i;
+      if (i < 0) {
+        svg.classList.remove("scrub");
+        line.innerHTML = summary;
+        return;
+      }
+      var p = points[i];
+      svg.classList.add("scrub");
+      if (marks[i]) marks[i].classList.add("on");
+      cross.setAttribute("x1", p.x);
+      cross.setAttribute("x2", p.x);
+      line.textContent = "";
+      add("span", p.title);
+      add("b", p.value);
+      if (p.note) add("span", p.note);
+      if (p.prev && fig.classList.contains("compare")) add("span", p.prev);
+      if (p.href && pinned) add("a", "Open day \u203a").href = p.href;
+    }
+    function nearest(event) {
+      var box = svg.getBoundingClientRect();
+      var x = ((event.clientX - box.left) / box.width) * width;
+      var best = 0;
+      points.forEach(function (p, i) {
+        if (Math.abs(p.x - x) < Math.abs(points[best].x - x)) best = i;
+      });
+      return best;
+    }
+    function clear() {
+      pinned = false;
+      show(-1);
+    }
+    svg.addEventListener("pointerdown", function (event) {
+      dragging = true;
+      pinned = false;
+      show(nearest(event));
+    });
+    svg.addEventListener("pointermove", function (event) {
+      if (dragging || (event.pointerType === "mouse" && !pinned)) show(nearest(event));
+    });
+    svg.addEventListener("pointerup", function () {
+      if (!dragging) return;
+      dragging = false;
+      pinned = true;
+      show(current);
+    });
+    // A vertical swipe scrolls the page instead (touch-action: pan-y), which cancels this
+    svg.addEventListener("pointercancel", function () {
+      dragging = false;
+      if (!pinned) show(-1);
+    });
+    svg.addEventListener("pointerleave", function (event) {
+      if (event.pointerType === "mouse" && !pinned && !dragging) show(-1);
+    });
+    document.addEventListener("pointerdown", function (event) {
+      if (pinned && !svg.contains(event.target) && !line.contains(event.target)) clear();
+    });
+    svg.addEventListener("keydown", function (event) {
+      var step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+      if (event.key === "Escape" && current >= 0) {
+        clear();
+        return;
+      }
+      if (!step) return;
+      event.preventDefault();
+      var i = current < 0 ? (step < 0 ? points.length - 1 : 0) : current + step;
+      pinned = true;
+      show(Math.max(0, Math.min(points.length - 1, i)));
+    });
+    var compare = fig.querySelector("[data-compare]");
+    if (compare) {
+      compare.addEventListener("click", function () {
+        var on = !fig.classList.contains("compare");
+        fig.classList.toggle("compare", on);
+        compare.setAttribute("aria-pressed", String(on));
+        if (current >= 0) show(current);
+      });
+    }
+  });
+
+  // Range and metric controls keep your place: the next page opens where this one was
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("nav.segment a");
+    if (!link) return;
+    try {
+      sessionStorage.setItem("chomp-keep", JSON.stringify({ path: link.pathname, y: scrollY }));
+    } catch (err) {
+      // storage off: the page opens at the top
+    }
+  });
+  try {
+    var keep = JSON.parse(sessionStorage.getItem("chomp-keep") || "null");
+    sessionStorage.removeItem("chomp-keep");
+    if (keep && keep.path === location.pathname) scrollTo(0, keep.y);
+  } catch (err) {
+    // nothing kept
+  }
 })();
