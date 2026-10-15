@@ -369,7 +369,7 @@ def test_empty_activity_page_says_where_it_comes_from(http):
     assert "No activity yet." in page and "Apple Health" in page
 
 
-def test_activity_page_shows_yesterday_until_today_has_numbers(http, conn):
+def test_activity_today_is_today_even_before_the_phone_sends_it(http, conn):
     store.add_activity(
         conn,
         [
@@ -380,24 +380,14 @@ def test_activity_page_shows_yesterday_until_today_has_numbers(http, conn):
     )
     sign_in(http)
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
-    assert '<div class="big weight">9,963</div>' in page and "steps yesterday" in page
-    assert "2,871 kcal burned <span" in page  # a whole day, not "so far"
-    store.add_activity(conn, [("flights", "day", midnight(0), 2)])  # not shown, so still yesterday
-    assert "steps yesterday" in http.get("/app/progress/activity").text
+    # Nothing sent for today yet: today at 0, not yesterday's numbers
+    assert '<div class="big weight">0</div>' in page and "steps today" in page
+    assert "9,963" not in page and "yesterday" not in page.lower()
+    assert "0 kcal burned so far" in page
     store.add_activity(conn, [("steps", "day", midnight(0), 12)])
     page = http.get("/app/progress/activity").text.replace("\xa0", " ")
     assert '<div class="big weight">12</div>' in page and "steps today" in page
-    conn.execute("DELETE FROM activity")
-    store.add_activity(conn, [("steps", "day", midnight(3), 5000)])
-    page = http.get("/app/progress/activity").text.replace("\xa0", " ")
-    assert "steps on " in page and '<div class="big weight">5,000</div>' in page
-    # A phone that stopped sending weeks ago: still its latest day, not dashes for today
-    conn.execute("DELETE FROM activity")
-    store.add_activity(
-        conn, [("steps", "day", midnight(20), 7000), ("flights", "day", midnight(2), 1)]
-    )
-    page = http.get("/app/progress/activity").text.replace("\xa0", " ")
-    assert "steps on " in page and '<div class="big weight">7,000</div>' in page
+    assert "Yesterday" in http.get("/app/progress/activity?days=7").text  # still in a range
 
 
 def test_activity_page_shows_today_chart_average_and_days(http, conn):

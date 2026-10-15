@@ -1669,16 +1669,6 @@ def first_activity_at(conn: sqlite3.Connection) -> str | None:
     ).fetchone()[0]
 
 
-def latest_activity_at(conn: sqlite3.Connection, metrics: Iterable[str]) -> str | None:
-    """When the user's latest reading of any of `metrics` starts (UTC), or None."""
-    metrics = list(metrics)
-    marks = ", ".join("?" * len(metrics))
-    return conn.execute(
-        f"SELECT max(start_at) FROM activity WHERE user_id = ? AND metric IN ({marks})",
-        (user_of(conn), *metrics),
-    ).fetchone()[0]
-
-
 def last_activity_sync(conn: sqlite3.Connection) -> str | None:
     """When the phone last sent the user's activity (UTC storage format), or None."""
     row = conn.execute(

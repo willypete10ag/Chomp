@@ -5139,22 +5139,19 @@ def add_routes(
 
     @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
     async def activity_view(request: Request) -> Response:
-        """Activity from Apple Health. Today (the default): the latest day's steps and the
-        rest. A longer range: the daily averages over its full days, a bar of steps per day
-        (per week or month over long ranges), and each day's numbers."""
+        """Activity from Apple Health. Today (the default): today's steps and the rest, 0
+        until the phone sends some. A longer range: the daily averages over its full days, a
+        bar of steps per day (per week or month over long ranges), and each day's numbers."""
         if not signed_in(request):
             return to_login(request)
         span = pick_range(request.query_params.get("days"), 1, with_today=True)
         last = today()
         with connect(request) as conn:
-            if span == 0:
-                first = first_day(store.first_activity_at(conn), last)
-            elif span == 1:
-                # Today falls back to the latest day with numbers, however long ago
-                latest = store.latest_activity_at(conn, SUMMARY_METRICS)
-                first = min(logic.local_date(latest, tz), last) if latest else last
-            else:
-                first = last - timedelta(days=span - 1)
+            first = (
+                first_day(store.first_activity_at(conn), last)
+                if span == 0
+                else last - timedelta(days=span - 1)
+            )
             lo, _ = logic.local_day_bounds(first, tz)
             _, hi = logic.local_day_bounds(last, tz)
             by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
@@ -5179,17 +5176,9 @@ def add_routes(
             )
         )
         if span == 1:
-            # Just after midnight today is still empty: show the latest day with numbers this
-            # card shows (flights alone don't count)
-            seen = [d for d, v in by_day.items() if v.keys() & SUMMARY_METRICS]
-            shown = max(seen, default=last)
-            near = shown >= last - timedelta(days=1)  # today or yesterday
-            on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
-            parts.append(
-                activity_summary(
-                    by_day.get(shown, {}), f"steps {on}", " so far" if shown == last else ""
-                )
-            )
+            # Today is today (Will, #105): nothing sent yet reads as 0, not as yesterday
+            values = dict.fromkeys(SUMMARY_METRICS, 0) | by_day.get(last, {})
+            parts.append(activity_summary(values, "steps today", " so far"))
             return progress_page(request, "Activity", "".join(parts), "steps")
 
         # A range: today is still going, so the averages are over its full days
