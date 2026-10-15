@@ -186,9 +186,9 @@ def test_breakdown_empty_day_bad_date_and_back_link(http, logged):  # noqa: F811
 
 def test_history_days_link_to_their_breakdown(http, logged):  # noqa: F811
     sign_in(http)
-    text = page(http, "/app/history?days=7")
+    text = page(http, "/app/progress/nutrition?days=7")
     assert 'class="small bd" href="/app/breakdown?date=' in text
-    assert "back=%2Fapp%2Fhistory%3Fdays%3D7" in text
+    assert "back=%2Fapp%2Fprogress%2Fnutrition%3Fdays%3D7" in text
 
 
 def test_breakdown_needs_sign_in(http):  # noqa: F811

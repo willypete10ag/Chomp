@@ -411,7 +411,7 @@
     });
     var details = body.querySelector(":scope > details");
     var summary = details && details.querySelector("summary");
-    var press = summary || body.querySelector(".food-link");
+    var press = summary || body.querySelector(".food-link") || body; // a weigh-in: the whole row
     var start = null;
     var dx = 0;
     var sliding = false;
@@ -1092,10 +1092,133 @@
     }, { once: true });
   });
 
-  // On a screen too narrow for every tab the bar scrolls; keep the current one in sight
-  var tabsBar = document.querySelector(".tabs");
-  var currentTab = tabsBar && tabsBar.querySelector("[aria-current]");
-  if (currentTab && tabsBar.scrollWidth > tabsBar.clientWidth) {
-    tabsBar.scrollLeft = currentTab.offsetLeft + currentTab.offsetWidth - tabsBar.clientWidth;
+  // Sheets (#105): a link marked data-sheet (the + in the tab bar) opens its page's ?part=1
+  // over the current page instead. A tap outside, Escape or the back button closes it; a
+  // link inside goes on to its page. Without this, the link opens the page itself.
+  document.querySelectorAll("a[data-sheet]").forEach(function (link) {
+    if (!window.fetch) return;
+    link.addEventListener("click", function (event) {
+      event.preventDefault();
+      openSheet(link);
+    });
+  });
+  function openSheet(link) {
+    var href = link.href;
+    fetch(href + (href.indexOf("?") < 0 ? "?" : "&") + "part=1", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.text();
+      })
+      .then(function (html) {
+        var layer = document.createElement("div");
+        layer.className = "sheet-layer";
+        var sheet = document.createElement("div");
+        sheet.className = "sheet";
+        sheet.setAttribute("role", "dialog");
+        sheet.setAttribute("aria-modal", "true");
+        sheet.innerHTML = '<div class="grab"></div>' + html;
+        var title = sheet.querySelector("h2[id]");
+        if (title) sheet.setAttribute("aria-labelledby", title.id);
+        layer.appendChild(sheet);
+        document.body.appendChild(layer);
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            layer.classList.add("on");
+          });
+        });
+        var first = sheet.querySelector("a, button");
+        if (first) first.focus({ preventScroll: true });
+        function close() {
+          layer.classList.remove("on");
+          document.removeEventListener("keydown", onKey);
+          window.removeEventListener("popstate", close);
+          setTimeout(function () {
+            layer.remove();
+          }, 320);
+          link.focus({ preventScroll: true });
+        }
+        function dismiss() {
+          if (history.state && history.state.sheet) history.back();
+          else close();
+        }
+        function onKey(event) {
+          if (event.key === "Escape") dismiss();
+        }
+        layer.addEventListener("click", function (event) {
+          if (event.target === layer) dismiss();
+        });
+        // A link in the sheet takes the sheet's history entry's place, so Back returns to
+        // the page the sheet opened over
+        sheet.addEventListener("click", function (event) {
+          var to = event.target.closest("a[href]");
+          if (!to || !history.state || !history.state.sheet) return;
+          event.preventDefault();
+          location.replace(to.href);
+        });
+        // Drag the sheet down to dismiss it
+        var startY = null;
+        sheet.addEventListener("touchstart", function (event) {
+          startY = sheet.scrollTop <= 0 ? event.touches[0].clientY : null;
+        }, { passive: true });
+        sheet.addEventListener("touchmove", function (event) {
+          if (startY === null) return;
+          var dy = event.touches[0].clientY - startY;
+          if (dy > 0) sheet.style.transform = "translateY(" + dy + "px)";
+        }, { passive: true });
+        sheet.addEventListener("touchend", function (event) {
+          if (startY === null) return;
+          var dy = event.changedTouches[0].clientY - startY;
+          sheet.style.transform = "";
+          startY = null;
+          if (dy > 80) dismiss();
+        });
+        try {
+          history.pushState({ sheet: true }, "");
+          window.addEventListener("popstate", close);
+        } catch (err) {
+          // the back button just leaves the page then
+        }
+        document.addEventListener("keydown", onKey);
+      })
+      .catch(function () {
+        location.href = href;
+      });
   }
+
+  // A screen's large title (#105) shows small in a bar at the top once it scrolls away
+  var bigTitle = document.querySelector("h1[data-title]");
+  if (bigTitle && window.IntersectionObserver) {
+    var mini = document.createElement("div");
+    mini.className = "minihead";
+    mini.setAttribute("aria-hidden", "true");
+    mini.textContent = bigTitle.textContent;
+    document.body.appendChild(mini);
+    new IntersectionObserver(function (seen) {
+      mini.classList.toggle("on", !seen[0].isIntersecting);
+    }).observe(bigTitle);
+  }
+
+  // Appearance on You (#105): System, Dark or Light, kept on this device (theme.js applies it)
+  var picks = document.querySelectorAll("[data-theme-pick]");
+  function showTheme() {
+    var now = document.documentElement.getAttribute("data-theme") || "system";
+    picks.forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-pick") === now));
+    });
+  }
+  picks.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var theme = b.getAttribute("data-theme-pick");
+      if (theme === "system") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", theme);
+      try {
+        if (theme === "system") localStorage.removeItem("chomp-theme");
+        else localStorage.setItem("chomp-theme", theme);
+      } catch (err) {
+        // private browsing: it applies to this page only
+      }
+      showTheme();
+    });
+  });
+  if (picks.length) showTheme();
 })();

@@ -37,7 +37,18 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 `get_day(date)` and `get_totals(start, end)` for daily/weekly summaries and protein-target checks.
 
 ### Dashboard
-`/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`: Today
+`/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`. Its shell
+(#105): four tabs, Today, Progress (`/app/progress/{nutrition,weight,activity,training}`, pills
+between them and one range control, 7D/30D/60D/1Y/All via `?days=` with 0 for all time, the
+bar charts grouped by week past 60 days and by month past 400, `logic.chart_unit`), Foods and
+You (`/app/you`: goals, integrations at `/app/you/integrations` with the Apple Health and Hevy
+imports and the connector address, a System/Dark/Light theme kept per device in localStorage
+and applied before paint by `static/theme.js`, and Sign out), plus a raised Log (+) button in
+the middle that opens `/app/actions` as a bottom sheet (`?part=1` is the sheet's fragment; it
+is a page without the script). Past 64rem the tabs become a left sidebar. The old
+`/app/history`, `/app/activity`, `/app/workouts` and GET `/app/weight` 301 to their Progress
+pages. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
+Screens: Today
 (any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
 day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
 goal, months back to the first logged one and a year list; calories remaining as the big number,
@@ -47,22 +58,19 @@ time; tapping the calories or a macro opens that day's Breakdown at `/app/breakd
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
 nutrition facts, where tapping a nutrient lists the foods that gave the most; a food with no
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
-out), History (7/30/90-day averages and inline-SVG charts; each day links to its Breakdown),
-Weight (#94, `/app/weight`, the fourth tab: the latest weigh-in in lb, the change over 30 days,
-90 days or a year, an inline-SVG line of each weighed day's last weigh-in, an Add a weigh-in
+out), Nutrition (averages and inline-SVG charts; each day links to its Breakdown),
+Weight (#94, `/app/progress/weight`: the latest weigh-in in lb, the change over the range, an inline-SVG line of each weighed day's last weigh-in, an Add a weigh-in
 form (lb, time, date), and every weigh-in in the range with where it came from, swiped left to
 delete after asking; a minimal page, expected to move in a wider health redesign),
-Workouts (#94, `/app/workouts`, the fifth tab: workouts imported from Hevy over 30 days, 90
-days or a year with their count and pounds lifted, an Import from Hevy card (open until there
-are workouts) that takes the CSV export, and each workout's title, date, length, exercises and
+Training (#94, `/app/progress/training`: workouts imported from Hevy over the range with their
+count and pounds lifted, when Hevy last imported, and each workout's title, date, length, exercises and
 volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
-Activity (#94, `/app/activity`, the sixth tab: today's (or, until today has numbers, the latest day's) steps, active and resting energy,
+Activity (#94, `/app/progress/activity`: today's (or, until today has numbers, the latest day's) steps, active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
-last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days or a year (the week's bars show
+last sent; an inline-SVG bar of steps per day over the range (the week's bars show
 their counts, longer ranges a dashed daily-average line); the daily
-average over the range's full days; each day's numbers, newest first; and Import from Apple
-Health for past data; the Hevy and Health import forms turn into a spinner with a seconds
+average over the range's full days; each day's numbers, newest first (the latest 100); the Hevy and Health import forms turn into a spinner with a seconds
 count while they upload)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
@@ -220,7 +228,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
 - Workouts (#94, migration 0014, `chomp/hevy.py`): Hevy has no API without Pro, so workouts
   come from its CSV export (one row per set; `weight_lbs`/`distance_miles` or the metric
-  columns; local times like `13 Oct 2026, 18:56`), uploaded on the Workouts page or with
+  columns; local times like `13 Oct 2026, 18:56`), uploaded on You › Integrations or with
   `chomp import-hevy FILE [--user NAME]`. Each user's `workouts` (UTC `started_at`, title,
   description) hold `workout_sets` in order (exercise, notes, superset, set index, type, kg,
   reps, metres, seconds, RPE). A workout is identified by its start time, so re-importing a
@@ -271,8 +279,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   adds a day only where the phone sent nothing for that metric (its total or hours), and
   refreshes a day an earlier export brought in; imported rows are marked `source = 'export'`
   (migration 0016), so `last_activity_sync` counts only the phone's, and the phone sending
-  a day takes it over. Uploaded on the Activity
-  page (`POST /app/activity/import`, 95 MB at most because Cloudflare caps a request at
+  a day takes it over. Uploaded on You ›
+  Integrations (`POST /app/activity/import`, 95 MB at most because Cloudflare caps a request at
   100 MB, parsed in a worker thread one at a time) or `chomp import-health FILE|-`.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through

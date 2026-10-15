@@ -502,6 +502,36 @@ def date_range(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
+def chart_unit(days: int) -> str:
+    """How a bar chart over `days` days groups them (#105): a bar per day up to 60 days, per
+    week up to a year and a bit, per month beyond, so a bar never gets thinner than a hair."""
+    if days <= 60:
+        return "day"
+    return "week" if days <= 400 else "month"
+
+
+def bucket_days(
+    points: Iterable[tuple[date, float | None]], unit: str
+) -> list[tuple[date, float | None]]:
+    """Daily values grouped by `unit` ("day", "week" from Monday, or "month"): each group's
+    first day and the average over its days that have a value (None when none do). A day
+    with nothing logged is left out of the average, not counted as zero."""
+    if unit not in ("day", "week", "month"):
+        raise ValueError(f"unknown unit {unit!r}")
+    groups: dict[date, list[float]] = {}
+    for d, v in points:
+        if unit == "week":
+            key = d - timedelta(days=d.weekday())
+        elif unit == "month":
+            key = d.replace(day=1)
+        else:
+            key = d
+        values = groups.setdefault(key, [])
+        if v is not None:
+            values.append(v)
+    return [(k, sum(vs) / len(vs) if vs else None) for k, vs in groups.items()]
+
+
 def totals_by_day(rows: Iterable[tuple[str, Mapping[str, float | None]]], tz: str) -> dict:
     """Sum (UTC eaten_at, nutrients) rows per local date. Days with no rows are absent."""
     by_day: dict[date, list] = {}

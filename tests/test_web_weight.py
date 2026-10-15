@@ -22,8 +22,8 @@ def days_ago(n: int, hour: int = 12) -> str:
 
 def test_empty_weight_page_explains_where_weights_come_from(http):
     sign_in(http)
-    page = http.get("/app/weight").text
-    assert 'href="/app/weight" aria-current=page>Weight<' in page
+    page = http.get("/app/progress/weight").text
+    assert 'href="/app/progress/weight" aria-current=page>Weight<' in page
     assert "No weigh-ins yet." in page and "Apple Health" in page
     assert 'class="chart weight"' not in page
     assert "Add a weigh-in" in page
@@ -34,20 +34,20 @@ def test_weight_page_shows_latest_change_chart_and_list(http, conn):
     store.add_weight(conn, days_ago(10), logic.to_kg(184, "lb"), "health")
     store.add_weight(conn, days_ago(1), logic.to_kg(182.4, "lb"), "chat")
     sign_in(http)
-    page = http.get("/app/weight").text.replace("\xa0", " ")
+    page = http.get("/app/progress/weight").text.replace("\xa0", " ")
     assert '<div class="big weight">182.4 lb</div>' in page
     assert "&minus;1.6 lb" in page and "over 30 days" in page  # 186 is outside 30 days
     assert page.count('<circle class="dot"') == 2 and '<polyline class="line"' in page
     assert page.count('class="swipe"') == 2 and "Apple Health" in page and "Claude" in page
     assert 'data-confirm="Delete the weigh-in from' in page
-    page = http.get("/app/weight?days=90").text.replace("\xa0", " ")
+    page = http.get("/app/progress/weight?days=60").text.replace("\xa0", " ")
     assert page.count('<circle class="dot"') == 3 and "&minus;3.6 lb" in page
-    assert http.get("/app/weight?days=12345").status_code == 200  # falls back to 30
+    assert http.get("/app/progress/weight?days=12345").status_code == 200  # falls back to 30
     # All: back to the first weigh-in, however long ago, labeled by month and year
     store.add_weight(conn, days_ago(800), logic.to_kg(200, "lb"), "health")
-    page = http.get("/app/weight?days=0").text.replace("\xa0", " ")
+    page = http.get("/app/progress/weight?days=0").text.replace("\xa0", " ")
     first = logic.local_date(days_ago(800), "America/New_York")
-    assert 'href="/app/weight?days=0" aria-current=page>All<' in page
+    assert 'href="/app/progress/weight?days=0" aria-label="all time" aria-current=page>All<' in page
     assert page.count('<circle class="dot"') == 4 and "&minus;17.6 lb" in page
     assert f"since {first.strftime('%b')} {first.year}" in page
     assert f">{first.strftime('%b')} {first.year}</text>" in page
@@ -57,10 +57,10 @@ def test_add_and_delete_a_weigh_in(http, conn):
     sign_in(http)
     r = http.post(
         "/app/weight",
-        data={"lb": "181.2", "date": today(), "time": "07:15", "days": "90"},
+        data={"lb": "181.2", "date": today(), "time": "07:15", "days": "60"},
         headers=ORIGIN,
     )
-    assert "days=90" in r.headers["location"]
+    assert r.headers["location"].startswith("/app/progress/weight?days=60")
     page = follow(http, r)
     assert "Weigh-in saved." in page and "181.2 lb" in page
     row = store.latest_weight(conn)

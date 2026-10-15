@@ -174,16 +174,19 @@ def upload(http, data: bytes, name="export.zip"):
 
 def test_dashboard_import(http, conn, monkeypatch):
     sign_in(http)
-    page = http.get("/app/activity").text
-    assert '<details class="fold" data-fold="health" open>' in page  # nothing yet: open
+    page = http.get("/app/you/integrations").text
+    assert 'id="health"' in page and 'action="/app/activity/import"' in page
     assert 'data-busy="Importing your Health data"' in page  # a spinner while it uploads
     store.add_activity(conn, [("steps", "day", day("2026-10-12"), 9963)])
-    page = follow(http, upload(http, zipped()))
+    r = upload(http, zipped())
+    assert r.headers["location"].startswith("/app/you/integrations?health=")
+    assert r.headers["location"].endswith("#health")
+    page = follow(http, r)
     assert (
         "Imported 4 days of activity and 2 weigh-ins (1 day kept as your phone sent,"
         " 2 unreadable samples skipped)." in page
     )
-    assert '<details class="fold" data-fold="health">' in page
+    assert 'href="/app/progress/activity?days=365">See it' in page
     assert len(store.weights_between(conn, "0", "9")) == 2
     page = follow(http, upload(http, b"<plist/>", "export.xml"))
     assert "That file isn&#x27;t Apple Health&#x27;s export." in page

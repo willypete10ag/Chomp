@@ -22,20 +22,24 @@ def upload(http, data: bytes):
     )
 
 
-def test_empty_page_opens_the_import(http):
+def test_empty_page_points_to_the_import(http):
     sign_in(http)
-    page = http.get("/app/workouts").text
-    assert 'href="/app/workouts" aria-current=page>Workouts<' in page
-    assert "No workouts yet." in page
-    assert '<details class="fold" data-fold="hevy" open>' in page
+    page = http.get("/app/progress/training").text
+    assert 'href="/app/progress/training" aria-current=page>Training<' in page
+    assert "No workouts yet." in page and 'href="/app/you/integrations#hevy"' in page
+    page = http.get("/app/you/integrations").text
+    assert 'id="hevy"' in page and 'action="/app/workouts/import"' in page
     assert 'enctype="multipart/form-data"' in page
 
 
 def test_import_list_and_workout_page(http, conn):
     sign_in(http)
-    page = follow(http, upload(http, CSV))
+    r = upload(http, CSV)
+    assert r.headers["location"].startswith("/app/you/integrations?hevy=")
+    page = follow(http, r)
     assert "Imported 2 new workouts." in page
-    assert '<details class="fold" data-fold="hevy">' in page  # folded once there are some
+    assert 'href="/app/progress/training?days=365">See it' in page
+    page = http.get("/app/progress/training?days=365").text.replace("\xa0", " ")
     assert "Push Day" in page and "Legs" in page
     assert "1 h 12 min · 3 exercises · 3,155 lb lifted" in page
     page = follow(http, upload(http, CSV))
@@ -53,8 +57,9 @@ def test_import_list_and_workout_page(http, conn):
     assert "1.25 mi · 20:15" in http.get(f"/app/workouts/{legs['id']}").text.replace("\xa0", " ")
     assert http.get("/app/workouts/9999").status_code == 404
 
-    page = follow(http, http.post(f"/app/workouts/{push['id']}/delete", headers=ORIGIN))
-    assert "Workout deleted." in page
+    r = http.post(f"/app/workouts/{push['id']}/delete", headers=ORIGIN)
+    assert r.headers["location"] == "/app/progress/training?removed=1"
+    assert "Workout deleted." in follow(http, r)
     assert [w["title"] for w in store.workouts_between(conn, "2026", "2027")] == ["Legs"]
 
 

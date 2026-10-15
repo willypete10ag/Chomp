@@ -44,7 +44,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db, health_export, hevy, logic, serving_fill, store, users
+from chomp import __version__, db, health_export, hevy, logic, serving_fill, store, users
 from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
@@ -60,10 +60,24 @@ log = logging.getLogger("chomp.web")
 PREFIX = "/app"
 COOKIE = "chomp_session"
 SESSION_TTL_S = 30 * 86400
-HISTORY_RANGES = (7, 30, 90)
-WEIGHT_RANGES = ((30, "30 days"), (90, "90 days"), (365, "1 year"))  # Weight page (#94)
-WEIGHT_TABS = (*WEIGHT_RANGES, (0, "All"))  # 0: since the first weigh-in
-WEIGHT = f"{PREFIX}/weight"
+# One range control on every Progress screen (#105): days, short label, what it reads as.
+# 0 is All: since the first record of that kind.
+RANGES = (
+    (7, "7D", "7 days"),
+    (30, "30D", "30 days"),
+    (60, "60D", "60 days"),
+    (365, "1Y", "1 year"),
+    (0, "All", "all time"),
+)
+PROGRESS = f"{PREFIX}/progress"
+NUTRITION_PAGE = f"{PROGRESS}/nutrition"  # was /app/history
+WEIGHT_PAGE = f"{PROGRESS}/weight"  # was /app/weight
+ACTIVITY_PAGE = f"{PROGRESS}/activity"  # was /app/activity
+TRAINING_PAGE = f"{PROGRESS}/training"  # was /app/workouts
+YOU = f"{PREFIX}/you"
+INTEGRATIONS = f"{YOU}/integrations"
+ACTIONS = f"{PREFIX}/actions"  # the + sheet
+WEIGHT = f"{PREFIX}/weight"  # posts: add a weigh-in, delete one
 WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here"}
 WORKOUTS = f"{PREFIX}/workouts"  # Workouts page (#94)
 HEVY_MAX = 20 * 1024 * 1024
@@ -71,7 +85,6 @@ HEVY_MAX = 20 * 1024 * 1024
 HEALTH_MAX = 95 * 1024 * 1024
 SET_MARKS = {"warmup": "W", "failure": "F", "dropset": "D"}
 ACTIVITY = f"{PREFIX}/activity"  # Activity page (#94)
-ACTIVITY_RANGES = ((7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year"))
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
@@ -92,8 +105,16 @@ STATIC = {
     "apple-touch-icon.png": "image/png",
     "scan.js": "text/javascript",
     "zxing.min.js": "text/javascript",
+    "theme.js": "text/javascript",
 }
-THEME = "#1f7a4d"
+# Lucide icons (lucide-static 0.460.0, ISC, LICENSE-lucide.txt), drawn inline by icon()
+ICONS = dict(
+    re.findall(
+        r'<symbol id="([\w-]+)" viewBox="0 0 24 24">(.*?)</symbol>',
+        (STATIC_DIR / "icons.svg").read_text(),
+    )
+)
+THEME_LIGHT, THEME_DARK = "#f3f6f4", "#0b0e0d"
 # In the stylesheet and script URLs, so a phone's cached copy is replaced as soon as they change
 CSS_VERSION = hashlib.sha256((STATIC_DIR / "app.css").read_bytes()).hexdigest()[:10]
 JS_VERSION = hashlib.sha256((STATIC_DIR / "app.js").read_bytes()).hexdigest()[:10]
@@ -365,9 +386,12 @@ def bar_chart(
     link: bool = True,
     values: bool = False,
     target_label: str = "target",
+    unit: str = "day",
 ) -> str:
     """Inline SVG bars, one per day (with link, a link to that day's meals); an optional
-    dashed target line, named target_label. With values, a week's bars show their numbers."""
+    dashed target line, named target_label. With values, a week's bars show their numbers.
+    With unit "week" or "month" each point is a group's daily average (logic.bucket_days),
+    dated by its first day."""
     w, h, top, bottom = 320, 150, 14, 18
     plot = h - top - bottom
     values = [v for _, v in points if v]
@@ -386,12 +410,21 @@ def bar_chart(
     for i, (d, v) in enumerate(points):
         x = i * slot + (slot - bar) / 2
         if v:
-            label = f"{d.strftime('%a %b')} {d.day}: {num(v)}"
+            if unit == "week":
+                label = f"Week of {d.strftime('%b')} {d.day}: {num(v)} a day"
+            elif unit == "month":
+                label = f"{d.strftime('%B')} {d.year}: {num(v)} a day"
+            else:
+                label = f"{d.strftime('%a %b')} {d.day}: {num(v)}"
             rect = (
                 f'<rect class="bar {kind}" x="{x:.1f}" y="{y(v):.1f}" width="{bar:.1f}"'
-                f' height="{top + plot - y(v):.1f}"><title>{e(label)}</title></rect>'
+                f' height="{top + plot - y(v):.1f}" rx="{min(bar / 4, 3):.1f}">'
+                f"<title>{e(label)}</title></rect>"
             )
-            parts.append(f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if link else rect)
+            day_link = link and unit == "day"
+            parts.append(
+                f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if day_link else rect
+            )
             if values and len(points) <= 7:
                 parts.append(
                     f'<text class="tick value" x="{x + bar / 2:.1f}" y="{y(v) - 3:.1f}"'
@@ -399,7 +432,12 @@ def bar_chart(
                 )
         last = i == len(points) - 1
         if (len(points) - 1 - i) % step == 0 or last:
-            text = d.strftime("%a")[0] if len(points) <= 7 else f"{d.month}/{d.day}"
+            if unit == "month":
+                text = str(d.year) if d.month == 1 or i == 0 else d.strftime("%b")
+            elif len(points) <= 7 and unit == "day":
+                text = d.strftime("%a")[0]
+            else:
+                text = f"{d.month}/{d.day}"
             # the last label hugs the right edge so it isn't clipped
             x_label, anchor = (w, "end") if last else (i * slot + slot / 2, "middle")
             parts.append(
@@ -581,8 +619,8 @@ def exercise_card(name: str, sets: list) -> str:
     )
 
 
-def hevy_form(opened: bool) -> str:
-    body = (
+def hevy_import() -> str:
+    return (
         f'<form class="stack" method="post" action="{WORKOUTS}/import"'
         ' enctype="multipart/form-data" data-busy="Importing your workouts">'
         '<p class="muted small">In Hevy: Profile &rsaquo; Settings &rsaquo; Export &amp;'
@@ -591,11 +629,10 @@ def hevy_form(opened: bool) -> str:
         '<input type="file" name="csv" accept=".csv,text/csv" required>'
         '<button type="submit">Import</button></form>'
     )
-    return fold("hevy", "Import from Hevy", body, opened=opened)
 
 
-def health_form(opened: bool) -> str:
-    body = (
+def health_import() -> str:
+    return (
         f'<form class="stack" method="post" action="{ACTIVITY}/import"'
         ' enctype="multipart/form-data" data-busy="Importing your Health data">'
         '<p class="muted small">Brings in your past weigh-ins and each day&rsquo;s activity.'
@@ -605,7 +642,24 @@ def health_form(opened: bool) -> str:
         '<input type="file" name="export" accept=".zip,.xml,application/zip" required>'
         '<button type="submit">Import</button></form>'
     )
-    return fold("health", "Import from Apple Health", body, opened=opened)
+
+
+def short_date(day: date, today: date) -> str:
+    """ "today", "yesterday", "Oct 14", or "Oct 14, 2024" in another year."""
+    if day == today:
+        return "today"
+    if day == today - timedelta(days=1):
+        return "yesterday"
+    text = f"{day.strftime('%b')} {day.day}"
+    return text if day.year == today.year else f"{text}, {day.year}"
+
+
+def fresh_tag(href: str, glyph: str, source: str, when: str) -> str:
+    """Where a page's data comes from and when it last came (#105); it opens Integrations."""
+    return f'<a class="fresh-tag" href="{href}">{icon(glyph)}<b>{e(source)}</b> · {e(when)}</a>'
+
+
+ACTIVITY_LIST_MAX = 100
 
 
 SUMMARY_METRICS = {"steps", "active_kcal", "resting_kcal", "exercise_min", "distance_m"}
@@ -647,7 +701,8 @@ def stat(value: str, label: str) -> str:
 
 HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="{theme}">
+<meta name="theme-color" content="{light}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Chomp">
@@ -655,18 +710,77 @@ HEAD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link rel="manifest" href="{p}/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="{p}/static/apple-touch-icon.png">
 <link rel="icon" href="{p}/static/icon-192.png">
+<script src="{p}/static/theme.js?v={theme_version}"></script>
 <link rel="stylesheet" href="{p}/static/app.css?v={css_version}">
 <script src="{p}/static/app.js?v={js_version}" defer></script>{scripts}
-<title>{title}</title></head><body{body_class}>"""
+<title>{title}</title></head><body{body_class}{hue}>"""
 
+# The tab bar (#105): four places and, in the middle, Log (the + sheet)
 NAV = (
-    ("today", "", "Today"),
-    ("history", "/history", "History"),
-    ("foods", "/foods", "Foods"),
-    ("weight", "/weight", "Weight"),
-    ("workouts", "/workouts", "Workouts"),
-    ("activity", "/activity", "Activity"),
+    ("today", "", "Today", "sun"),
+    ("progress", "/progress", "Progress", "chart-no-axes-column-increasing"),
+    ("foods", "/foods", "Foods", "apple"),
+    ("you", "/you", "You", "circle-user"),
 )
+PROGRESS_AREAS = (
+    ("nutrition", NUTRITION_PAGE, "Nutrition"),
+    ("weight", WEIGHT_PAGE, "Weight"),
+    ("activity", ACTIVITY_PAGE, "Activity"),
+    ("training", TRAINING_PAGE, "Training"),
+)
+
+
+def icon(name: str, cls: str = "icon") -> str:
+    return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
+
+
+def page_head(title: str, actions: str = "") -> str:
+    """A screen's large title (#105); the script shows it small in a bar once it scrolls
+    away. `actions` are icon buttons on its right."""
+    side = f'<div class="actions">{actions}</div>' if actions else ""
+    return f'<header class="pagehead"><h1 data-title>{e(title)}</h1>{side}</header>'
+
+
+def progress_pills(active: str) -> str:
+    links = "".join(
+        f'<a href="{url}"{" aria-current=page" if key == active else ""}>{label}</a>'
+        for key, url, label in PROGRESS_AREAS
+    )
+    return f'<nav class="pills" aria-label="Progress">{links}</nav>'
+
+
+def range_control(url: str, span: int) -> str:
+    """7D 30D 60D 1Y All, the same on every Progress screen (#105)."""
+    links = "".join(
+        f'<a href="{url}?days={n}" aria-label="{words}"'
+        f"{' aria-current=page' if n == span else ''}>{short}</a>"
+        for n, short, words in RANGES
+    )
+    return f'<nav class="segment" aria-label="Time range">{links}</nav>'
+
+
+def pick_range(value: str | None, default: int) -> int:
+    span = int_param(value)
+    return span if span in {n for n, *_ in RANGES} else default
+
+
+def range_words(span: int, first: date) -> str:
+    """ "over 30 days", or for All "since Mar 2025"."""
+    if span == 0:
+        return f"since {first.strftime('%b')} {first.year}"
+    return "over " + next(words for n, _, words in RANGES if n == span)
+
+
+def item(href: str, glyph: str, tone: str, title: str, sub: str = "", **attrs: str) -> str:
+    """A row in a grouped list (You, the + sheet): a tinted icon, a title and a line under
+    it, and a chevron."""
+    extra = "".join(f' {k.replace("_", "-")}="{e(v)}"' for k, v in attrs.items())
+    note = f"<small>{sub}</small>" if sub else ""
+    return (
+        f'<a class="item" href="{e(href)}"{extra}><span class="badge-icon tone-{tone}">'
+        f'{icon(glyph)}</span><span class="grow">{e(title)}{note}</span>'
+        f"{icon('chevron-right', 'icon chev')}</a>"
+    )
 
 
 def render(
@@ -678,36 +792,43 @@ def render(
     user: str = "",
     status: int = 200,
     scripts: tuple[str, ...] = (),
+    hue: str = "",
+    log_date: date | None = None,
 ) -> HTMLResponse:
-    """A dashboard page. `scripts` are extra static scripts (STATIC) this page loads."""
+    """A dashboard page. `scripts` are extra static scripts (STATIC) this page loads; `hue`
+    tints the page with a metric's color (steps, train, weight, you); `log_date` is the day
+    the + sheet logs to, when not today. Signing out lives on You (#105)."""
     nav = ""
     if active is not None:
-        links = "".join(
-            f'<a href="{PREFIX}{path}"{" aria-current=page" if key == active else ""}>{label}</a>'
-            for key, path, label in NAV
+        links = [
+            f'<a href="{PREFIX}{path}"{" aria-current=page" if key == active else ""}>'
+            f"{icon(glyph)}<span>{label}</span></a>"
+            for key, path, label, glyph in NAV
+        ]
+        query = f"?{urlencode({'date': log_date.isoformat()})}" if log_date else ""
+        links.insert(
+            2,
+            f'<a class="log" href="{ACTIONS}{query}" data-sheet aria-label="Log">'
+            f"{icon('plus')}<span>Log</span></a>",
         )
-        nav = f'<nav class="tabs">{links}</nav>'
-    foot = ""
-    if signed_in:
-        foot = (
-            f'<footer><form method="post" action="{PREFIX}/logout">'
-            + (f'<span class="muted">{e(user)} · </span>' if user else "")
-            + '<button class="link" type="submit">Sign out</button></form></footer>'
-        )
+        nav = f'<nav class="tabs" aria-label="Chomp">{"".join(links)}</nav>'
     page = (
         HEAD.format(
-            theme=THEME,
+            light=THEME_LIGHT,
+            dark=THEME_DARK,
             p=PREFIX,
             css_version=CSS_VERSION,
             js_version=JS_VERSION,
+            theme_version=STATIC_VERSIONS["theme.js"],
             title=e(f"{title} · Chomp"),
             body_class=' class="has-tabs"' if nav else "",
+            hue=f' data-hue="{hue}"' if hue else "",
             scripts="".join(
                 f'<script src="{PREFIX}/static/{name}?v={STATIC_VERSIONS[name]}" defer></script>'
                 for name in scripts
             ),
         )
-        + f"<main>{body}</main>{foot}{nav}</body></html>"
+        + f"<main>{body}</main>{nav}</body></html>"
     )
     return HTMLResponse(page, status_code=status, headers=SECURITY_HEADERS)
 
@@ -1961,8 +2082,8 @@ MANIFEST = json.dumps(
         "start_url": PREFIX,
         "scope": PREFIX,
         "display": "standalone",
-        "background_color": "#f6f7f5",
-        "theme_color": THEME,
+        "background_color": THEME_DARK,
+        "theme_color": THEME_DARK,
         "icons": [
             {
                 "src": f"{PREFIX}/static/icon-192.png",
@@ -1985,13 +2106,6 @@ MANIFEST = json.dumps(
 
 RECIPE_NAME_MAX, STEPS_MAX, MAX_SERVINGS = 80, 5000, 100
 RECIPE_PICKS = 12  # foods listed when searching for an ingredient
-# An open book, for the button on Foods that opens Recipes
-BOOK_ICON = (
-    '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none"'
-    ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M12 6.5C10.3 5.2 7.9 4.6 4 4.6v13.2c3.9 0 6.3.6 8 1.9 1.7-1.3 4.1-1.9 8-1.9V4.6'
-    'c-3.9 0-6.3.6-8 1.9Z"/><path d="M12 6.5v13.2"/></svg>'
-)
 
 
 @dataclass
@@ -2044,14 +2158,6 @@ SAVED = f"{PREFIX}/saved-meals"
 TEMPLATE_NAME_MAX = 80
 
 
-def recipes_fab() -> str:
-    """The book in the bottom corner of Foods that opens Recipes (#82, moved from Today)."""
-    return (
-        f'<a class="fab" href="{PREFIX}/recipes" aria-label="Recipes" title="Recipes">'
-        f"{BOOK_ICON}</a>"
-    )
-
-
 def elsewhere(q: str, *, typed: bool = False) -> str:
     """Foods' way on when a food isn't saved yet (#97): search USDA and Open Food Facts for
     the same words (only on a tap, never as you type), and with `typed` type it in with the
@@ -2067,13 +2173,18 @@ def elsewhere(q: str, *, typed: bool = False) -> str:
 
 
 def foods_switch(active: str) -> str:
-    """Foods / Meals at the top of the Foods tab (#60); the tab always opens on Foods."""
-    sides = (("foods", f"{PREFIX}/foods", "Foods"), ("meals", SAVED, "Meals"))
+    """Foods / Meals / Recipes at the top of the Foods tab (#60, #105); the tab always opens
+    on Foods."""
+    sides = (
+        ("foods", f"{PREFIX}/foods", "Foods"),
+        ("meals", SAVED, "Meals"),
+        ("recipes", f"{PREFIX}/recipes", "Recipes"),
+    )
     links = "".join(
         f'<a href="{href}"{" aria-current=page" if key == active else ""}>{label}</a>'
         for key, href, label in sides
     )
-    return f'<nav class="segment" aria-label="Foods or saved meals">{links}</nav>'
+    return f'<nav class="segment" aria-label="Foods, saved meals or recipes">{links}</nav>'
 
 
 def template_totals(items) -> logic.Nutrients:
@@ -2190,6 +2301,14 @@ def add_routes(
 
     def today() -> date:
         return datetime.now(ZoneInfo(tz)).date()
+
+    def sent_text(synced: str, last: date) -> str:
+        """When the phone last sent data: "11:49 PM today", "Oct 12, 7:02 AM"."""
+        local = logic.local_iso(synced, tz)
+        day = datetime.fromisoformat(local).date()
+        return (
+            f"{clock(local)} today" if day == last else f"{short_date(day, last)}, {clock(local)}"
+        )
 
     def signed_in(request: Request) -> bool:
         return user_of(request) is not None
@@ -2310,7 +2429,7 @@ def add_routes(
         return Response(js, media_type="text/javascript", headers={"Cache-Control": "max-age=3600"})
 
     @server.custom_route(PREFIX + "/static/{name}", methods=["GET"])
-    async def icon(request: Request) -> Response:
+    async def static_file(request: Request) -> Response:
         name = request.path_params["name"]
         if name not in STATIC:
             return Response("Not found", status_code=404)
@@ -2560,6 +2679,7 @@ def add_routes(
             "today",
             signed_in=provider is not None,
             user=account(request),
+            log_date=day if day != now else None,
         )
 
     # --- Day breakdown (#63) ---
@@ -3221,10 +3341,11 @@ def add_routes(
         return render(
             "Daily goals",
             body,
-            "today",
+            "you",
             signed_in=provider is not None,
             user=account(request),
             status=status,
+            hue="you",
         )
 
     # --- Undo ---
@@ -3278,7 +3399,7 @@ def add_routes(
 
     def barcode_card(code: str = "", error: str = "") -> str:
         return (
-            '<section class="card"><h2>Scan a barcode</h2>'
+            '<section class="card" id="scan"><h2>Scan a barcode</h2>'
             '<div class="scanner" data-scanner hidden><video muted playsinline'
             ' aria-label="Camera view"></video><p class="small muted" data-scan-status></p>'
             '<button type="button" class="link" data-scan-stop>Stop scanning</button></div>'
@@ -4047,10 +4168,8 @@ def add_routes(
         if removed := params.get("removed", "")[:RECIPE_NAME_MAX]:
             banner = toast(f"<span>Deleted {e(removed)}.</span>", "status")
         parts = [
-            '<header class="daynav">'
-            f'<a class="step" href="{PREFIX}/foods" aria-label="Back to Foods">&lsaquo;</a>'
-            '<div class="daytitle"><h1>Recipes</h1></div>'
-            '<span class="step off" aria-hidden="true"></span></header>',
+            page_head("Foods"),
+            foods_switch("recipes"),
             banner,
             f'<a class="button add" href="{PREFIX}/recipes/new">+ New recipe</a>',
         ]
@@ -4421,7 +4540,7 @@ def add_routes(
             banner = toast(f"<span>Deleted {e(capitalized(removed))}.</span>", "status")
         clear = f'<a class="clear" href="{SAVED}">Clear</a>' if q else ""
         parts = [
-            "<h1>Foods</h1>",
+            page_head("Foods"),
             foods_switch("meals"),
             banner,
             f'<form class="search" method="get" action="{SAVED}">'
@@ -4446,7 +4565,6 @@ def add_routes(
                 '<section class="card empty"><p>No saved meals yet.</p><p class="muted small">'
                 "Add one here, or tell Claude “save this as my usual breakfast”.</p></section>"
             )
-        parts.append(recipes_fab())
         return foods_page("Saved meals", "".join(parts), request)
 
     @server.custom_route(SAVED + "/{template_id:int}", methods=["GET"])
@@ -4788,56 +4906,45 @@ def add_routes(
 
     # --- Workouts (#94) ---
 
-    @server.custom_route(WORKOUTS, methods=["GET"])
+    @server.custom_route(TRAINING_PAGE, methods=["GET"])
     async def workouts_view(request: Request) -> Response:
-        """Workouts imported from Hevy, newest first, over 30 days, 90 days or a year, with
-        the Hevy import at the top (folded once there are workouts)."""
+        """Training (was Workouts): workouts imported from Hevy, newest first, over the
+        range. The import itself lives in You > Integrations (#105)."""
         if not signed_in(request):
             return to_login(request)
         params = request.query_params
-        span = int_param(params.get("days")) or 30
-        if span not in dict(WEIGHT_RANGES):
-            span = 30
+        span = pick_range(params.get("days"), 30)
         last = today()
-        first = last - timedelta(days=span - 1)
-        lo, _ = logic.local_day_bounds(first, tz)
-        _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
+            summary = store.workouts_summary(conn)
+            first = (
+                first_day(store.first_workout_at(conn), last)
+                if span == 0
+                else last - timedelta(days=span - 1)
+            )
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
             rows = store.workouts_between(conn, lo, hi)
             sets = store.workout_sets(conn, (r["id"] for r in rows))
-            any_at_all = (
-                bool(rows)
-                or conn.execute(
-                    "SELECT 1 FROM workouts WHERE user_id = ? LIMIT 1", (store.user_of(conn),)
-                ).fetchone()
-                is not None
-            )
 
         banner = ""
-        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
-            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
-        elif (done := params.get("imported", "")).count("-") == 3:
-            added, updated, same, skipped = (int_param(x) or 0 for x in done.split("-"))
-            text = f"Imported {added} new workout{'' if added == 1 else 's'}"
-            extra = []
-            if updated:
-                extra.append(f"{updated} updated")
-            if same:
-                extra.append(f"{same} already here")
-            if skipped:
-                extra.append(
-                    f"{skipped} skipped because a row couldn't be read; fix it in Hevy and"
-                    " export again"
-                )
-            text += f" ({', '.join(extra)})." if extra else "."
-            banner = toast(f"<span>{e(text)}</span>", "status")
-        elif params.get("removed"):
+        if params.get("removed"):
             banner = toast("<span>Workout deleted.</span>", "status")
-        tabs = "".join(
-            f'<a href="{WORKOUTS}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
-            for n, label in WEIGHT_RANGES
-        )
-        parts = [f'<h1>Workouts</h1><nav class="segment">{tabs}</nav>', banner]
+        parts = [
+            page_head("Progress"),
+            progress_pills("training"),
+            range_control(TRAINING_PAGE, span),
+            banner,
+        ]
+        if summary["count"]:
+            parts.append(
+                fresh_tag(
+                    f"{INTEGRATIONS}#hevy",
+                    "dumbbell",
+                    "Hevy",
+                    f"imported {short_date(logic.local_date(summary['imported'], tz), last)}",
+                )
+            )
         if rows:
             volume = sum(logic.workout_volume_kg(sets[r["id"]]) for r in rows)
             parts.append(
@@ -4847,28 +4954,21 @@ def add_routes(
                 f'<div><div class="big">{num(logic.weight_out(volume)["lb"])}</div>'
                 '<div class="muted small">lb lifted</div></div></div></section>'
             )
-        parts.append(hevy_form(opened=not any_at_all))
-        if rows:
             hint = (
                 '<p class="small muted js-only hint">Tap a workout to see its sets. Swipe'
                 " left to delete.</p>"
             )
             items = "".join(workout_item(r, sets[r["id"]], tz) for r in rows)
             parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
-        elif any_at_all:
+        elif summary["count"]:
             parts.append('<section class="card empty"><p>No workouts in this period.</p></section>')
         else:
             parts.append(
                 '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
-                "Import your Hevy export above to bring in your history.</p></section>"
+                f'<a href="{INTEGRATIONS}#hevy">Import your Hevy export</a> to bring in your'
+                " history.</p></section>"
             )
-        return render(
-            "Workouts",
-            "".join(parts),
-            "workouts",
-            signed_in=provider is not None,
-            user=account(request),
-        )
+        return progress_page(request, "Training", "".join(parts), "train")
 
     @server.custom_route(ACTIVITY + "/import", methods=["POST"])
     async def activity_import(request: Request) -> Response:
@@ -4878,19 +4978,19 @@ def add_routes(
             return no
         size = int_param(request.headers.get("content-length"))
         if size is not None and size > HEALTH_MAX:
-            return go(f"{ACTIVITY}?problem=health_big")
+            return go(f"{INTEGRATIONS}?problem=health_big#health")
         async with request.form(max_files=1, max_fields=2) as form:
             upload = form.get("export")
             if not hasattr(upload, "file"):
-                return go(f"{ACTIVITY}?problem=health")
+                return go(f"{INTEGRATIONS}?problem=health#health")
             if (upload.size or 0) > HEALTH_MAX:
-                return go(f"{ACTIVITY}?problem=health_big")
+                return go(f"{INTEGRATIONS}?problem=health_big#health")
             try:
                 parsed = await anyio.to_thread.run_sync(
                     health_export.read, upload.file, tz, limiter=health_limit
                 )
             except health_export.ExportError:
-                return go(f"{ACTIVITY}?problem=health")
+                return go(f"{INTEGRATIONS}?problem=health#health")
         with connect(request) as conn:
             weights = store.add_weights(conn, parsed.weights.items(), "health")
             activity = store.import_activity_days(conn, health_export.day_rows(parsed, tz))
@@ -4906,7 +5006,7 @@ def add_routes(
         done = (
             f"{weights.added}-{activity.added}-{activity.updated}-{activity.kept}-{parsed.rejected}"
         )
-        return go(f"{ACTIVITY}?days=365&imported={done}")
+        return go(f"{INTEGRATIONS}?health={done}#health")
 
     @server.custom_route(WORKOUTS + "/import", methods=["POST"])
     async def workouts_import(request: Request) -> Response:
@@ -4914,16 +5014,16 @@ def add_routes(
             return no
         size = int_param(request.headers.get("content-length"))
         if size is not None and size > HEVY_MAX:
-            return go(f"{WORKOUTS}?problem=hevy_big")
+            return go(f"{INTEGRATIONS}?problem=hevy_big#hevy")
         async with request.form(max_files=1, max_fields=2) as form:
             upload = form.get("csv")
             data = await upload.read() if hasattr(upload, "read") else b""
         if len(data) > HEVY_MAX:
-            return go(f"{WORKOUTS}?problem=hevy_big")
+            return go(f"{INTEGRATIONS}?problem=hevy_big#hevy")
         try:
             parsed = hevy.parse(data, tz)
         except hevy.HevyError:
-            return go(f"{WORKOUTS}?problem=hevy")
+            return go(f"{INTEGRATIONS}?problem=hevy#hevy")
         with connect(request) as conn:
             counts = store.import_workouts(conn, parsed.workouts, "hevy")
         log.info(
@@ -4935,7 +5035,7 @@ def add_routes(
             parsed.rejected,
         )
         done = f"{counts.added}-{counts.updated}-{counts.unchanged}-{parsed.incomplete}"
-        return go(f"{WORKOUTS}?days=365&imported={done}")
+        return go(f"{INTEGRATIONS}?hevy={done}#hevy")
 
     @server.custom_route(WORKOUTS + "/{workout_id:int}", methods=["GET"])
     async def workout_view(request: Request) -> Response:
@@ -4957,20 +5057,14 @@ def add_routes(
             f'<p class="muted small">{e(row["description"])}</p>' if row["description"] else ""
         )
         parts = [
-            f'<p><a href="{WORKOUTS}">&lsaquo; Workouts</a></p>',
+            f'<p><a href="{TRAINING_PAGE}">&lsaquo; Training</a></p>',
             f"<h1>{e(row['title'])}</h1>",
             f'<p class="muted small">{e(when.strftime("%A, %B"))} {when.day}, {clock(local)}'
             f" · {workout_summary(row, sets)}</p>",
             description,
             *(exercise_card(name, group) for name, group in by_exercise.items()),
         ]
-        return render(
-            row["title"],
-            "".join(parts),
-            "workouts",
-            signed_in=provider is not None,
-            user=account(request),
-        )
+        return progress_page(request, row["title"], "".join(parts), "train")
 
     @server.custom_route(WORKOUTS + "/{workout_id:int}/delete", methods=["POST"])
     async def workout_delete(request: Request) -> Response:
@@ -4980,65 +5074,43 @@ def add_routes(
             try:
                 row = store.delete_workout(conn, request.path_params["workout_id"])
             except store.NotFound:
-                return go(WORKOUTS)
+                return go(TRAINING_PAGE)
         log.info("dashboard: deleted workout %d", row["id"])
-        return go(f"{WORKOUTS}?removed=1")
+        return go(f"{TRAINING_PAGE}?removed=1")
 
     # --- Weight (#94) ---
 
-    @server.custom_route(ACTIVITY, methods=["GET"])
+    @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
     async def activity_view(request: Request) -> Response:
-        """Activity from Apple Health: today's steps and the rest, a bar of steps per day over
-        7, 30 or 90 days, daily averages, and each day's numbers."""
+        """Activity from Apple Health: the latest day's steps and the rest, a bar of steps per
+        day (per week or month over long ranges), daily averages, and each day's numbers."""
         if not signed_in(request):
             return to_login(request)
-        span = int_param(request.query_params.get("days")) or 7
-        if span not in dict(ACTIVITY_RANGES):
-            span = 7
+        span = pick_range(request.query_params.get("days"), 7)
         last = today()
-        first = last - timedelta(days=span - 1)
-        lo, _ = logic.local_day_bounds(first, tz)
-        _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
+            first = (
+                first_day(store.first_activity_at(conn), last)
+                if span == 0
+                else last - timedelta(days=span - 1)
+            )
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
             by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
             synced = store.last_activity_sync(conn)
-        params = request.query_params
-        banner = ""
-        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
-            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
-        elif (done := params.get("imported", "")).count("-") == 4:
-            weighed, added, updated, kept, skipped = (int_param(x) or 0 for x in done.split("-"))
-            text = (
-                f"Imported {added} day{'' if added == 1 else 's'} of activity and {weighed}"
-                f" weigh-in{'' if weighed == 1 else 's'}"
-            )
-            extra = [f"{updated} day{'' if updated == 1 else 's'} updated"] if updated else []
-            extra += (
-                [f"{kept} day{'' if kept == 1 else 's'} kept as your phone sent"] if kept else []
-            )
-            if skipped:
-                extra.append(f"{skipped} unreadable samples skipped")
-            text += f" ({', '.join(extra)})." if extra else "."
-            banner = toast(f"<span>{e(text)}</span>", "status")
-        tabs = "".join(
-            f'<a href="{ACTIVITY}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
-            for n, label in ACTIVITY_RANGES
-        )
-        parts = [f'<h1>Activity</h1><nav class="segment">{tabs}</nav>', banner]
+        parts = [
+            page_head("Progress"),
+            progress_pills("activity"),
+            range_control(ACTIVITY_PAGE, span),
+        ]
         if synced is None:
             parts.append(
                 '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
                 "Steps, energy, exercise minutes and distance arrive from Apple Health"
-                " once your phone sends them (README, step 9).</p></section>"
+                f' once your phone sends them. <a href="{INTEGRATIONS}#health">Set it up in'
+                " Integrations</a>.</p></section>"
             )
-            parts.append(health_form(opened=True))
-            return render(
-                "Activity",
-                "".join(parts),
-                "activity",
-                signed_in=provider is not None,
-                user=account(request),
-            )
+            return progress_page(request, "Activity", "".join(parts), "steps")
 
         # Just after midnight today is still empty: show the latest day with numbers this card
         # shows (flights alone don't count)
@@ -5047,12 +5119,10 @@ def add_routes(
         now = by_day.get(shown, {})
         near = shown >= last - timedelta(days=1)  # today or yesterday
         on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
-        local = logic.local_iso(synced, tz)
-        when = datetime.fromisoformat(local)
-        sent = (
-            f"{clock(local)} today"
-            if when.date() == last
-            else f"{e(when.strftime('%a %b'))} {when.day}, {clock(local)}"
+        parts.append(
+            fresh_tag(
+                f"{INTEGRATIONS}#health", "heart-pulse", "Apple Health", sent_text(synced, last)
+            )
         )
         stats = [
             stat(num(now.get("active_kcal")), "kcal active"),
@@ -5076,14 +5146,15 @@ def add_routes(
                 if burned is not None
                 else ""
             )
-            + f'<p class="muted small">Last sent from your phone {sent}</p></section>'
+            + "</section>"
         )
         days = logic.date_range(first, last)
         done = {d: v for d, v in by_day.items() if d != last}
         average = logic.activity_average(done)
         if any("steps" in v for v in by_day.values()):
-            points = [(d, by_day.get(d, {}).get("steps")) for d in days]
-            title = f"Steps per day over {dict(ACTIVITY_RANGES)[span]}"
+            unit = logic.chart_unit(len(days))
+            points = logic.bucket_days(((d, by_day.get(d, {}).get("steps")) for d in days), unit)
+            title = f"Steps per day {range_words(span, first)}"
             # A week's bars carry their numbers; longer ranges get a dashed daily average
             chart = bar_chart(
                 points,
@@ -5093,8 +5164,10 @@ def add_routes(
                 link=False,
                 values=True,
                 target_label="avg",
+                unit=unit,
             )
-            parts.append(f'<section class="card"><h2>Steps</h2>{chart}</section>')
+            note = "" if unit == "day" else f' <small class="muted">average by {unit}</small>'
+            parts.append(f'<section class="card"><h2>Steps{note}</h2>{chart}</section>')
         if average:
             bits = activity_bits(average)
             parts.append(
@@ -5105,20 +5178,28 @@ def add_routes(
                 f" day{'' if len(done) == 1 else 's'} with data.</p></section>"
             )
         if by_day:
-            items = "".join(activity_item(d, by_day[d], last) for d in reversed(by_day))
-            parts.append(f'<section class="card"><ul class="entries">{items}</ul></section>')
+            # Years of an imported export would be thousands of rows: the latest 100 days
+            recent = list(reversed(by_day))[:ACTIVITY_LIST_MAX]
+            items = "".join(activity_item(d, by_day[d], last) for d in recent)
+            more = (
+                f'<p class="small muted">The latest {ACTIVITY_LIST_MAX} days with activity.</p>'
+                if len(by_day) > ACTIVITY_LIST_MAX
+                else ""
+            )
+            parts.append(f'<section class="card"><ul class="entries">{items}</ul>{more}</section>')
         else:
             parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
-        parts.append(health_form(opened=False))
-        return render(
-            "Activity",
-            "".join(parts),
-            "activity",
-            signed_in=provider is not None,
-            user=account(request),
-        )
+        return progress_page(request, "Activity", "".join(parts), "steps")
 
     @server.custom_route(WEIGHT, methods=["GET", "POST"])
+    async def weight_moved(request: Request) -> Response:
+        """Weigh-ins are still added here; the page moved to Progress (#105)."""
+        if request.method == "POST":
+            return await weight_view(request)
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(WEIGHT_PAGE + query, status_code=301, headers=SECURITY_HEADERS)
+
+    @server.custom_route(WEIGHT_PAGE, methods=["GET", "POST"])
     async def weight_view(request: Request) -> Response:
         """Body weight in lb: the latest weigh-in and the change over the range, a line of
         each weighed day, a form to add one, and every weigh-in (swipe left to delete)."""
@@ -5130,22 +5211,20 @@ def add_routes(
             try:
                 when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
             except ValueError as err:
-                return go(f"{WEIGHT}?{urlencode({'days': back, 'problem': str(err)})}")
+                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': str(err)})}")
             try:
                 kg = logic.to_kg(float(str(form.get("lb", "")).strip()), "lb")
             except ValueError:
-                return go(f"{WEIGHT}?{urlencode({'days': back, 'problem': 'weight'})}")
+                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': 'weight'})}")
             with connect(request) as conn:
                 row = store.add_weight(conn, when, kg, "app")
             log.info("dashboard: added weigh-in %d", row["id"])
-            return go(f"{WEIGHT}?{urlencode({'days': back, 'added': row['id']})}")
+            return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'added': row['id']})}")
 
         if not signed_in(request):
             return to_login(request)
         params = request.query_params
-        span = int_param(params.get("days"))
-        if span is None or span not in dict(WEIGHT_TABS):
-            span = 30
+        span = pick_range(params.get("days"), 30)
         last = today()
         first = last - timedelta(days=max(span, 1) - 1)
         lo, _ = logic.local_day_bounds(first, tz)
@@ -5155,11 +5234,7 @@ def add_routes(
             latest = store.latest_weight(conn)
         if span == 0 and rows:
             first = min(logic.local_date(rows[0]["measured_at"], tz), last)
-        over = (
-            f"since {first.strftime('%b')} {first.year}"
-            if span == 0
-            else f"over {dict(WEIGHT_TABS)[span]}"
-        )
+        over = range_words(span, first)
         by_day = {logic.local_date(r["measured_at"], tz): r["kg"] for r in rows}
 
         banner = ""
@@ -5169,11 +5244,12 @@ def add_routes(
             banner = toast("<span>Weigh-in saved.</span>", "status")
         elif params.get("removed"):
             banner = toast("<span>Weigh-in deleted.</span>", "status")
-        tabs = "".join(
-            f'<a href="{WEIGHT}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
-            for n, label in WEIGHT_TABS
-        )
-        parts = [f'<h1>Weight</h1><nav class="segment">{tabs}</nav>', banner]
+        parts = [
+            page_head("Progress"),
+            progress_pills("weight"),
+            range_control(WEIGHT_PAGE, span),
+            banner,
+        ]
 
         if latest is not None:
             local = logic.local_iso(latest["measured_at"], tz)
@@ -5196,7 +5272,7 @@ def add_routes(
 
         now = datetime.now(ZoneInfo(tz))
         parts.append(
-            f'<form class="card stack" method="post" action="{WEIGHT}">'
+            f'<form class="card stack" id="weigh-in" method="post" action="{WEIGHT}">'
             "<h2>Add a weigh-in</h2>"
             f'<input type="hidden" name="days" value="{span}">'
             '<label>Weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
@@ -5225,13 +5301,7 @@ def add_routes(
             parts.append(
                 '<section class="card empty"><p>No weigh-ins in this period.</p></section>'
             )
-        return render(
-            "Weight",
-            "".join(parts),
-            "weight",
-            signed_in=provider is not None,
-            user=account(request),
-        )
+        return progress_page(request, "Weight", "".join(parts), "weight")
 
     @server.custom_route(WEIGHT + "/{weight_id:int}/delete", methods=["POST"])
     async def weight_delete(request: Request) -> Response:
@@ -5241,37 +5311,69 @@ def add_routes(
             try:
                 row = store.delete_weight(conn, request.path_params["weight_id"])
             except store.NotFound:
-                return go(WEIGHT)
+                return go(WEIGHT_PAGE)
         log.info("dashboard: deleted weigh-in %d", row["id"])
-        return go(f"{WEIGHT}?removed=1")
+        return go(f"{WEIGHT_PAGE}?removed=1")
 
-    @server.custom_route(f"{PREFIX}/history", methods=["GET"])
+    @server.custom_route(PROGRESS, methods=["GET"])
+    async def progress(request: Request) -> Response:
+        """Progress (#105) opens on Nutrition until its overview arrives."""
+        return go(NUTRITION_PAGE)
+
+    def moved(old: str, new: str) -> None:
+        """An old page's address (#105) sends a GET on to where it lives now, query and all."""
+
+        async def redirect(request: Request) -> Response:
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(new + query, status_code=301, headers=SECURITY_HEADERS)
+
+        server.custom_route(old, methods=["GET"])(redirect)
+
+    moved(f"{PREFIX}/history", NUTRITION_PAGE)
+    moved(ACTIVITY, ACTIVITY_PAGE)
+    moved(WORKOUTS, TRAINING_PAGE)
+
+    def progress_page(request: Request, title: str, body: str, hue: str = "") -> Response:
+        return render(
+            title,
+            body,
+            "progress",
+            signed_in=provider is not None,
+            user=account(request),
+            hue=hue,
+        )
+
+    def first_day(started: str | None, fallback: date) -> date:
+        """The local day of the first record (for All), never after `fallback`."""
+        return min(logic.local_date(started, tz), fallback) if started else fallback
+
+    @server.custom_route(NUTRITION_PAGE, methods=["GET"])
     async def history(request: Request) -> Response:
+        """Nutrition over a range (was History): daily averages, calories and protein per
+        day (per week or month over long ranges), and each day logged."""
         if not signed_in(request):
             return to_login(request)
-        try:
-            span = int(request.query_params.get("days", "7"))
-        except ValueError:
-            span = 7
-        if span not in HISTORY_RANGES:
-            span = 7
+        span = pick_range(request.query_params.get("days"), 7)
         last = today()
-        first = last - timedelta(days=span - 1)
-        days = logic.date_range(first, last)
-        lo, _ = logic.local_day_bounds(first, tz)
-        _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
+            first = (
+                first_day(store.first_meal_at(conn), last)
+                if span == 0
+                else last - timedelta(days=span - 1)
+            )
+            lo, _ = logic.local_day_bounds(first, tz)
+            _, hi = logic.local_day_bounds(last, tz)
             by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
             targets = store.get_targets(conn)
+        days = logic.date_range(first, last)
         totals = logic.sum_nutrients(by_day.values())
         average = logic.round_for_display(logic.average(totals, len(by_day))) if by_day else None
 
-        tabs = "".join(
-            f'<a href="{PREFIX}/history?days={n}"{" aria-current=page" if n == span else ""}>'
-            f"{n} days</a>"
-            for n in HISTORY_RANGES
-        )
-        parts = [f'<h1>History</h1><nav class="segment">{tabs}</nav>']
+        parts = [
+            page_head("Progress"),
+            progress_pills("nutrition"),
+            range_control(NUTRITION_PAGE, span),
+        ]
         if average is None:
             parts.append(
                 '<section class="card empty"><p>Nothing logged in this period.</p></section>'
@@ -5284,24 +5386,28 @@ def add_routes(
                 for k in logic.CORE
             )
             parts.append(
-                f'<section class="card"><h2>Daily average</h2><div class="grid4">{stats}</div>'
-                f'<p class="muted small">Over the {len(by_day)} of {span} days with entries.</p>'
-                "</section>"
+                f'<section class="card summary"><h2>Daily average</h2><div class="grid4">{stats}'
+                f'</div><p class="muted small">Over the {len(by_day)} of {len(days)} days with'
+                " entries.</p></section>"
             )
+            unit = logic.chart_unit(len(days))
             for key in ("kcal", "protein_g"):
-                points = [(d, (by_day.get(d) or {}).get(key)) for d in days]
+                points = logic.bucket_days(
+                    ((d, (by_day.get(d) or {}).get(key)) for d in days), unit
+                )
                 title = f"{NUTRIENT_LABELS[key]} per day"
+                note = "" if unit == "day" else f' <small class="muted">average by {unit}</small>'
                 parts.append(
-                    f'<section class="card"><h2>{title}</h2>'
-                    f"{bar_chart(points, targets.get(key), key, title)}</section>"
+                    f'<section class="card"><h2>{title}{note}</h2>'
+                    f"{bar_chart(points, targets.get(key), key, title, unit=unit)}</section>"
                 )
             rows = []
+            here = f"{NUTRITION_PAGE}?days={span}"
             for d in reversed(days):
                 n = by_day.get(d)
                 if n is None:
                     continue
                 shown = logic.round_for_display(n)
-                here = f"{PREFIX}/history?days={span}"
                 rows.append(
                     f'<li><a class="row" href="{PREFIX}?date={d.isoformat()}">'
                     f"<span>{e(day_title(d, last))}</span>"
@@ -5314,10 +5420,204 @@ def add_routes(
                 f'<section class="card"><h2>Days</h2><ul class="days">{"".join(rows)}'
                 "</ul></section>"
             )
+        return progress_page(request, "Nutrition", "".join(parts))
+
+    # --- You (#105): goals, integrations, appearance, account ---
+
+    def you_page(request: Request, title: str, body: str) -> Response:
         return render(
-            "History",
-            "".join(parts),
-            "history",
+            title, body, "you", signed_in=provider is not None, user=account(request), hue="you"
+        )
+
+    @server.custom_route(YOU, methods=["GET"])
+    async def you(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        last = today()
+        with connect(request) as conn:
+            targets = store.get_targets(conn)
+            synced = store.last_activity_sync(conn)
+            workouts = store.workouts_summary(conn)
+            name = users.name_of(conn, store.user_of(conn)) if provider is not None else None
+        if targets["kcal"]:
+            goal = f"{num(targets['kcal'])} kcal" + "".join(
+                f" · {letter} {num(targets[k])} g" for k, _, letter in MACROS if targets[k]
+            )
+        else:
+            goal = "Not set yet"
+        health = f"Last sent {sent_text(synced, last)}" if synced else "Not sending yet"
+        hevy_note = (
+            f"{workouts['count']} workouts · latest"
+            f" {short_date(logic.local_date(workouts['latest'], tz), last)}"
+            if workouts["count"]
+            else "No workouts imported yet"
+        )
+        integrations = [
+            item(f"{INTEGRATIONS}#health", "heart-pulse", "burn", "Apple Health", e(health)),
+            item(f"{INTEGRATIONS}#hevy", "dumbbell", "train", "Hevy", e(hevy_note)),
+        ]
+        if settings.public_url:
+            integrations.append(
+                item(f"{INTEGRATIONS}#claude", "sparkles", "protein", "Claude", "Connector address")
+            )
+        picks = "".join(
+            f'<button type="button" data-theme-pick="{key}">{label}</button>'
+            for key, label in (("system", "System"), ("dark", "Dark"), ("light", "Light"))
+        )
+        account_rows = (
+            f'<div class="item"><span class="badge-icon tone-muted">{icon("circle-user")}</span>'
+            f'<span class="grow">{e(name or "Signed in")}</span></div>'
+            f'<form method="post" action="{PREFIX}/logout"><button class="item danger"'
+            f' type="submit"><span class="badge-icon tone-muted">{icon("log-out")}</span>'
+            '<span class="grow">Sign out</span></button></form>'
+            if provider is not None
+            else '<div class="body"><p class="muted small">Local mode: this dashboard needs no'
+            " sign-in.</p></div>"
+        )
+        body = (
+            page_head("You")
+            + '<section class="group"><h2>Goals</h2>'
+            + item(
+                f"{PREFIX}/targets?{urlencode({'back': YOU})}",
+                "target",
+                "kcal",
+                "Daily goals",
+                e(goal),
+            )
+            + "</section>"
+            + '<section class="group"><h2>Integrations</h2>'
+            + "".join(integrations)
+            + "</section>"
+            + '<section class="group js-only"><h2>Appearance</h2>'
+            f'<div class="segment themes" role="group" aria-label="Appearance">{picks}</div>'
+            "</section>"
+            + f'<section class="group"><h2>Account</h2>{account_rows}</section>'
+            + f'<p class="muted small center">Chomp {e(__version__)}</p>'
+        )
+        return you_page(request, "You", body)
+
+    @server.custom_route(INTEGRATIONS, methods=["GET"])
+    async def integrations(request: Request) -> Response:
+        """Where data comes in from (#105): Apple Health (the phone's sends and the export
+        import), Hevy's CSV, and the Claude connector's address. Imports land back here."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        last = today()
+        with connect(request) as conn:
+            synced = store.last_activity_sync(conn)
+            workouts = store.workouts_summary(conn)
+        banner = ""
+        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
+            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        elif (done := params.get("health", "")).count("-") == 4:
+            weighed, added, updated, kept, skipped = (int_param(x) or 0 for x in done.split("-"))
+            text = (
+                f"Imported {added} day{'' if added == 1 else 's'} of activity and {weighed}"
+                f" weigh-in{'' if weighed == 1 else 's'}"
+            )
+            extra = [f"{updated} day{'' if updated == 1 else 's'} updated"] if updated else []
+            extra += (
+                [f"{kept} day{'' if kept == 1 else 's'} kept as your phone sent"] if kept else []
+            )
+            if skipped:
+                extra.append(f"{skipped} unreadable samples skipped")
+            text += f" ({', '.join(extra)})." if extra else "."
+            banner = toast(
+                f'<span>{e(text)}</span><a class="undo" href="{ACTIVITY_PAGE}?days=365">See it</a>',
+                "status",
+            )
+        elif (done := params.get("hevy", "")).count("-") == 3:
+            added, updated, same, skipped = (int_param(x) or 0 for x in done.split("-"))
+            text = f"Imported {added} new workout{'' if added == 1 else 's'}"
+            extra = []
+            if updated:
+                extra.append(f"{updated} updated")
+            if same:
+                extra.append(f"{same} already here")
+            if skipped:
+                extra.append(
+                    f"{skipped} skipped because a row couldn't be read; fix it in Hevy and"
+                    " export again"
+                )
+            text += f" ({', '.join(extra)})." if extra else "."
+            banner = toast(
+                f'<span>{e(text)}</span><a class="undo" href="{TRAINING_PAGE}?days=365">See it</a>',
+                "status",
+            )
+        health_status = (
+            f"Your phone last sent data {sent_text(synced, last)}."
+            if synced
+            else "Your phone hasn't sent anything yet. The Send to Chomp shortcut sends weigh-ins"
+            " and each day's activity (README, step 9)."
+        )
+        hevy_status = (
+            f"{workouts['count']} workouts in Chomp, the latest on"
+            f" {short_date(logic.local_date(workouts['latest'], tz), last)}."
+            if workouts["count"]
+            else "No workouts yet."
+        )
+        parts = [
+            f'<p><a href="{YOU}">&lsaquo; You</a></p>',
+            page_head("Integrations"),
+            banner,
+            f'<section class="card" id="health"><h2>{icon("heart-pulse")} Apple Health</h2>'
+            f'<p class="small">{e(health_status)}</p>{health_import()}</section>',
+            f'<section class="card" id="hevy"><h2>{icon("dumbbell")} Hevy</h2>'
+            f'<p class="small">{e(hevy_status)}</p>{hevy_import()}</section>',
+        ]
+        if settings.public_url:
+            parts.append(
+                f'<section class="card" id="claude"><h2>{icon("sparkles")} Claude</h2>'
+                '<p class="small muted">Add this address as a custom connector in Claude'
+                " (README, step 6) to log and look things up from a chat.</p>"
+                f'<input readonly value="{e(settings.public_url.rstrip("/"))}/mcp"'
+                ' aria-label="Connector address"></section>'
+            )
+        return you_page(request, "Integrations", "".join(parts))
+
+    @server.custom_route(ACTIONS, methods=["GET"])
+    async def actions(request: Request) -> Response:
+        """The + sheet (#105): log food, scan, a saved meal, a weigh-in, new food or recipe.
+        ?part=1 is just the sheet for app.js; without the script it's a page of its own."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        try:
+            day = parse_day(params.get("date")) if params.get("date") else today()
+        except ValueError:
+            day = today()
+        on = "" if day == today() else f" to {day_title(day, today())}"
+        add = f"{PREFIX}/add" + (f"?{urlencode({'date': day.isoformat()})}" if on else "")
+        rows = "".join(
+            (
+                item(add, "search", "kcal", "Log food", f"Search your foods{e(on)}"),
+                item(
+                    f"{PREFIX}/foods/new#scan",
+                    "scan-barcode",
+                    "kcal",
+                    "Scan a barcode",
+                    "Find a packaged food by its code",
+                ),
+                item(SAVED, "utensils", "protein", "Log a saved meal", "Your usual meals"),
+                item(f"{WEIGHT_PAGE}#weigh-in", "scale", "steps", "Add a weigh-in"),
+                item(
+                    f"{PREFIX}/foods/new",
+                    "salad",
+                    "carbs",
+                    "New food",
+                    "Barcode, label photo, search or type it in",
+                ),
+                item(f"{PREFIX}/recipes/new", "book-open", "fat", "New recipe"),
+            )
+        )
+        sheet = f'<h2 id="log-title">Log</h2><div class="group">{rows}</div>'
+        if params.get("part"):
+            return HTMLResponse(sheet, headers=SECURITY_HEADERS)
+        return render(
+            "Log",
+            f'<section class="sheet-page">{sheet}</section>',
+            "",
             signed_in=provider is not None,
             user=account(request),
         )
@@ -5368,7 +5668,7 @@ def add_routes(
             f'<a class="clear" href="{PREFIX}/foods" data-clear{"" if q else " hidden"}>Clear</a>'
         )
         parts = [
-            "<h1>Foods</h1>",
+            page_head("Foods"),
             foods_switch("foods"),
             banner,
             f'<form class="search" method="get" action="{PREFIX}/foods" role="search"'
@@ -5415,7 +5715,6 @@ def add_routes(
         if params.get("part") == "1":  # the script's search as you type (#97)
             return HTMLResponse(results, headers=SECURITY_HEADERS)
         parts.append(f'<div data-results aria-live="polite">{results}</div>')
-        parts.append(recipes_fab())
         response = render(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
         )
