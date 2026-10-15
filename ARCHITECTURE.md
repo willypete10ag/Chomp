@@ -59,7 +59,8 @@ volume; tap opens its sets per exercise, numbered, with warm-up, failure and dro
 F and D, and RPE; swipe left deletes after asking),
 Activity (#94, `/app/activity`, the sixth tab: today's steps, active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
-last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days or a year; the daily
+last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days or a year (the week's bars show
+their counts, longer ranges a dashed daily-average line); the daily
 average over the range's full days; each day's numbers, newest first; and Import from Apple
 Health for past data)
 and Foods (one search over saved

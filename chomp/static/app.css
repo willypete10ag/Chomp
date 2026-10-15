@@ -439,6 +439,8 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .chart .bar.steps { fill: var(--accent); }
 .chart .target { stroke: var(--muted); stroke-dasharray: 4 3; }
 .chart .tick { fill: var(--muted); font-size: 10px; }
+/* a line's label stays readable where it crosses the bars */
+.chart .tick.label { paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .chart .dot { fill: var(--accent); }
 .big.weight { font-size: 2rem; }

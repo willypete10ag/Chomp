@@ -363,9 +363,11 @@ def bar_chart(
     title: str,
     *,
     link: bool = True,
+    values: bool = False,
+    target_label: str = "target",
 ) -> str:
     """Inline SVG bars, one per day (with link, a link to that day's meals); an optional
-    dashed target line."""
+    dashed target line, named target_label. With values, a week's bars show their numbers."""
     w, h, top, bottom = 320, 150, 14, 18
     plot = h - top - bottom
     values = [v for _, v in points if v]
@@ -390,6 +392,11 @@ def bar_chart(
                 f' height="{top + plot - y(v):.1f}"><title>{e(label)}</title></rect>'
             )
             parts.append(f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if link else rect)
+            if values and len(points) <= 7:
+                parts.append(
+                    f'<text class="tick value" x="{x + bar / 2:.1f}" y="{y(v) - 3:.1f}"'
+                    f' text-anchor="middle">{num(v)}</text>'
+                )
         last = i == len(points) - 1
         if (len(points) - 1 - i) % step == 0 or last:
             text = d.strftime("%a")[0] if len(points) <= 7 else f"{d.month}/{d.day}"
@@ -402,8 +409,8 @@ def bar_chart(
     if target:
         parts.append(
             f'<line class="target" x1="0" x2="{w}" y1="{y(target):.1f}" y2="{y(target):.1f}"/>'
-            f'<text class="tick" x="{w - 2}" y="{y(target) - 3:.1f}" text-anchor="end">'
-            f"target {num(target)}</text>"
+            f'<text class="tick label" x="{w - 2}" y="{y(target) - 3:.1f}" text-anchor="end">'
+            f"{e(target_label)} {num(target)}</text>"
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -5062,15 +5069,23 @@ def add_routes(
             + f'<p class="muted small">Last sent from your phone {sent}</p></section>'
         )
         days = logic.date_range(first, last)
+        done = {d: v for d, v in by_day.items() if d != last}
+        average = logic.activity_average(done)
         if any("steps" in v for v in by_day.values()):
             points = [(d, by_day.get(d, {}).get("steps")) for d in days]
             title = f"Steps per day over {dict(ACTIVITY_RANGES)[span]}"
-            parts.append(
-                '<section class="card"><h2>Steps</h2>'
-                f"{bar_chart(points, None, 'steps', title, link=False)}</section>"
+            # A week's bars carry their numbers; longer ranges get a dashed daily average
+            chart = bar_chart(
+                points,
+                None if len(points) <= 7 else average.get("steps"),
+                "steps",
+                title,
+                link=False,
+                values=True,
+                target_label="avg",
             )
-        done = {d: v for d, v in by_day.items() if d != last}
-        if average := logic.activity_average(done):
+            parts.append(f'<section class="card"><h2>Steps</h2>{chart}</section>')
+        if average:
             bits = activity_bits(average)
             parts.append(
                 '<section class="card"><div class="row"><h2>Daily average</h2>'

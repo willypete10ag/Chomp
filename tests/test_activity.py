@@ -395,8 +395,12 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
     assert "Yesterday" in page and "8,000 steps" in page
     assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi<" in page
     assert "flight" not in page  # kept, but not shown
+    # A week's bars show their numbers
+    assert 'text-anchor="middle">8,000</text>' in page and ">avg " not in page
     page = http.get("/app/activity?days=30").text.replace("\xa0", " ")
     assert page.count('class="bar steps"') == 4 and "Over 3 full days with data." in page
+    # longer ranges mark the daily average instead
+    assert "avg 8,333</text>" in page and 'text-anchor="middle">8,000</text>' not in page
     assert http.get("/app/activity?days=12345").status_code == 200  # falls back to 7
 
 
