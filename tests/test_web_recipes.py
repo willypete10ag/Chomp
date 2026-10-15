@@ -22,12 +22,12 @@ def chili(conn):
     return beans, beef, recipe
 
 
-def test_foods_has_the_book_and_the_list_shows_recipes(http, conn):
+def test_foods_switch_reaches_recipes_and_the_list_shows_recipes(http, conn):
     _, _, recipe = chili(conn)
     sign_in(http)
-    assert 'href="/app/recipes" aria-label="Recipes"' not in http.get("/app").text
-    assert 'href="/app/recipes" aria-label="Recipes"' in http.get("/app/foods").text
+    assert 'href="/app/recipes">Recipes<' in http.get("/app/foods").text
     page = http.get("/app/recipes").text.replace("\xa0", " ")
+    assert 'href="/app/recipes" aria-current=page>Recipes<' in page
     assert "Chili" in page and "412 <small>kcal" in page  # 1650 kcal / 4, half to even
     assert f'data-hold="/app/recipes/{recipe.id}/edit"' in page
 

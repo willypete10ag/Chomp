@@ -77,7 +77,7 @@ def logged(conn):
 
 
 def test_pages_redirect_to_sign_in(http):
-    for path in ("/app", "/app/history", "/app/foods?q=egg"):
+    for path in ("/app", "/app/progress/nutrition", "/app/foods?q=egg", "/app/you"):
         r = http.get(path)
         assert r.status_code == 303
         assert r.headers["location"].startswith("/app/login?next=")
@@ -399,20 +399,25 @@ def test_delete_entry_and_then_its_meal(http, conn, logged):
 
 def test_history_charts_and_averages(http, logged):
     sign_in(http)
-    r = http.get("/app/history")
+    r = http.get("/app/progress/nutrition")
     assert r.status_code == 200
     assert 'class="chart"' in r.text
     assert "Over the 1 of 7 days with entries." in r.text
     assert "target 180" in r.text  # protein target line
     assert "target 2,000" not in r.text  # no calorie goal set: no default line on History
-    r = http.get("/app/history?days=30")
+    r = http.get("/app/progress/nutrition?days=30")
     assert "Over the 1 of 30 days" in r.text
-    assert http.get("/app/history?days=9999").status_code == 200  # falls back to 7
+    assert 'aria-label="30 days" aria-current=page>30D<' in r.text
+    assert http.get("/app/progress/nutrition?days=9999").status_code == 200  # falls back to 7
+    # All runs from the first meal; the old address sends you on, range and all
+    assert "Over the 1 of " in http.get("/app/progress/nutrition?days=0").text
+    r = http.get("/app/history?days=30")
+    assert r.status_code == 301 and r.headers["location"] == "/app/progress/nutrition?days=30"
 
 
 def test_history_when_empty(http):
     sign_in(http)
-    assert "Nothing logged in this period" in http.get("/app/history").text
+    assert "Nothing logged in this period" in http.get("/app/progress/nutrition").text
 
 
 def test_foods_and_templates(http, conn, logged):

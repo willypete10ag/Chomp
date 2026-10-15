@@ -35,7 +35,12 @@ can be estimated, and those are marked.
 - **Log and edit:** Add food in servings or grams with your portions as chips; change, move
   or delete entries; rename, retime, combine or delete meals. Every change has Undo.
 - **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
-- **History:** 7, 30 and 90-day averages and charts.
+- **Progress:** Nutrition, Weight, Activity and Training, each over 7, 30 or 60 days, a
+  year or all time, with averages and charts.
+- **Log (+):** the button in the middle of the tab bar logs food, scans a barcode, logs a
+  saved meal or adds a weigh-in from any page.
+- **You:** goals, Apple Health and Hevy imports, the Claude connector address, a light or
+  dark theme (or the phone's), and signing out.
 - **Foods:** your foods with photos, sorted by most logged, recent, calories and more; each
   food has a page with nutrition facts, portions, Log it, Confirm, Edit and Delete. Search
   filters as you type; a food that isn't there is one tap from a database search or typing it
@@ -306,7 +311,7 @@ Tap ▶ to run it. The first time, iPhone asks to let the Shortcut read Health d
 it to your Chomp address: allow both (*Always Allow* for the second). Chomp answers with how
 many readings it added, updated or already had, names any field it couldn't read, and shows
 what each field held under `received`; the
-dashboard's **Activity** and **Weight** tabs show them, with when the phone last sent. A
+dashboard's **Progress › Activity** and **Weight** show them, with when the phone last sent. A
 field that finds nothing in Health is skipped quietly, and one pointing at the wrong action
 shows that action's number (active calories equal to your steps): check its *Health Samples*
 label.
@@ -326,7 +331,7 @@ so weigh-ins keep their times.
 
 **Your history.** The Shortcut sends today; for everything before, Health exports it all.
 In the Health app: tap your picture > *Export All Health Data* > *Save to Files*. Then on the
-dashboard's **Activity** tab, open *Import from Apple Health* and pick `export.zip`. Past
+dashboard, go to **You › Integrations › Apple Health** and pick `export.zip`. Past
 weigh-ins and each day's steps, energy, exercise and distance come in; days the
 phone already sent stay as it sent them. Health lists the iPhone's and the Watch's samples
 separately, so each imported day keeps its larger source's total (Health's own figure for a
@@ -344,7 +349,7 @@ phone can't sign in to it). Ask Claude "what do I weigh?" or "how many steps tod
 ### 10. Import workouts from Hevy
 
 In Hevy: Profile › Settings › Export & Import Data › Export Workouts. Then on the dashboard's
-**Workouts** tab, open Import from Hevy and pick the CSV. Import again whenever you like; only
+**You › Integrations › Hevy**, pick the CSV. Workouts show under **Progress › Training**. Import again whenever you like; only
 new or changed workouts are added. A big first import can also be done on the server:
 
 ```bash

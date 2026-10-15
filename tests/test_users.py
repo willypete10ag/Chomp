@@ -319,7 +319,8 @@ def test_dashboard_shows_the_signed_in_users_log(public_settings, conn):
         r = http.post("/app/login", data={"password": HER_PASSWORD, "next": "/app"}, headers=ORIGIN)
         assert r.status_code == 303
         page = http.get("/app?date=2026-10-07").text
-        assert "Sam" in page and "Lunchbox" not in page and "Egg, whole" not in page
+        assert "Lunchbox" not in page and "Egg, whole" not in page
+        assert "Sam" in http.get("/app/you").text
         http.cookies.clear()
         r = http.post("/app/login", data={"password": PASSWORD, "next": "/app"}, headers=ORIGIN)
         assert r.status_code == 303

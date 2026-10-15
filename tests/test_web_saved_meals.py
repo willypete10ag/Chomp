@@ -24,7 +24,7 @@ def foods(conn):
     return oats, milk, template_id
 
 
-def test_meals_side_lists_saved_meals_with_the_book(http, conn, foods):
+def test_meals_side_lists_saved_meals(http, conn, foods):
     _, _, template_id = foods
     sign_in(http)
     page = http.get("/app/saved-meals").text.replace("\xa0", " ")
@@ -32,7 +32,7 @@ def test_meals_side_lists_saved_meals_with_the_book(http, conn, foods):
     assert "Oatmeal" in page and "454 <small>kcal" in page  # 304 + 150
     assert f'data-hold="/app/saved-meals/{template_id}/edit"' in page
     assert 'data-confirm="Delete the saved meal Oatmeal?"' in page
-    assert "+ New saved meal" in page and 'aria-label="Recipes"' in page
+    assert "+ New saved meal" in page and 'href="/app/recipes">Recipes<' in page
     assert "Oatmeal" not in http.get("/app/saved-meals", params={"q": "pizza"}).text
     assert "Oatmeal" in http.get("/app/saved-meals", params={"q": "oatmeal"}).text
 

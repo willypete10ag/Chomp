@@ -1,47 +1,99 @@
-/* Chomp dashboard. Mobile first; light and dark follow the device. */
+/* Chomp dashboard. Mobile first. Vibrant dark (#105): neutral surfaces, one saturated hue per
+   metric. Light and dark follow the device unless You > Appearance picks one (data-theme). */
 :root {
-  --bg: #f6f7f5;
+  --bg: #f3f6f4;
   --card: #ffffff;
-  --text: #1c211e;
-  --muted: #66706a;
-  --line: #e2e6e3;
-  --accent: #1f7a4d;
-  --kcal: #1f7a4d;
-  --protein: #2f6fb5;
-  --carbs: #c98a16;
+  --surface-2: #edf1ee;
+  --glass: rgb(255 255 255 / .82);
+  --text: #111714;
+  --muted: #59645e;
+  --faint: #7a857f;
+  --line: rgb(17 23 20 / .09);
+  --accent: #138a52;
+  --kcal: #138a52;
+  --protein: #1f6fd1;
+  --carbs: #e8a417;
   --carbs-text: #9a6700; /* darker than the bars for 4.5:1 text contrast on white */
-  --fat: #b4508a;
-  --over: #c0392b;
-  --track: #e9ecea;
+  --fat: #c23c86;
+  --burn: #d4501c;
+  --steps: #0f87a3;
+  --train: #6a45e0;
+  --over: #c62828;
+  --track: #e3e9e5;
   --on-accent: #ffffff;
-  --flash: #e3f2ea;
+  --flash: #e1f4ea;
   --on-slice: #ffffff;
-  --on-carbs: #1c211e;
+  --on-carbs: #111714;
   --handle: #ffffff;
-  color-scheme: light dark;
+  --shadow: 0 12px 32px rgb(0 0 0 / .12);
+  --hue: var(--accent);
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --r-sm: 8px; --r: 12px; --r-lg: 18px; --r-xl: 24px;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121513;
-    --card: #1b201d;
-    --text: #e8ece9;
-    --muted: #98a39c;
-    --line: #2b322e;
-    --accent: #4cc38a;
-    --kcal: #4cc38a;
-    --protein: #6aa6ea;
-    --carbs: #e6b04a;
-    --carbs-text: #e6b04a;
-    --fat: #e07fb8;
-    --over: #ef6b5b;
-    --track: #2b322e;
-    --on-accent: #0e1a13;
-    --flash: #173326;
-    --on-slice: #0e1a13;
-    --on-carbs: #0e1a13;
-    --handle: #e8ece9;
+  :root:not([data-theme="light"]) {
+    --bg: #0b0e0d;
+    --card: #141917;
+    --surface-2: #1d2421;
+    --glass: rgb(22 28 25 / .78);
+    --text: #eef3f0;
+    --muted: #a3ada7;
+    --faint: #808b85;
+    --line: rgb(255 255 255 / .08);
+    --accent: #3ee08f;
+    --kcal: #3ee08f;
+    --protein: #4da8ff;
+    --carbs: #ffc23d;
+    --carbs-text: #ffc23d;
+    --fat: #ff6fb8;
+    --burn: #ff7a45;
+    --steps: #2fd6f2;
+    --train: #9d7cff;
+    --over: #ff5c5c;
+    --track: rgb(255 255 255 / .09);
+    --on-accent: #04140b;
+    --flash: #12301f;
+    --on-slice: #04140b;
+    --on-carbs: #04140b;
+    --handle: #eef3f0;
+    --shadow: 0 14px 40px rgb(0 0 0 / .55);
+    color-scheme: dark;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #0b0e0d;
+  --card: #141917;
+  --surface-2: #1d2421;
+  --glass: rgb(22 28 25 / .78);
+  --text: #eef3f0;
+  --muted: #a3ada7;
+  --faint: #808b85;
+  --line: rgb(255 255 255 / .08);
+  --accent: #3ee08f;
+  --kcal: #3ee08f;
+  --protein: #4da8ff;
+  --carbs: #ffc23d;
+  --carbs-text: #ffc23d;
+  --fat: #ff6fb8;
+  --burn: #ff7a45;
+  --steps: #2fd6f2;
+  --train: #9d7cff;
+  --over: #ff5c5c;
+  --track: rgb(255 255 255 / .09);
+  --on-accent: #04140b;
+  --flash: #12301f;
+  --on-slice: #04140b;
+  --on-carbs: #04140b;
+  --handle: #eef3f0;
+  --shadow: 0 14px 40px rgb(0 0 0 / .55);
+  color-scheme: dark;
+}
+/* Each section leads with its metric's hue: hero glows, tiles, pills and the range control */
+body[data-hue="steps"] { --hue: var(--steps); }
+body[data-hue="train"] { --hue: var(--train); }
+body[data-hue="weight"] { --hue: var(--protein); }
+body[data-hue="you"] { --hue: var(--train); }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -50,25 +102,33 @@ body {
   color: var(--text);
   font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  -webkit-font-smoothing: antialiased;
 }
+/* Page changes slide in place of a white flash (Safari 18.2+, Chrome 126+) */
+@view-transition { navigation: auto; }
+@media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }
 main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 0; }
 /* Room for the fixed tab bar, the home-indicator safe area and a little more, so the
    last card and its controls always scroll clear of the bar */
-body.has-tabs { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
-h1 { font-size: 1.5rem; margin: .5rem 0 1rem; }
-h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+body.has-tabs { padding-bottom: calc(6.5rem + env(safe-area-inset-bottom)); }
+h1 { font-size: 1.875rem; line-height: 1.15; letter-spacing: -.02em; margin: .75rem 0 1rem; }
+h2 { font-size: 1.1rem; letter-spacing: -.01em; margin: 0 0 .6rem; }
 a { color: var(--accent); }
 ul { margin: 0; padding: 0; list-style: none; }
 .muted { color: var(--muted); }
 .small { font-size: .85rem; }
 .center { text-align: center; margin-top: -.5rem; }
 .row { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+.icon {
+  width: 1.5rem; height: 1.5rem; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75;
+  stroke-linecap: round; stroke-linejoin: round; vertical-align: middle;
+}
+/* Sections are tonal, not boxed: depth comes from the surface, not a border */
 .card {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   padding: 1rem;
-  margin-bottom: 1rem;
+  margin-bottom: .875rem;
 }
 .empty { text-align: center; }
 .kcal { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
@@ -87,7 +147,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .warn { color: var(--over); font-weight: 600; }
 .flash {
-  background: var(--flash); border: 1px solid var(--accent); border-radius: 10px;
+  background: var(--flash); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--r);
   padding: .6rem .8rem; margin: 0 0 1rem;
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
 }
@@ -100,8 +161,10 @@ ul { margin: 0; padding: 0; list-style: none; }
 /* Confirmations float above the tab bar, so they show wherever the page lands */
 .toast {
   position: fixed; left: 1rem; right: 1rem; z-index: 10; max-width: 38rem; margin: 0 auto;
-  bottom: calc(4.5rem + env(safe-area-inset-bottom)); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
+  bottom: calc(5.25rem + env(safe-area-inset-bottom)); box-shadow: var(--shadow);
+  animation: rise .32s var(--ease);
 }
+@keyframes rise { from { transform: translateY(1rem); opacity: 0; } }
 .toast.bad { background: var(--card); }
 .toast > span { flex: 1; }
 .dismiss {
@@ -373,15 +436,20 @@ input[type=range]::-moz-range-thumb {
 .splitbar { display: block; width: 100%; height: 10px; border-radius: 5px; overflow: hidden; }
 .split p { margin: .4rem 0 0; }
 select {
-  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
-  border-radius: 10px; padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
+  font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
 }
 .button {
-  display: inline-flex; align-items: center; justify-content: center; text-decoration: none;
-  border-radius: 10px; padding: .55rem 1rem; min-height: 2.75rem; font-weight: 600;
-  background: var(--accent); color: var(--on-accent);
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  text-decoration: none; border-radius: var(--r); padding: .55rem 1rem; min-height: 2.75rem;
+  font-weight: 600; background: var(--accent); color: var(--on-accent);
+  transition: transform .12s var(--ease), filter .12s;
 }
-.button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+/* Secondary actions are tonal: a tint of the accent, no outline */
+.button.ghost {
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+}
+.button:active, button:active { transform: scale(.97); }
 .button.add, .button.wide { display: flex; width: 100%; margin-bottom: 1rem; }
 .mealtools {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
@@ -396,14 +464,18 @@ details.sub > summary {
 details.sub[open] > summary { font-weight: 600; }
 .edit > details, .more details { margin-top: .25rem; }
 input {
-  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
-  border-radius: 10px; padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
+  font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: .55rem .7rem; width: 100%; min-height: 2.75rem;
 }
 button {
-  font: inherit; border: 0; border-radius: 10px; padding: .55rem 1rem; min-height: 2.75rem;
-  background: var(--accent); color: var(--on-accent); cursor: pointer;
+  font: inherit; font-weight: 600; border: 0; border-radius: var(--r); padding: .55rem 1rem;
+  min-height: 2.75rem; background: var(--accent); color: var(--on-accent); cursor: pointer;
+  transition: transform .12s var(--ease);
 }
-button.danger { background: transparent; color: var(--over); border: 1px solid var(--over); }
+button.danger { background: color-mix(in srgb, var(--over) 14%, transparent); color: var(--over); }
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent;
+}
 button.link { background: none; color: var(--muted); text-decoration: underline; padding: 0; min-height: 0; }
 .search { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
 .search input { flex: 1; min-width: 0; }
@@ -418,17 +490,25 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .login form { display: grid; gap: .75rem; text-align: left; }
 .login label { display: grid; gap: .3rem; }
 
-/* History */
-.segment { display: flex; gap: .5rem; margin-bottom: 1rem; }
+/* Segmented control (#105): a compact track with the picked option raised on it. The range
+   control (7D 30D 60D 1Y All) and Foods / Meals / Recipes share it */
+.segment {
+  display: flex; gap: 2px; padding: 3px; margin-bottom: 1rem; border-radius: var(--r);
+  background: var(--surface-2);
+}
 .segment a {
-  flex: 1; text-align: center; padding: .5rem .25rem; border-radius: 10px; text-decoration: none;
-  border: 1px solid var(--line); background: var(--card); white-space: nowrap;
+  flex: 1; text-align: center; padding: .45rem .25rem; border-radius: 9px; text-decoration: none;
+  color: var(--muted); font-weight: 600; font-size: .9rem; white-space: nowrap;
+  transition: background .2s var(--ease), color .2s;
 }
 .segment a[aria-current] {
-  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+  background: var(--card); color: var(--hue); box-shadow: 0 1px 3px rgb(0 0 0 / .25);
 }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; text-align: center; }
-.big { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.big {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
 .big.kcal { color: var(--kcal); } .big.protein_g { color: var(--protein); }
 .big.carbs_g { color: var(--carbs); } .big.fat_g { color: var(--fat); }
 /* Calories remaining once past the goal: amber up to 100 kcal over, red beyond */
@@ -436,15 +516,28 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .chart { display: block; width: 100%; height: auto; }
 .chart .axis { stroke: var(--line); }
 .chart .bar.kcal { fill: var(--kcal); } .chart .bar.protein_g { fill: var(--protein); }
-.chart .bar.steps { fill: var(--accent); }
+.chart .bar.steps { fill: var(--steps); }
 .chart .target { stroke: var(--muted); stroke-dasharray: 4 3; }
 .chart .tick { fill: var(--muted); font-size: 10px; }
 /* a line's label stays readable where it crosses the bars */
 .chart .tick.label { paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .chart .dot { fill: var(--accent); }
-.big.weight { font-size: 2rem; }
+.big.weight { font-size: 2.75rem; line-height: 1.05; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; text-align: center; }
+/* Stat tiles: a tint of the section's hue under each number */
+.summary .grid2 > div, .grid4 > div {
+  background: color-mix(in srgb, var(--hue) 10%, var(--surface-2)); border-radius: var(--r);
+  padding: .65rem .4rem;
+}
+.summary .grid2 { margin: .9rem 0 .25rem; }
+/* The hero glows in its hue: a soft wash from the top corner */
+.summary {
+  background:
+    radial-gradient(120% 85% at 0% 0%, color-mix(in srgb, var(--hue) 20%, transparent), transparent 62%),
+    var(--card);
+}
+.summary .big.weight { color: var(--text); }
 .sets { list-style: none; margin: 0; padding: 0; }
 .sets li { padding: .45rem 0; border-top: 1px solid var(--line); }
 .sets li:first-child { border-top: 0; }
@@ -455,22 +548,50 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .setno.warmup { color: var(--carbs-text); } .setno.failure { color: var(--over); }
 .setno.dropset { color: var(--protein); }
 
-/* Bottom tab bar */
+/* Tab bar (#105): Today, Progress, Log, Foods, You. Translucent over the page; the Log
+   button in the middle opens the + sheet. On a wide screen it becomes a sidebar */
 .tabs {
-  position: fixed; left: 0; right: 0; bottom: 0; display: flex; overflow-x: auto;
-  background: var(--card); border-top: 1px solid var(--line); scrollbar-width: none;
-  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex;
+  justify-content: space-around; align-items: stretch;
+  background: var(--glass); border-top: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  padding: .25rem max(.5rem, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    max(.5rem, env(safe-area-inset-left));
 }
-.tabs::-webkit-scrollbar { display: none; }
-/* Six tabs: they share the width, and a screen too narrow for them scrolls sideways (the
-   auto margins center them when there's room and give way when there isn't) */
 .tabs a {
-  flex: 1 0 auto; max-width: 10rem; text-align: center; padding: .9rem .45rem;
-  color: var(--muted); text-decoration: none; font-weight: 600; font-size: .85rem;
+  flex: 1; max-width: 6rem; display: flex; flex-direction: column; align-items: center;
+  gap: .15rem; padding: .45rem 0 .5rem; color: var(--muted); text-decoration: none;
+  font-weight: 600; font-size: .7rem; letter-spacing: .01em;
 }
-.tabs a:first-child { margin-left: auto; }
-.tabs a:last-child { margin-right: auto; }
-.tabs a[aria-current] { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+.tabs a[aria-current] { color: var(--accent); }
+.tabs a[aria-current] .icon { stroke-width: 2.25; }
+.tabs .log { justify-content: center; }
+.tabs .log .icon {
+  width: 2.9rem; height: 2.9rem; padding: .6rem; border-radius: 50%; stroke-width: 2.5;
+  background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.tabs .log span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (min-width: 64rem) {
+  body.has-tabs { padding: 0 0 2rem 15rem; }
+  main { max-width: 48rem; padding-top: 1.5rem; }
+  .tabs {
+    top: 0; right: auto; width: 15rem; flex-direction: column; justify-content: flex-start;
+    gap: .25rem; padding: 1.5rem .75rem; border-top: 0; border-right: 1px solid var(--line);
+  }
+  .tabs a {
+    flex: none; max-width: none; flex-direction: row; gap: .75rem; padding: .65rem .85rem;
+    border-radius: var(--r); font-size: .95rem;
+  }
+  .tabs a[aria-current] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .tabs .log {
+    order: -1; margin-bottom: .75rem; background: var(--accent); color: var(--on-accent);
+    justify-content: flex-start;
+  }
+  .tabs .log .icon { width: 1.5rem; height: 1.5rem; padding: 0; box-shadow: none; background: none; }
+  .tabs .log span { position: static; width: auto; height: auto; clip: auto; }
+  .toast { left: 16rem; bottom: 1.5rem; }
+}
 footer { text-align: center; padding: .5rem 0 1rem; }
 
 /* New food (#59): camera scanner and the value form with tick boxes */
@@ -697,16 +818,6 @@ button.found, a.found {
   padding: 0; min-height: 0; border-radius: 0; font-weight: inherit; text-decoration: none;
 }
 
-/* Recipes (#82): a book in the bottom corner of Foods opens them */
-.fab {
-  position: fixed; z-index: 5; right: max(1rem, env(safe-area-inset-right));
-  bottom: calc(4.4rem + env(safe-area-inset-bottom));
-  width: 3.25rem; height: 3.25rem; border-radius: 50%; display: flex; align-items: center;
-  justify-content: center; background: var(--card); color: var(--accent);
-  border: 1px solid var(--line); box-shadow: 0 4px 14px rgb(0 0 0 / .18);
-}
-.fab:active { background: var(--track); }
-body:has(.toast) .fab { display: none; }
 .step.edit-link { width: auto; padding: 0 .75rem; font-size: 1rem; font-weight: 600; }
 .ingredients li { display: flex; justify-content: space-between; gap: .75rem; }
 ul.ingredients:not(.plain) { margin-bottom: .5rem; }
@@ -779,3 +890,116 @@ form.busy > :not(.busy-note) { display: none; }
   .spinner { animation-duration: 6s; }
   .spinner circle { animation: none; stroke: var(--accent); stroke-dasharray: 90 150; }
 }
+
+/* Page header (#105): a large title, optional actions on its right, and a compact copy of
+   the title that slides into a bar at the top once the large one scrolls away */
+.pagehead { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.pagehead h1 { margin: .75rem 0 1rem; }
+.pagehead .actions { display: flex; gap: .25rem; }
+.iconbtn {
+  width: 2.75rem; height: 2.75rem; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.minihead {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 15; text-align: center;
+  padding: calc(env(safe-area-inset-top) + .7rem) 1rem .7rem; font-weight: 650;
+  background: var(--glass); border-bottom: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  transform: translateY(-100%); opacity: 0; transition: transform .2s var(--ease), opacity .2s;
+}
+.minihead.on { transform: none; opacity: 1; }
+@media (min-width: 64rem) { .minihead { left: 15rem; } }
+
+/* Section pills: sibling areas (Progress: Nutrition, Weight, Activity, Training) */
+.pills {
+  display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; margin: -.25rem -1rem 1rem;
+  padding: 0 1rem;
+}
+.pills::-webkit-scrollbar { display: none; }
+.pills a {
+  flex: none; padding: .45rem .95rem; border-radius: 999px; text-decoration: none;
+  font-weight: 600; font-size: .9rem; color: var(--muted); background: var(--surface-2);
+  transition: background .2s var(--ease), color .2s;
+}
+.pills a[aria-current] {
+  color: var(--hue); background: color-mix(in srgb, var(--hue) 18%, var(--surface-2));
+}
+
+/* Where a page's data comes from and when it last arrived */
+.fresh-tag {
+  display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); font-size: .8rem;
+  text-decoration: none; margin: 0 0 .9rem;
+}
+.fresh-tag .icon { width: 1rem; height: 1rem; color: var(--hue); }
+.fresh-tag b { color: var(--text); font-weight: 600; }
+
+/* Grouped lists (You, the + sheet): icon, title and a line under it, then a chevron */
+.group { background: var(--card); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 1rem; }
+.group > h2 { padding: .9rem 1rem 0; margin: 0; font-size: .8rem; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em; }
+.item {
+  display: flex; align-items: center; gap: .85rem; padding: .8rem 1rem; min-height: 3.5rem;
+  color: var(--text); text-decoration: none; width: 100%; background: none; border-radius: 0;
+  text-align: left; font-weight: 400;
+}
+.item + .item, .group > form + .item, .item + form .item { border-top: 1px solid var(--line); }
+.item:active { background: var(--track); transform: none; }
+.item .grow { flex: 1; min-width: 0; }
+.item .grow small { display: block; color: var(--muted); font-size: .82rem; margin-top: .1rem; }
+.item .chev { width: 1.1rem; height: 1.1rem; color: var(--faint); }
+.badge-icon {
+  width: 2.25rem; height: 2.25rem; flex: none; display: flex; align-items: center;
+  justify-content: center; border-radius: 10px; color: var(--tone, var(--accent));
+  background: color-mix(in srgb, var(--tone, var(--accent)) 16%, transparent);
+}
+.badge-icon .icon { width: 1.25rem; height: 1.25rem; }
+.tone-kcal { --tone: var(--kcal); } .tone-protein { --tone: var(--protein); }
+.tone-carbs { --tone: var(--carbs); } .tone-fat { --tone: var(--fat); }
+.tone-burn { --tone: var(--burn); } .tone-steps { --tone: var(--steps); }
+.tone-train { --tone: var(--train); } .tone-muted { --tone: var(--muted); }
+.item.danger { color: var(--over); }
+.group .body { padding: .25rem 1rem 1rem; }
+.group .body > p:first-child { margin-top: 0; }
+
+/* Appearance: System, Dark, Light (kept on this device by theme.js) */
+.themes { margin: .25rem 1rem 1rem; }
+
+/* Sheets (#105): the + menu and the calendar rise from the bottom; a dialog on wide screens */
+.sheet-layer, .cal-layer {
+  position: fixed; inset: 0; z-index: 100; background: rgb(0 0 0 / 0);
+  transition: background .2s ease;
+}
+.sheet-layer.on { background: rgb(0 0 0 / .45); }
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; max-width: 40rem; margin: 0 auto;
+  max-height: 88vh; overflow-y: auto; background: var(--card); border-radius: var(--r-xl) var(--r-xl) 0 0;
+  padding: .5rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  box-shadow: var(--shadow); transform: translateY(100%); transition: transform .32s var(--ease);
+}
+.sheet-layer.on .sheet { transform: none; }
+.sheet .grab, .cal-sheet .grab {
+  width: 2.5rem; height: .3rem; border-radius: 3px; background: var(--track); margin: 0 auto .75rem;
+}
+.sheet h2 { font-size: 1.25rem; margin: .25rem .25rem .75rem; }
+.sheet .group { background: var(--surface-2); }
+@media (min-width: 40rem) {
+  .sheet { bottom: auto; top: 50%; border-radius: var(--r-xl); width: 26rem; padding-bottom: 1rem;
+    transform: translateY(-40%) scale(.96); opacity: 0; transition: transform .25s var(--ease), opacity .2s; }
+  .sheet-layer.on .sheet { transform: translateY(-50%); opacity: 1; }
+  .sheet .grab { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet, .minihead, .toast { transition: none; animation: none; }
+}
+.segment button {
+  flex: 1; min-height: 2.25rem; padding: .45rem .25rem; border-radius: 9px; background: none;
+  color: var(--muted); font-size: .9rem;
+}
+.segment button[aria-pressed="true"] {
+  background: var(--card); color: var(--hue); box-shadow: 0 1px 3px rgb(0 0 0 / .25);
+}
+.card h2 .icon { width: 1.25rem; height: 1.25rem; color: var(--hue); margin: -.15rem .3rem 0 0; }
+.chart.weight .line { stroke: var(--hue); stroke-width: 2.25; }
+.chart.weight .dot { fill: var(--hue); }
+.sheet-page h2 { margin-top: .5rem; }
+h2 small { font-weight: 400; font-size: .8rem; }

@@ -1516,6 +1516,22 @@ def workouts_between(conn: sqlite3.Connection, start: str, end: str) -> list[sql
     ).fetchall()
 
 
+def first_workout_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest workout started (UTC), or None before any is imported."""
+    return conn.execute(
+        "SELECT min(started_at) FROM workouts WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()[0]
+
+
+def workouts_summary(conn: sqlite3.Connection) -> sqlite3.Row:
+    """How many workouts the user has and when the latest one started (UTC), for You >
+    Integrations and Training (#105)."""
+    return conn.execute(
+        "SELECT count(*) AS count, max(started_at) AS latest FROM workouts WHERE user_id = ?",
+        (user_of(conn),),
+    ).fetchone()
+
+
 def get_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:
     row = conn.execute(
         f"SELECT {WORKOUT_COLS} FROM workouts WHERE id = ? AND user_id = ?",
@@ -1644,6 +1660,13 @@ def activity_between(conn: sqlite3.Connection, start: str, end: str) -> list[sql
         " AND start_at >= ? AND start_at < ? ORDER BY start_at, metric",
         (user_of(conn), start, end),
     ).fetchall()
+
+
+def first_activity_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest activity reading starts (UTC), or None without any."""
+    return conn.execute(
+        "SELECT min(start_at) FROM activity WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()[0]
 
 
 def last_activity_sync(conn: sqlite3.Connection) -> str | None:

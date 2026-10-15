@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -346,3 +346,23 @@ def test_default_targets_fill_what_isnt_set():
     # a set calorie goal is split in thirds for the macros that aren't set
     out = logic.with_default_targets({"kcal": 2400, "protein_g": 180, "carbs_g": None})
     assert out == {"kcal": 2400.0, "protein_g": 180.0, "carbs_g": 200.0, "fat_g": 89.0}
+
+
+def test_chart_unit_keeps_bars_readable():
+    assert [logic.chart_unit(n) for n in (7, 30, 60)] == ["day"] * 3
+    assert [logic.chart_unit(n) for n in (61, 365, 400)] == ["week"] * 3
+    assert logic.chart_unit(401) == "month"
+
+
+def test_bucket_days_averages_only_days_with_values():
+    days = [(date(2026, 10, 5) + timedelta(days=i), v) for i, v in enumerate([1, 3, None, 5])]
+    days += [(date(2026, 10, 12), None), (date(2026, 11, 2), 10)]  # a Monday, then November
+    assert logic.bucket_days(days, "day")[2] == (date(2026, 10, 7), None)
+    assert logic.bucket_days(days, "week") == [
+        (date(2026, 10, 5), 3),  # (1 + 3 + 5) / 3: the empty day isn't a zero
+        (date(2026, 10, 12), None),
+        (date(2026, 11, 2), 10),
+    ]
+    assert logic.bucket_days(days, "month") == [(date(2026, 10, 1), 3), (date(2026, 11, 1), 10)]
+    with pytest.raises(ValueError):
+        logic.bucket_days(days, "year")
