@@ -381,6 +381,8 @@ def test_activity_page_shows_yesterday_until_today_has_numbers(http, conn):
     page = http.get("/app/activity").text.replace("\xa0", " ")
     assert '<div class="big weight">9,963</div>' in page and "steps yesterday" in page
     assert "2,871 kcal burned <span" in page  # a whole day, not "so far"
+    store.add_activity(conn, [("flights", "day", midnight(0), 2)])  # not shown, so still yesterday
+    assert "steps yesterday" in http.get("/app/activity").text
     store.add_activity(conn, [("steps", "day", midnight(0), 12)])
     page = http.get("/app/activity").text.replace("\xa0", " ")
     assert '<div class="big weight">12</div>' in page and "steps today" in page

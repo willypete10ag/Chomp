@@ -608,6 +608,9 @@ def health_form(opened: bool) -> str:
     return fold("health", "Import from Apple Health", body, opened=opened)
 
 
+SUMMARY_METRICS = {"steps", "active_kcal", "resting_kcal", "exercise_min", "distance_m"}
+
+
 def activity_bits(day: Mapping[str, float]) -> list[str]:
     """A day's activity other than steps, as short phrases (HTML)."""
     bits = []
@@ -5037,8 +5040,10 @@ def add_routes(
                 user=account(request),
             )
 
-        # Just after midnight today is still empty: show the latest day that has numbers
-        shown = last if by_day.get(last) else max(by_day, default=last)
+        # Just after midnight today is still empty: show the latest day with numbers this card
+        # shows (flights alone don't count)
+        seen = [d for d, v in by_day.items() if v.keys() & SUMMARY_METRICS]
+        shown = max(seen, default=last)
         now = by_day.get(shown, {})
         near = shown >= last - timedelta(days=1)  # today or yesterday
         on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
