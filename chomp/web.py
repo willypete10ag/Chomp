@@ -4888,14 +4888,17 @@ def add_routes(
             weights = store.add_weights(conn, parsed.weights.items(), "health")
             activity = store.import_activity_days(conn, health_export.day_rows(parsed, tz))
         log.info(
-            "dashboard: Health export import, %d weigh-ins added, %d days added, %d kept,"
-            " %d samples skipped",
+            "dashboard: Health export import, %d weigh-ins added, %d days added, %d updated,"
+            " %d kept, %d samples skipped",
             weights.added,
             activity.added,
-            activity.unchanged,
+            activity.updated,
+            activity.kept,
             parsed.rejected,
         )
-        done = f"{weights.added}-{activity.added}-{activity.unchanged}-{parsed.rejected}"
+        done = (
+            f"{weights.added}-{activity.added}-{activity.updated}-{activity.kept}-{parsed.rejected}"
+        )
         return go(f"{ACTIVITY}?days=365&imported={done}")
 
     @server.custom_route(WORKOUTS + "/import", methods=["POST"])
@@ -4996,13 +4999,14 @@ def add_routes(
         banner = ""
         if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
             banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
-        elif (done := params.get("imported", "")).count("-") == 3:
-            weighed, added, kept, skipped = (int_param(x) or 0 for x in done.split("-"))
+        elif (done := params.get("imported", "")).count("-") == 4:
+            weighed, added, updated, kept, skipped = (int_param(x) or 0 for x in done.split("-"))
             text = (
                 f"Imported {added} day{'' if added == 1 else 's'} of activity and {weighed}"
                 f" weigh-in{'' if weighed == 1 else 's'}"
             )
-            extra = (
+            extra = [f"{updated} day{'' if updated == 1 else 's'} updated"] if updated else []
+            extra += (
                 [f"{kept} day{'' if kept == 1 else 's'} kept as your phone sent"] if kept else []
             )
             if skipped:

@@ -161,7 +161,8 @@ def import_health(args, settings: Settings) -> None:
     print(
         f"{weights.added} weigh-ins added, {weights.updated} updated,"
         f" {weights.unchanged} already there; {activity.added} days of activity added,"
-        f" {activity.unchanged} kept as the phone sent them"
+        f" {activity.updated} updated, {activity.unchanged} already there,"
+        f" {activity.kept} kept as the phone sent them"
         + (f" (from {logic.local_date(first, settings.tz)})" if first else "")
         + f"; {parsed.rejected} samples skipped"
     )

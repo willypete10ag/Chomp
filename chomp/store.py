@@ -1585,36 +1585,55 @@ def add_activity(
             else:
                 counts.unchanged += 1
             conn.execute(
-                "UPDATE activity SET qty = ?, updated_at = datetime('now') WHERE id = ?",
+                "UPDATE activity SET qty = ?, source = 'phone', updated_at = datetime('now')"
+                " WHERE id = ?",
                 (qty, row["id"]),
             )
     return counts
 
 
+@dataclass
+class DayImportCounts:
+    added: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    kept: int = 0  # days the phone sent, left as they are
+
+
 def import_activity_days(
     conn: sqlite3.Connection, days: Iterable[tuple[str, str, str, float]]
-) -> ImportCounts:
+) -> DayImportCounts:
     """Save (metric, UTC day start, UTC day end, total) whole days from Health's export for
-    the connection's user. A day the phone already sent anything for (its total or its hours)
-    is kept as it is: the phone's figure is Health's own, the export's is pieced together.
-    Imported days are dated to their start, so they don't count as the phone's last send."""
+    the connection's user. A day the phone sent anything for (its total or its hours) is kept
+    as it is: the phone's figure is Health's own, the export's is pieced together. A day an
+    earlier export brought in is refreshed, since that export may have caught it half done.
+    Imported days are dated to their start and marked 'export', so they never count as the
+    phone's last send."""
     user_id = user_of(conn)
-    counts = ImportCounts()
+    counts = DayImportCounts()
     with transaction(conn):
         for metric, start_at, end_at, qty in days:
-            if conn.execute(
-                "SELECT 1 FROM activity WHERE user_id = ? AND metric = ? AND start_at >= ?"
-                " AND start_at < ? LIMIT 1",
+            rows = conn.execute(
+                "SELECT id, period, source, qty FROM activity WHERE user_id = ? AND metric = ?"
+                " AND start_at >= ? AND start_at < ?",
                 (user_id, metric, start_at, end_at),
-            ).fetchone():
-                counts.unchanged += 1
+            ).fetchall()
+            if any(r["source"] == "phone" for r in rows):
+                counts.kept += 1
                 continue
-            conn.execute(
-                "INSERT INTO activity (user_id, metric, period, start_at, qty, updated_at)"
-                " VALUES (?, ?, 'day', ?, ?, ?)",
-                (user_id, metric, start_at, qty, start_at.replace("T", " ").rstrip("Z")),
-            )
-            counts.added += 1
+            mine = next((r for r in rows if r["period"] == "day"), None)
+            if mine is None:
+                conn.execute(
+                    "INSERT INTO activity (user_id, metric, period, start_at, qty, updated_at,"
+                    " source) VALUES (?, ?, 'day', ?, ?, ?, 'export')",
+                    (user_id, metric, start_at, qty, start_at.replace("T", " ").rstrip("Z")),
+                )
+                counts.added += 1
+            elif abs(mine["qty"] - qty) > 1e-6:
+                conn.execute("UPDATE activity SET qty = ? WHERE id = ?", (qty, mine["id"]))
+                counts.updated += 1
+            else:
+                counts.unchanged += 1
     return counts
 
 
@@ -1630,6 +1649,7 @@ def activity_between(conn: sqlite3.Connection, start: str, end: str) -> list[sql
 def last_activity_sync(conn: sqlite3.Connection) -> str | None:
     """When the phone last sent the user's activity (UTC storage format), or None."""
     row = conn.execute(
-        "SELECT max(updated_at) FROM activity WHERE user_id = ?", (user_of(conn),)
+        "SELECT max(updated_at) FROM activity WHERE user_id = ? AND source = 'phone'",
+        (user_of(conn),),
     ).fetchone()
     return row[0].replace(" ", "T") + "Z" if row[0] else None

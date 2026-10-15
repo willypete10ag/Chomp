@@ -266,8 +266,10 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   time and flights are summed per local day per `sourceName`, and each day keeps its largest
   source (Health lists iPhone and Watch samples for the same steps separately). Records nested
   in a `Correlation` are skipped (they repeat top-level ones). `store.import_activity_days`
-  adds a day only where the phone sent nothing for that metric (its total or hours), dated
-  to the day's start so it doesn't count as the phone's last send. Uploaded on the Activity
+  adds a day only where the phone sent nothing for that metric (its total or hours), and
+  refreshes a day an earlier export brought in; imported rows are marked `source = 'export'`
+  (migration 0016), so `last_activity_sync` counts only the phone's, and the phone sending
+  a day takes it over. Uploaded on the Activity
   page (`POST /app/activity/import`, 95 MB at most because Cloudflare caps a request at
   100 MB, parsed in a worker thread one at a time) or `chomp import-health FILE|-`.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.

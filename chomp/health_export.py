@@ -21,6 +21,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -178,8 +179,11 @@ def day_rows(parsed: Parsed, tz: str) -> list[tuple[str, str, str, float]]:
 
 def read(source: BinaryIO, tz: str) -> Parsed:
     """Parse Health's export.zip (or export.xml) from a seekable binary file."""
-    with open_export(source) as stream:
-        return parse(stream, tz)
+    try:
+        with open_export(source) as stream:
+            return parse(stream, tz)
+    except (zipfile.BadZipFile, zlib.error, EOFError) as e:  # a cut-off or damaged zip
+        raise ExportError(f"not a readable zip: {e or type(e).__name__}") from None
 
 
 def read_bytes(data: bytes, tz: str) -> Parsed:

@@ -111,6 +111,12 @@ def test_rejects_what_is_not_a_health_export():
         health_export.read_bytes(b"<plist/>", TZ)
     with pytest.raises(health_export.ExportError, match="not a readable"):
         health_export.read_bytes(b"<HealthData><Record", TZ)
+    # A zip whose export.xml is cut off or damaged
+    damaged = bytearray(zipped(XML * 50))
+    middle = len(damaged) // 2
+    damaged[middle : middle + 64] = bytes(64)
+    with pytest.raises(health_export.ExportError, match="not a readable"):
+        health_export.read_bytes(bytes(damaged), TZ)
     huge = export_xml(record("StepCount", "300000", "2026-10-12 08:00:00 -0400"))
     assert health_export.read_bytes(huge, TZ).days == {}
 
@@ -122,13 +128,22 @@ def test_import_keeps_days_the_phone_sent(conn):
     parsed = health_export.read_bytes(zipped(), TZ)
     days = health_export.day_rows(parsed, TZ)
     counts = store.import_activity_days(conn, days)
-    assert (counts.added, counts.unchanged) == (3, 2)
+    assert (counts.added, counts.updated, counts.unchanged, counts.kept) == (3, 0, 0, 2)
     rows = {(r["metric"], r["period"]): r["qty"] for r in store.activity_between(conn, "0", "9")}
     assert rows[("steps", "day")] == 9963 and rows[("active_kcal", "part")] == 300
     assert rows[("flights", "day")] == 7
-    # Importing old days doesn't move the phone's last send
+    # Importing old days doesn't move the phone's last send, nor stand in for one
     assert store.last_activity_sync(conn) == sent
-    assert store.import_activity_days(conn, days).added == 0
+    conn.execute("DELETE FROM activity WHERE source = 'phone'")
+    assert store.last_activity_sync(conn) is None
+    # A later export refreshes days an earlier one brought in
+    later = [(m, s, e, q + 1 if m == "flights" else q) for m, s, e, q in days]
+    counts = store.import_activity_days(conn, later)
+    assert (counts.added, counts.updated, counts.unchanged, counts.kept) == (2, 1, 2, 0)
+    # and the phone's send replaces an imported day, after which imports leave it alone
+    store.add_activity(conn, [("flights", "day", day("2026-10-11"), 9)])
+    assert store.import_activity_days(conn, later).kept == 1
+    assert store.last_activity_sync(conn) is not None
 
 
 def test_cli_import(settings, conn, monkeypatch, capsys, tmp_path):
@@ -142,7 +157,7 @@ def test_cli_import(settings, conn, monkeypatch, capsys, tmp_path):
     stdin = io.TextIOWrapper(io.BytesIO(zipped()))
     monkeypatch.setattr("sys.stdin", stdin)
     assert cli.main(["import-health", "-"]) == 0
-    assert "0 days of activity added, 5 kept" in capsys.readouterr().out
+    assert "0 days of activity added, 0 updated, 5 already there, 0 kept" in capsys.readouterr().out
     assert len(store.weights_between(conn, "0", "9")) == 2
     bad = tmp_path / "bad.zip"
     bad.write_bytes(b"PK\x03\x04 not really")
