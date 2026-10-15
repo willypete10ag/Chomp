@@ -2205,9 +2205,10 @@ def item_amount(item) -> str:
     return grams
 
 
-def saved_meal_item(t, items) -> str:
+def saved_meal_item(t, items, query: str = "") -> str:
     """A saved meal on the Meals side of Foods: name, calories and macros. Tap opens it; with
-    the script, swipe it left to delete it (after asking) and press and hold it to edit it."""
+    the script, swipe it left to delete it (after asking) and press and hold it to edit it.
+    `query` (?date=) carries the day the Log sheet was opened on to its Log it form."""
     n = logic.round_for_display(template_totals(items))
     url = f"{SAVED}/{t['id']}"
     name = capitalized(t["name"])
@@ -2218,7 +2219,7 @@ def saved_meal_item(t, items) -> str:
     )
     return (
         f'<li id="saved-{t["id"]}" class="swipe" data-hold="{url}/edit">{delete}'
-        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}"'
+        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}{query}"'
         ' draggable="false">'
         f'<div class="row"><span class="name clamp">{e(name)}</span>'
         f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
@@ -2380,6 +2381,14 @@ def add_routes(
         if not MIN_YEAR <= day.year <= MAX_YEAR or day > today():
             raise ValueError(day)
         return day
+
+    def optional_day(value: str | None) -> date | None:
+        """A past day carried in a link (?date=), or None when it's missing, today or bad."""
+        try:
+            day = parse_day(value) if value else None
+        except ValueError:
+            return None
+        return day if day != today() else None
 
     def parse_when(day_text: str, time_text: str) -> str:
         """A meal time from a date and an HH:MM box. Raises ValueError with a PROBLEMS key."""
@@ -2770,6 +2779,7 @@ def add_routes(
                 "today",
                 signed_in=provider is not None,
                 user=account(request),
+                log_date=day if day != now else None,
             )
 
         # Calories and the macro split
@@ -2879,6 +2889,7 @@ def add_routes(
             "today",
             signed_in=provider is not None,
             user=account(request),
+            log_date=day if day != now else None,
         )
 
     # --- Add food ---
@@ -3031,6 +3042,7 @@ def add_routes(
             "today",
             signed_in=provider is not None,
             user=account(request),
+            log_date=day if day != today() else None,
         )
 
     @server.custom_route(f"{PREFIX}/log", methods=["POST"])
@@ -4530,6 +4542,8 @@ def add_routes(
             return to_login(request)
         params = request.query_params
         q = params.get("q", "").strip()[:100]
+        day = optional_day(params.get("date"))
+        query = f"?{urlencode({'date': day.isoformat()})}" if day else ""
         with connect(request) as conn:
             templates = store.list_templates(conn)
             if q:
@@ -4544,7 +4558,8 @@ def add_routes(
             foods_switch("meals"),
             banner,
             f'<form class="search" method="get" action="{SAVED}">'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Your saved meals"'
+            + (f'<input type="hidden" name="date" value="{day.isoformat()}">' if day else "")
+            + f'<input type="search" name="q" value="{e(q)}" placeholder="Your saved meals"'
             ' aria-label="Search your saved meals">'
             f'<button type="submit">Search</button>{clear}</form>',
             f'<a class="button add" href="{SAVED}/new">+ New saved meal</a>',
@@ -4554,7 +4569,7 @@ def add_routes(
                 '<p class="small muted js-only hint">Tap a meal to see it; press and hold it'
                 " to edit. Swipe left to delete.</p>"
             )
-            items = "".join(saved_meal_item(t, t_items) for t, t_items in templates)
+            items = "".join(saved_meal_item(t, t_items, query) for t, t_items in templates)
             parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
         elif q:
             parts.append(
@@ -4573,7 +4588,8 @@ def add_routes(
         if not signed_in(request):
             return to_login(request)
         template_id = request.path_params["template_id"]
-        day = today()
+        now = today()
+        day = optional_day(request.query_params.get("date")) or now  # from the Log sheet
         with connect(request) as conn:
             try:
                 template, items = store.template_with_foods(conn, template_id)
@@ -4619,9 +4635,13 @@ def add_routes(
                 ctx, None, "Add to", datetime.now(ZoneInfo(tz)).strftime("%H:%M"), with_date=True
             )
             # Only true for today, so the script hides it while another date is picked
-            + f'<p class="preview small muted" data-today="{day.isoformat()}">'
-            f"Today after this: {num(after)}{goal} kcal</p>"
-            '<button type="submit">Log this meal</button></form>'
+            + (
+                f'<p class="preview small muted" data-today="{day.isoformat()}">'
+                f"Today after this: {num(after)}{goal} kcal</p>"
+                if day == now
+                else ""
+            )
+            + '<button type="submit">Log this meal</button></form>'
         )
         parts = [
             '<header class="daynav">'
@@ -4942,7 +4962,8 @@ def add_routes(
                     f"{INTEGRATIONS}#hevy",
                     "dumbbell",
                     "Hevy",
-                    f"imported {short_date(logic.local_date(summary['imported'], tz), last)}",
+                    # Hevy has no API, so this is as fresh as the last export brought in
+                    f"latest workout {short_date(logic.local_date(summary['latest'], tz), last)}",
                 )
             )
         if rows:
@@ -5588,7 +5609,8 @@ def add_routes(
         except ValueError:
             day = today()
         on = "" if day == today() else f" to {day_title(day, today())}"
-        add = f"{PREFIX}/add" + (f"?{urlencode({'date': day.isoformat()})}" if on else "")
+        query = f"?{urlencode({'date': day.isoformat()})}" if on else ""
+        add = f"{PREFIX}/add{query}"
         rows = "".join(
             (
                 item(add, "search", "kcal", "Log food", f"Search your foods{e(on)}"),
@@ -5599,7 +5621,13 @@ def add_routes(
                     "Scan a barcode",
                     "Find a packaged food by its code",
                 ),
-                item(SAVED, "utensils", "protein", "Log a saved meal", "Your usual meals"),
+                item(
+                    f"{SAVED}{query}",
+                    "utensils",
+                    "protein",
+                    "Log a saved meal",
+                    f"Your usual meals{e(on)}",
+                ),
                 item(f"{WEIGHT_PAGE}#weigh-in", "scale", "steps", "Add a weigh-in"),
                 item(
                     f"{PREFIX}/foods/new",

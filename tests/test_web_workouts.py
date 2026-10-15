@@ -40,6 +40,7 @@ def test_import_list_and_workout_page(http, conn):
     assert "Imported 2 new workouts." in page
     assert 'href="/app/progress/training?days=365">See it' in page
     page = http.get("/app/progress/training?days=365").text.replace("\xa0", " ")
+    assert "<b>Hevy</b> · latest workout" in page  # the newest workout, not the upload time
     assert "Push Day" in page and "Legs" in page
     assert "1 h 12 min · 3 exercises · 3,155 lb lifted" in page
     page = follow(http, upload(http, CSV))

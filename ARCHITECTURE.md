@@ -63,7 +63,7 @@ Weight (#94, `/app/progress/weight`: the latest weigh-in in lb, the change over 
 form (lb, time, date), and every weigh-in in the range with where it came from, swiped left to
 delete after asking; a minimal page, expected to move in a wider health redesign),
 Training (#94, `/app/progress/training`: workouts imported from Hevy over the range with their
-count and pounds lifted, when Hevy last imported, and each workout's title, date, length, exercises and
+count and pounds lifted, the latest workout's date, and each workout's title, date, length, exercises and
 volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
 Activity (#94, `/app/progress/activity`: today's (or, until today has numbers, the latest day's) steps, active and resting energy,

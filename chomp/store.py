@@ -1524,13 +1524,10 @@ def first_workout_at(conn: sqlite3.Connection) -> str | None:
 
 
 def workouts_summary(conn: sqlite3.Connection) -> sqlite3.Row:
-    """How many workouts the user has, and when the latest one started and was last
-    imported (UTC), for You > Integrations (#105)."""
+    """How many workouts the user has and when the latest one started (UTC), for You >
+    Integrations and Training (#105)."""
     return conn.execute(
-        "SELECT count(*) AS count, max(started_at) AS latest,"
-        # created_at is SQLite's datetime('now'), so it's put in the stored UTC format
-        " strftime('%Y-%m-%dT%H:%M:%SZ', max(created_at)) AS imported"
-        " FROM workouts WHERE user_id = ?",
+        "SELECT count(*) AS count, max(started_at) AS latest FROM workouts WHERE user_id = ?",
         (user_of(conn),),
     ).fetchone()
 

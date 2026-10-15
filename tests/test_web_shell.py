@@ -94,3 +94,29 @@ def test_integrations_page(http):
     page = http.get("/app/you/integrations").text
     assert 'id="health"' in page and 'id="hevy"' in page and 'id="claude"' in page
     assert "/mcp" in page and "No workouts yet." in page
+
+
+def test_log_button_keeps_the_day_on_breakdown_and_add(http):
+    sign_in(http)
+    for path in ("/app/breakdown", "/app/add"):
+        page = http.get(path, params={"date": "2026-10-01"}).text
+        assert 'class="log" href="/app/actions?date=2026-10-01" data-sheet' in page, path
+
+
+def test_saved_meal_from_a_past_day_logs_to_that_day(http, conn):
+    from test_tools import add_food
+
+    from chomp import store
+
+    oats = add_food(conn, "Rolled oats", 380, 13, 68, 7)
+    template_id, _ = store.save_template(conn, "oatmeal", [(oats, 80)])
+    sign_in(http)
+    sheet = http.get("/app/actions", params={"part": "1", "date": "2026-10-01"}).text
+    assert 'href="/app/saved-meals?date=2026-10-01"' in sheet
+    meals = http.get("/app/saved-meals", params={"date": "2026-10-01"}).text
+    assert f'href="/app/saved-meals/{template_id}?date=2026-10-01"' in meals
+    assert '<input type="hidden" name="date" value="2026-10-01">' in meals  # kept by search
+    page = http.get(f"/app/saved-meals/{template_id}", params={"date": "2026-10-01"}).text
+    assert 'name="date" value="2026-10-01"' in page and "Today after this" not in page
+    page = http.get(f"/app/saved-meals/{template_id}", params={"date": "bad"}).text
+    assert "Today after this" in page  # a bad date falls back to today
