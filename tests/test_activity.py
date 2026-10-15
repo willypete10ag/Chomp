@@ -368,6 +368,30 @@ def test_empty_activity_page_says_where_it_comes_from(http):
     assert "No activity yet." in page and "Apple Health" in page
 
 
+def test_activity_page_shows_yesterday_until_today_has_numbers(http, conn):
+    store.add_activity(
+        conn,
+        [
+            ("steps", "day", midnight(1), 9963),
+            ("active_kcal", "day", midnight(1), 1078),
+            ("resting_kcal", "day", midnight(1), 1793),
+        ],
+    )
+    sign_in(http)
+    page = http.get("/app/activity").text.replace("\xa0", " ")
+    assert '<div class="big weight">9,963</div>' in page and "steps yesterday" in page
+    assert "2,871 kcal burned <span" in page  # a whole day, not "so far"
+    store.add_activity(conn, [("flights", "day", midnight(0), 2)])  # not shown, so still yesterday
+    assert "steps yesterday" in http.get("/app/activity").text
+    store.add_activity(conn, [("steps", "day", midnight(0), 12)])
+    page = http.get("/app/activity").text.replace("\xa0", " ")
+    assert '<div class="big weight">12</div>' in page and "steps today" in page
+    conn.execute("DELETE FROM activity")
+    store.add_activity(conn, [("steps", "day", midnight(3), 5000)])
+    page = http.get("/app/activity").text.replace("\xa0", " ")
+    assert "steps on " in page and '<div class="big weight">5,000</div>' in page
+
+
 def test_activity_page_shows_today_chart_average_and_days(http, conn):
     store.add_activity(
         conn,

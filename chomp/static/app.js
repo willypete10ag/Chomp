@@ -1059,6 +1059,39 @@
 
   document.querySelectorAll("form").forEach(changed);
 
+  // Imports (#94): a big upload can take a while, so the form turns into a spinner with a
+  // running count of seconds until the next page arrives
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    var text = form.getAttribute("data-busy");
+    if (!text || event.defaultPrevented || form.querySelector(".busy-note")) return;
+    var note = document.createElement("div");
+    note.className = "busy-note";
+    note.setAttribute("role", "status");
+    note.innerHTML =
+      '<svg class="spinner" viewBox="0 0 50 50" aria-hidden="true">' +
+      '<circle cx="25" cy="25" r="20"/></svg>' +
+      '<div><div class="busy-text"></div>' +
+      '<div class="muted small">Keep this page open; it can take a minute.</div></div>';
+    var label = note.querySelector(".busy-text");
+    var started = Date.now();
+    function tick() {
+      var seconds = Math.floor((Date.now() - started) / 1000);
+      label.textContent = text + "\u2026" + (seconds ? " " + seconds + " s" : "");
+    }
+    tick();
+    var timer = setInterval(tick, 1000);
+    form.classList.add("busy");
+    form.appendChild(note);
+    // Coming back to this page from the next one shows the form again, not a stale spinner
+    window.addEventListener("pageshow", function (shown) {
+      if (!shown.persisted) return;
+      clearInterval(timer);
+      form.classList.remove("busy");
+      note.remove();
+    }, { once: true });
+  });
+
   // On a screen too narrow for every tab the bar scrolls; keep the current one in sight
   var tabsBar = document.querySelector(".tabs");
   var currentTab = tabsBar && tabsBar.querySelector("[aria-current]");

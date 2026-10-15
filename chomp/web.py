@@ -584,7 +584,7 @@ def exercise_card(name: str, sets: list) -> str:
 def hevy_form(opened: bool) -> str:
     body = (
         f'<form class="stack" method="post" action="{WORKOUTS}/import"'
-        ' enctype="multipart/form-data">'
+        ' enctype="multipart/form-data" data-busy="Importing your workouts">'
         '<p class="muted small">In Hevy: Profile &rsaquo; Settings &rsaquo; Export &amp;'
         " Import Data &rsaquo; Export Workouts, then pick the CSV here. Importing again"
         " later only adds what's new.</p>"
@@ -597,7 +597,7 @@ def hevy_form(opened: bool) -> str:
 def health_form(opened: bool) -> str:
     body = (
         f'<form class="stack" method="post" action="{ACTIVITY}/import"'
-        ' enctype="multipart/form-data">'
+        ' enctype="multipart/form-data" data-busy="Importing your Health data">'
         '<p class="muted small">Brings in your past weigh-ins and each day&rsquo;s activity.'
         " In Health: tap your picture &rsaquo; Export All Health Data &rsaquo; Save to Files,"
         " then pick export.zip here. Days your phone already sent stay as they are. A big"
@@ -606,6 +606,9 @@ def health_form(opened: bool) -> str:
         '<button type="submit">Import</button></form>'
     )
     return fold("health", "Import from Apple Health", body, opened=opened)
+
+
+SUMMARY_METRICS = {"steps", "active_kcal", "resting_kcal", "exercise_min", "distance_m"}
 
 
 def activity_bits(day: Mapping[str, float]) -> list[str]:
@@ -5037,7 +5040,13 @@ def add_routes(
                 user=account(request),
             )
 
-        now = by_day.get(last, {})
+        # Just after midnight today is still empty: show the latest day with numbers this card
+        # shows (flights alone don't count)
+        seen = [d for d, v in by_day.items() if v.keys() & SUMMARY_METRICS]
+        shown = max(seen, default=last)
+        now = by_day.get(shown, {})
+        near = shown >= last - timedelta(days=1)  # today or yesterday
+        on = day_title(shown, last).lower() if near else f"on {day_title(shown, last)}"
         local = logic.local_iso(synced, tz)
         when = datetime.fromisoformat(local)
         sent = (
@@ -5058,11 +5067,12 @@ def add_routes(
         parts.append(
             '<section class="card summary">'
             f'<div class="big weight">{num(now.get("steps"))}</div>'
-            '<p class="muted small">steps today</p>'
+            f'<p class="muted small">steps {e(on)}</p>'
             f'<div class="grid2">{"".join(stats)}</div>'
             + (
-                f'<p class="small">{num(burned)}{NBSP}kcal burned so far'
-                ' <span class="muted">(active + resting)</span></p>'
+                f'<p class="small">{num(burned)}{NBSP}kcal burned'
+                + (" so far" if shown == last else "")
+                + ' <span class="muted">(active + resting)</span></p>'
                 if burned is not None
                 else ""
             )
