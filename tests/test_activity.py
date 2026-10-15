@@ -236,6 +236,9 @@ def test_flat_fields_read_health_samples_inserted_as_text():
         ("flights", "day", day): 7,
     }
     assert parsed.weights == {"2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3)}
+    # What arrived is echoed back, so a field pointing at the wrong thing shows
+    assert parsed.received["steps"] == "9,898 count\n0 count"
+    assert parsed.received["flights"] == "7\n0" and parsed.received["date"] == "2026-10-13"
     # The phone's region decides how numbers are written
     regions = {"9.898": 9898, "9\u202f898": 9898, "1,234.5": 1234.5, "1.234,5": 1234.5}
     regions |= {"412,5 Cal": 412.5, "0.250": 0.25, "12,345": 12345}
@@ -314,6 +317,7 @@ def test_ingest_saves_activity_and_replaces_a_filling_bucket(ingest, conn):
     assert store.last_activity_sync(conn) > "2026-01-02"
     r = ingest.post(health.PATH, json={"date": "2026-10-13", "flights": 3}, headers=auth)
     assert r.json()["activity"]["added"] == 1
+    assert r.json()["received"] == {"date": "2026-10-13", "flights": 3}
 
 
 # --- tool -----------------------------------------------------------------------------------

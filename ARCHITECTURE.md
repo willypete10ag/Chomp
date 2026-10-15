@@ -59,8 +59,9 @@ volume; tap opens its sets per exercise, numbered, with warm-up, failure and dro
 F and D, and RPE; swipe left deletes after asking),
 Activity (#94, `/app/activity`, the sixth tab: today's steps, active energy, exercise minutes,
 miles and flights, calories burned so far when resting energy is known, and when the phone
-last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days; the daily average over
-the range's full days; and each day's numbers, newest first)
+last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days or a year; the daily
+average over the range's full days; each day's numbers, newest first; and Import from Apple
+Health for past data)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
 (most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
@@ -257,7 +258,18 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   adds an empty tomorrow), weight takes the first (latest), and a unit in the text wins
   over the field name's. Bad readings are skipped and reported; metrics Chomp doesn't keep
   are counted under `ignored`. The reply gives added, updated and unchanged counts for
-  weights and activity.
+  weights and activity, and echoes the flat fields as they arrived under `received`.
+- History from Apple Health's own export (`chomp/health_export.py`): Health > your picture >
+  Export All Health Data gives `export.zip` (`apple_health_export/export.xml`, one `<Record>`
+  per sample, streamed with its inline DTD dropped). Weigh-ins (`HKQuantityTypeIdentifierBodyMass`)
+  are kept as they are; steps, active and basal energy, walking + running distance, exercise
+  time and flights are summed per local day per `sourceName`, and each day keeps its largest
+  source (Health lists iPhone and Watch samples for the same steps separately). Records nested
+  in a `Correlation` are skipped (they repeat top-level ones). `store.import_activity_days`
+  adds a day only where the phone sent nothing for that metric (its total or hours), dated
+  to the day's start so it doesn't count as the phone's last send. Uploaded on the Activity
+  page (`POST /app/activity/import`, 95 MB at most because Cloudflare caps a request at
+  100 MB, parsed in a worker thread one at a time) or `chomp import-health FILE|-`.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),

@@ -43,6 +43,14 @@ def test_weight_page_shows_latest_change_chart_and_list(http, conn):
     page = http.get("/app/weight?days=90").text.replace("\xa0", " ")
     assert page.count('<circle class="dot"') == 3 and "&minus;3.6 lb" in page
     assert http.get("/app/weight?days=12345").status_code == 200  # falls back to 30
+    # All: back to the first weigh-in, however long ago, labeled by month and year
+    store.add_weight(conn, days_ago(800), logic.to_kg(200, "lb"), "health")
+    page = http.get("/app/weight?days=0").text.replace("\xa0", " ")
+    first = logic.local_date(days_ago(800), "America/New_York")
+    assert 'href="/app/weight?days=0" aria-current=page>All<' in page
+    assert page.count('<circle class="dot"') == 4 and "&minus;17.6 lb" in page
+    assert f"since {first.strftime('%b')} {first.year}" in page
+    assert f">{first.strftime('%b')} {first.year}</text>" in page
 
 
 def test_add_and_delete_a_weigh_in(http, conn):

@@ -1591,6 +1591,33 @@ def add_activity(
     return counts
 
 
+def import_activity_days(
+    conn: sqlite3.Connection, days: Iterable[tuple[str, str, str, float]]
+) -> ImportCounts:
+    """Save (metric, UTC day start, UTC day end, total) whole days from Health's export for
+    the connection's user. A day the phone already sent anything for (its total or its hours)
+    is kept as it is: the phone's figure is Health's own, the export's is pieced together.
+    Imported days are dated to their start, so they don't count as the phone's last send."""
+    user_id = user_of(conn)
+    counts = ImportCounts()
+    with transaction(conn):
+        for metric, start_at, end_at, qty in days:
+            if conn.execute(
+                "SELECT 1 FROM activity WHERE user_id = ? AND metric = ? AND start_at >= ?"
+                " AND start_at < ? LIMIT 1",
+                (user_id, metric, start_at, end_at),
+            ).fetchone():
+                counts.unchanged += 1
+                continue
+            conn.execute(
+                "INSERT INTO activity (user_id, metric, period, start_at, qty, updated_at)"
+                " VALUES (?, ?, 'day', ?, ?, ?)",
+                (user_id, metric, start_at, qty, start_at.replace("T", " ").rstrip("Z")),
+            )
+            counts.added += 1
+    return counts
+
+
 def activity_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:
     """The user's activity readings starting in UTC [start, end), oldest first."""
     return conn.execute(
