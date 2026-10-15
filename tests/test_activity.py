@@ -388,11 +388,13 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
     sign_in(http)
     page = http.get("/app/activity").text.replace("\xa0", " ")
     assert '<div class="big weight">2,345</div>' in page and "steps today" in page
+    assert "900</div>" in page and "kcal resting" in page
     assert "1,000 kcal burned so far" in page and "Last sent from your phone" in page
     assert page.count('class="bar steps"') == 3 and '<a href="/app?date=' not in page
     assert "10,000 steps" in page and "Over 2 full days with data." in page
     assert "Yesterday" in page and "8,000 steps" in page
-    assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi · 1 flight" in page
+    assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi<" in page
+    assert "flight" not in page  # kept, but not shown
     page = http.get("/app/activity?days=30").text.replace("\xa0", " ")
     assert page.count('class="bar steps"') == 4 and "Over 3 full days with data." in page
     assert http.get("/app/activity?days=12345").status_code == 200  # falls back to 7

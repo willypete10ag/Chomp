@@ -612,9 +612,6 @@ def activity_bits(day: Mapping[str, float]) -> list[str]:
         bits.append(f"{num(day['exercise_min'])}{NBSP}min exercise")
     if "distance_m" in day:
         bits.append(f"{num(logic.miles(day['distance_m']), 1)}{NBSP}mi")
-    if "flights" in day:
-        flights = round(day["flights"])
-        bits.append(f"{flights}{NBSP}flight{'' if flights == 1 else 's'}")
     return bits
 
 
@@ -5021,7 +5018,7 @@ def add_routes(
         if synced is None:
             parts.append(
                 '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
-                "Steps, energy, exercise minutes, distance and flights arrive from Apple Health"
+                "Steps, energy, exercise minutes and distance arrive from Apple Health"
                 " once your phone sends them (README, step 9).</p></section>"
             )
             parts.append(health_form(opened=True))
@@ -5043,12 +5040,12 @@ def add_routes(
         )
         stats = [
             stat(num(now.get("active_kcal")), "kcal active"),
+            stat(num(now.get("resting_kcal")), "kcal resting"),
             stat(num(now.get("exercise_min")), "min exercise"),
             stat(
                 num(logic.miles(now["distance_m"]), 1) if "distance_m" in now else num(None),
                 "miles",
             ),
-            stat(num(now.get("flights")), "flights"),
         ]
         burned = logic.burned_kcal(now)
         parts.append(

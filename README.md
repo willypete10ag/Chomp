@@ -244,8 +244,8 @@ If they use ChatGPT, their connector gets its own callback URL, which must be ad
 
 Apple Health has no web API, so an iPhone Shortcut reads it and posts to
 `https://chomp.<your-domain>/ingest/health`: your latest weigh-in (a scale like VeSync writes
-it to Health) and today's steps, active and resting energy, exercise minutes, walking +
-running distance and flights climbed. First make each person's token on the server; it is
+it to Health) and today's steps, active and resting energy, exercise minutes and walking +
+running distance. First make each person's token on the server; it is
 shown once, and running it again replaces the old one:
 
 ```bash
@@ -274,8 +274,8 @@ weight are enough to start; the rest are optional.
    *is today*, and set *Group By* to *Day*.
 4. Repeat step 3 with *Active Energy*: another **Find Health Samples** (not *Filter Health
    Samples*, which only sifts the Steps above and finds nothing). Optional, the same way:
-   *Resting Energy*, *Exercise Minutes*, *Walking + Running Distance* (set its *Unit* to *mi*)
-   and *Flights Climbed*.
+   *Resting Energy*, *Exercise Minutes* and *Walking + Running Distance* (set its *Unit* to
+   *mi*). Each optional one also needs its row in step 6.
 5. **Format Date**. Leave *Date* as *Current Date*, set *Date Format* to *Custom* and type
    `yyyy-MM-dd` in *Format String*.
 6. **Get Contents of URL**. Shortcuts puts the last result where the URL goes: tap that
@@ -298,7 +298,6 @@ weight are enough to start; the rest are optional.
    | `resting_kcal` | optional: Resting Energy |
    | `exercise_min` | optional: Exercise Minutes |
    | `distance_mi` | optional: Walking + Running Distance |
-   | `flights` | optional: Flights Climbed |
 
 7. **Show Content** (called *Show Result* on older iPhones) with *Contents of URL*, to see
    Chomp's answer while setting up. You can delete it once it works.
@@ -328,7 +327,7 @@ so weigh-ins keep their times.
 **Your history.** The Shortcut sends today; for everything before, Health exports it all.
 In the Health app: tap your picture > *Export All Health Data* > *Save to Files*. Then on the
 dashboard's **Activity** tab, open *Import from Apple Health* and pick `export.zip`. Past
-weigh-ins and each day's steps, energy, exercise, distance and flights come in; days the
+weigh-ins and each day's steps, energy, exercise and distance come in; days the
 phone already sent stay as it sent them. Health lists the iPhone's and the Watch's samples
 separately, so each imported day keeps its larger source's total (Health's own figure for a
 day can be a little higher). An export over 95 MB is too big for the browser (Cloudflare caps
