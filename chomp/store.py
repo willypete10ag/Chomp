@@ -1413,6 +1413,14 @@ def weights_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqli
     ).fetchall()
 
 
+def first_weight_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest weigh-in was (UTC), or None before any."""
+    return conn.execute(
+        "SELECT min(measured_at) FROM weights WHERE user_id = ? AND NOT deleted",
+        (user_of(conn),),
+    ).fetchone()[0]
+
+
 def latest_weight(conn: sqlite3.Connection, before: str | None = None) -> sqlite3.Row | None:
     """The user's most recent weigh-in, or the last one before a UTC time."""
     return conn.execute(

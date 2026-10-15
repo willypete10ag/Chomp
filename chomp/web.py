@@ -5097,6 +5097,7 @@ def add_routes(
                 store.first_meal_at(conn),
                 store.first_activity_at(conn),
                 store.first_workout_at(conn),
+                store.first_weight_at(conn),
             ]
             starts = [s for s in started if s]
             first, last = range_days(span, min(starts) if starts else None)
@@ -5544,8 +5545,7 @@ def add_routes(
         last = today()
         with connect(request) as conn:
             latest = store.latest_weight(conn)
-            first_at = latest and store.weights_between(conn, "0", bounds(last, last)[1])[:1]
-            first, last = range_days(span, first_at[0]["measured_at"] if first_at else None)
+            first, last = range_days(span, store.first_weight_at(conn))
             prev = previous(span, first, last)
             # The trend needs a run-up before the range, so it starts settled
             warm = (prev[0] if prev else first) - timedelta(days=60)

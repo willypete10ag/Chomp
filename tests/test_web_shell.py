@@ -182,3 +182,17 @@ def test_weight_and_step_goals_on_you(http, conn):
     http.post("/app/you/body-goals", data={"lb": "", "steps": ""}, headers=origin)
     assert store.get_body_goals(conn) == {"goal_weight_kg": None, "step_goal": None}
     assert http.post("/app/you/body-goals", data={"lb": "170"}).status_code == 403
+
+
+def test_all_time_overview_starts_at_the_first_weigh_in(http, conn):
+    from datetime import UTC, datetime, timedelta
+
+    from chomp import logic, store
+
+    old = logic.format_utc(datetime.now(UTC) - timedelta(days=400))
+    store.add_weight(conn, old, logic.to_kg(190, "lb"), "app")
+    store.add_weight(conn, logic.format_utc(datetime.now(UTC)), logic.to_kg(180, "lb"), "app")
+    sign_in(http)
+    page = http.get("/app/progress?days=0").text.replace("\xa0", " ")
+    first = logic.local_date(old, "America/New_York")
+    assert f"since {first.strftime('%b')} {first.year}" in page and "&minus;" in page
