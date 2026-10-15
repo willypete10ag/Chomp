@@ -213,6 +213,38 @@ def test_parses_a_shortcuts_flat_fields():
     assert health.parse({"date": "2026-10-13", "steps": ""}, TZ).activity == {}
 
 
+def test_flat_fields_read_health_samples_inserted_as_text():
+    # A Shortcut field given the Health samples themselves, not their Value: one per line,
+    # and grouping by day adds an empty bucket for tomorrow
+    parsed = health.parse(
+        {
+            "date": "2026-10-13",
+            "steps": "9,898 count\n0 count",
+            "active_kcal": "412.5 Cal\n0 Cal",
+            "distance_mi": "5 km",  # the unit Health names wins over the field's
+            "flights": [7, 0],  # a Number field given the list
+            "weight_lb": "182.4 lb\n183 lb",  # latest first
+            "weight_date": "2026-10-13T07:02:11-04:00",
+        },
+        TZ,
+    )
+    day = "2026-10-13T04:00:00Z"
+    assert parsed.activity == {
+        ("steps", "day", day): 9898,
+        ("active_kcal", "day", day): 412.5,
+        ("distance_m", "day", day): 5000,
+        ("flights", "day", day): 7,
+    }
+    assert parsed.weights == {"2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3)}
+    bad = health.parse(
+        {"date": "2026-10-13", "steps": "Today, 12:04 AM", "active_kcal": "1 kcal\n2 kJ"}, TZ
+    )
+    assert bad.activity == {} and bad.problems == [
+        "steps: not a number: 'Today, 12:04 AM'",
+        "active_kcal: mixed units: kJ, kcal",
+    ]
+
+
 def test_bad_activity_readings_are_rejected_not_fatal():
     parsed = health.parse(
         {

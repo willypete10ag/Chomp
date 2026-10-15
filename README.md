@@ -254,47 +254,53 @@ docker compose exec chomp chomp user ingest-token Will --revoke   # stop accepti
 ```
 
 The token can only add that person's health data; it opens nothing else. Keep it in a
-password manager, not in chat. Then build the Shortcut on that person's iPhone, in the
-**Shortcuts** app (built in, free). Tap **+** at the top right, name it `Send to Chomp`, and
-add these actions in order (type each action's name in the search box at the bottom):
+password manager, not in chat, and copy and paste it onto the phone (from the password
+manager, or with Universal Clipboard from a Mac) rather than typing it: it is long, and one
+wrong character gets `{"error": "unauthorized"}`.
+
+Then build the Shortcut on that person's iPhone, in the **Shortcuts** app (built in, free).
+Tap **+** at the top right and name it `Send to Chomp`. Add each action below by typing its
+name in the search box at the bottom; it lands under the one before. Steps, active energy and
+weight are enough to start; the rest are optional.
 
 1. **Find Health Samples**. Tap *Type* and pick *Weight*. Turn on *Sort by* *Start Date*,
-   *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*. Tap the output under
-   the action (*Health Samples*) and rename it `Weight`.
-2. **Format Date**. Tap *Date*, pick the `Weight` variable, then tap it again and choose
-   *Start Date*. Set *Date Format* to *ISO 8601* and turn on *Include ISO 8601 Time*. Rename
-   its output `Weighed`.
+   *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*.
+2. **Format Date**. Shortcuts fills *Date* with the *Health Samples* from step 1; tap that
+   bubble and choose *Start Date*. Tap *Date Format* and pick *ISO 8601*, then turn on
+   *Include ISO 8601 Time*.
 3. **Find Health Samples** again, *Type* *Steps*. Tap *Add Filter*, set it to *Start Date*
-   *is today*, and set *Group By* to *Day*. Rename the output `Steps`.
-4. Repeat step 3 for each of: *Active Energy* (rename it `Active`), *Resting Energy*
-   (`Resting`), *Exercise Minutes* (`Exercise`), *Walking + Running Distance* (`Distance`;
-   set its *Unit* to *mi*) and *Flights Climbed* (`Flights`). Skip any you don't care about.
+   *is today*, and set *Group By* to *Day*.
+4. Repeat step 3 with *Active Energy*. Optional, the same way: *Resting Energy*, *Exercise
+   Minutes*, *Walking + Running Distance* (set its *Unit* to *mi*) and *Flights Climbed*.
 5. **Format Date**. Leave *Date* as *Current Date*, set *Date Format* to *Custom* and type
-   `yyyy-MM-dd`. Rename the output `Today`.
-6. **Get Contents of URL**. URL: `https://chomp.<your-domain>/ingest/health`. Tap the arrow
-   to show more: *Method* *POST*; under *Headers* add `Authorization` with the value
-   `Bearer ` followed by the token (one space after Bearer); *Request Body* *JSON*, and add
-   these fields (*Text* or *Number* as shown, each set to the variable, then tap the
-   variable and choose *Value* where it says so):
+   `yyyy-MM-dd` in *Format String*.
+6. **Get Contents of URL**. Shortcuts puts the last result where the URL goes: tap that
+   bubble, tap *Clear*, and type `https://chomp.<your-domain>/ingest/health`. Tap the arrow
+   to show more and set *Method* to *POST*. Under *Headers*, tap *Add new header*: *Key*
+   `Authorization`, *Text* `Bearer ` (with one space) and then paste the token. Set *Request
+   Body* to *JSON*, and for each row below tap *Add new field*, pick *Text*, type the *Key*
+   exactly, then tap the *Text* box, tap *Select Variable* and tap the action's output named
+   here (choosing *Value* isn't needed; Chomp reads the samples as they are):
 
-   | Field | Type | Value |
-   |---|---|---|
-   | `date` | Text | `Today` |
-   | `steps` | Number | `Steps` › Value |
-   | `active_kcal` | Number | `Active` › Value |
-   | `resting_kcal` | Number | `Resting` › Value |
-   | `exercise_min` | Number | `Exercise` › Value |
-   | `distance_mi` | Number | `Distance` › Value |
-   | `flights` | Number | `Flights` › Value |
-   | `weight_lb` | Number | `Weight` › Value |
-   | `weight_date` | Text | `Weighed` |
+   | Key | Text (Select Variable, then tap) |
+   |---|---|
+   | `date` | the *Formatted Date* of step 5 |
+   | `steps` | the *Health Samples* of step 3 (Steps) |
+   | `active_kcal` | the *Health Samples* of Active Energy |
+   | `weight_lb` | the *Health Samples* of step 1 (Weight) |
+   | `weight_date` | the *Formatted Date* of step 2 |
+   | `resting_kcal` | optional: Resting Energy |
+   | `exercise_min` | optional: Exercise Minutes |
+   | `distance_mi` | optional: Walking + Running Distance |
+   | `flights` | optional: Flights Climbed |
 
-7. Optional: **Show Result** with the *Contents of URL*, to see Chomp's answer while setting up.
+7. **Show Content** (called *Show Result* on older iPhones) with *Contents of URL*, to see
+   Chomp's answer while setting up. You can delete it once it works.
 
-Tap ▶ to run it. The first time, iPhone asks to let the Shortcut read Health data and to
-connect to your Chomp address: allow both. Chomp answers with how many readings it added,
-updated or already had; the dashboard's **Activity** and **Weight** tabs show them, with when
-the phone last sent.
+Tap ▶ to run it. The first time, iPhone asks to let the Shortcut read Health data and to send
+it to your Chomp address: allow both (*Always Allow* for the second). Chomp answers with how
+many readings it added, updated or already had, and names any field it couldn't read; the
+dashboard's **Activity** and **Weight** tabs show them, with when the phone last sent.
 
 Then make it run by itself: **Automation** tab > **+** > **App** > choose an app you open a
 few times a day (Messages, Hevy) > *Is Opened* > *Run Immediately* > pick `Send to Chomp`.
