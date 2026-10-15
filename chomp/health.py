@@ -235,8 +235,30 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-# One line of a Shortcut's text: "9,898", "9898 count", "412.5 kcal", "182.4 lb"
-FLAT_LINE = re.compile(r"(\d[\d,]*(?:\.\d+)?|\.\d+)\s*([a-z]*)", re.IGNORECASE)
+# One line of a Shortcut's text: "9,898", "9898 count", "412.5 kcal", "182.4 lb", or the
+# phone region's way of writing numbers: "9.898", "9 898", "412,5"
+FLAT_LINE = re.compile(r"(\d[\d,.' \u00a0\u202f]*|[.,]\d+)\s*([a-z]*)", re.IGNORECASE)
+GROUPED = re.compile(r"[1-9]\d{0,2}(?:([,.' \u00a0\u202f])\d{3})(?:\1\d{3})*")
+
+
+def _region_number(text: str) -> float:
+    """A number as the phone's region writes it. With both "," and ".", the last is the
+    decimal mark; a lone mark is digit grouping only where it splits off groups of three
+    after a leading 1-9 ("9.898" steps, "1,234"), else the decimal mark ("412,5", "182.4",
+    "0.250"). Health shows at most two decimals, so three after the mark is grouping."""
+    text = text.strip()
+    if GROUPED.fullmatch(text):
+        return float(re.sub(r"\D", "", text))
+    text = re.sub(r"[' \u00a0\u202f]", "", text)
+    if "," in text and "." in text:
+        mark = max(",.", key=text.rfind)
+        whole, _, fraction = text.rpartition(mark)
+        text = re.sub(r"\D", "", whole) + "." + fraction
+    elif text.count(",") == 1 or text.count(".") == 1:
+        text = text.replace(",", ".")
+    if not re.fullmatch(r"\d*\.?\d+", text):
+        raise ValueError(f"not a number: {text!r}")
+    return float(text)
 
 
 def _flat_amount(value: Any, *, first: bool) -> dict[str, Any]:
@@ -251,7 +273,7 @@ def _flat_amount(value: Any, *, first: bool) -> dict[str, Any]:
         match = FLAT_LINE.fullmatch(line)
         if match is None:
             raise ValueError(f"not a number: {line[:40]!r}")
-        total += float(match[1].replace(",", ""))
+        total += _region_number(match[1])
         if match[2]:
             units.add(match[2])
         if first:

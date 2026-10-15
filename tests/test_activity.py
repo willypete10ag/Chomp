@@ -236,6 +236,12 @@ def test_flat_fields_read_health_samples_inserted_as_text():
         ("flights", "day", day): 7,
     }
     assert parsed.weights == {"2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3)}
+    # The phone's region decides how numbers are written
+    regions = {"9.898": 9898, "9\u202f898": 9898, "1,234.5": 1234.5, "1.234,5": 1234.5}
+    regions |= {"412,5 Cal": 412.5, "0.250": 0.25, "12,345": 12345}
+    for text, amount in regions.items():
+        parsed = health.parse({"date": "2026-10-13", "active_kcal": text}, TZ)
+        assert parsed.activity == {("active_kcal", "day", day): amount}, text
     bad = health.parse(
         {"date": "2026-10-13", "steps": "Today, 12:04 AM", "active_kcal": "1 kcal\n2 kJ"}, TZ
     )
