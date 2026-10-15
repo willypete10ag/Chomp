@@ -51,6 +51,7 @@ PATH = "/ingest/health"
 TOKEN_PREFIX = "chomp_ingest_"
 MAX_BODY = 10 * 1024 * 1024  # a long history backfill is still well under this
 MAX_PROBLEMS = 5
+MAX_ECHO = 80
 # Health Auto Export calls weight "weight_&_body_mass"; names are compared without punctuation
 WEIGHT_METRICS = {"weight_body_mass", "weight", "body_mass"}
 # Health Auto Export's names (and the simple shape's keys) for the activity Chomp keeps
@@ -155,6 +156,8 @@ class Parsed:
     rejected: int = 0
     problems: list[str] = field(default_factory=list)
     ignored: dict[str, int] = field(default_factory=dict)  # metric name -> readings
+    # A Shortcut's flat fields as they arrived, echoed back so a setup mistake shows
+    received: dict[str, Any] = field(default_factory=dict)
 
     def reject(self, problem: str) -> None:
         self.rejected += 1
@@ -322,6 +325,8 @@ def parse(payload: Any, tz: str) -> Parsed:
             flat = key in FLAT_ACTIVITY or key in FLAT_WEIGHT
             if isinstance(value, list) and flat and not any(isinstance(v, dict) for v in value):
                 value = "\n".join(str(v) for v in value)  # a Number field given a list
+            if (flat or key in ("date", "weight_date")) and not isinstance(value, dict | list):
+                parsed.received[str(name)] = value[:MAX_ECHO] if isinstance(value, str) else value
             if isinstance(value, dict | list):
                 if key in WEIGHT_METRICS:
                     for item in _items(value):
@@ -419,5 +424,6 @@ def add_routes(server: MCPServer, settings: Settings) -> None:
                 "rejected": parsed.rejected,
                 "problems": parsed.problems,
                 "ignored": parsed.ignored,
+                "received": parsed.received,
             }
         )

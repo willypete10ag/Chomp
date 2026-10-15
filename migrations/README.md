@@ -24,3 +24,4 @@ commit when a migration changes the design.
 | `0013_weights.sql` | `weights`: each person's weigh-ins in kg; `ingest_tokens`: hashed phone tokens for `/ingest/health` (#94, #101) |
 | `0014_workouts.sql` | `workouts` and `workout_sets`: each person's workouts imported from Hevy's CSV export (#94) |
 | `0015_activity.sql` | `activity`: each person's steps, energy, distance, exercise minutes and flights from Apple Health (#94) |
+| `0016_activity_source.sql` | `activity.source`: `phone` or `export` (Health's export.zip), so imports don't date the phone's last send and can be refreshed (#94) |

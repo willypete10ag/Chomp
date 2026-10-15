@@ -236,6 +236,9 @@ def test_flat_fields_read_health_samples_inserted_as_text():
         ("flights", "day", day): 7,
     }
     assert parsed.weights == {"2026-10-13T11:02:11Z": pytest.approx(82.736, abs=1e-3)}
+    # What arrived is echoed back, so a field pointing at the wrong thing shows
+    assert parsed.received["steps"] == "9,898 count\n0 count"
+    assert parsed.received["flights"] == "7\n0" and parsed.received["date"] == "2026-10-13"
     # The phone's region decides how numbers are written
     regions = {"9.898": 9898, "9\u202f898": 9898, "1,234.5": 1234.5, "1.234,5": 1234.5}
     regions |= {"412,5 Cal": 412.5, "0.250": 0.25, "12,345": 12345}
@@ -314,6 +317,7 @@ def test_ingest_saves_activity_and_replaces_a_filling_bucket(ingest, conn):
     assert store.last_activity_sync(conn) > "2026-01-02"
     r = ingest.post(health.PATH, json={"date": "2026-10-13", "flights": 3}, headers=auth)
     assert r.json()["activity"]["added"] == 1
+    assert r.json()["received"] == {"date": "2026-10-13", "flights": 3}
 
 
 # --- tool -----------------------------------------------------------------------------------
@@ -384,13 +388,19 @@ def test_activity_page_shows_today_chart_average_and_days(http, conn):
     sign_in(http)
     page = http.get("/app/activity").text.replace("\xa0", " ")
     assert '<div class="big weight">2,345</div>' in page and "steps today" in page
+    assert "900</div>" in page and "kcal resting" in page
     assert "1,000 kcal burned so far" in page and "Last sent from your phone" in page
     assert page.count('class="bar steps"') == 3 and '<a href="/app?date=' not in page
     assert "10,000 steps" in page and "Over 2 full days with data." in page
     assert "Yesterday" in page and "8,000 steps" in page
-    assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi · 1 flight" in page
+    assert "450 kcal active · 2,200 kcal burned · 30 min exercise · 3.5 mi<" in page
+    assert "flight" not in page  # kept, but not shown
+    # A week's bars show their numbers
+    assert 'text-anchor="middle">8,000</text>' in page and ">avg " not in page
     page = http.get("/app/activity?days=30").text.replace("\xa0", " ")
     assert page.count('class="bar steps"') == 4 and "Over 3 full days with data." in page
+    # longer ranges mark the daily average instead
+    assert "avg 8,333</text>" in page and 'text-anchor="middle">8,000</text>' not in page
     assert http.get("/app/activity?days=12345").status_code == 200  # falls back to 7
 
 

@@ -244,8 +244,8 @@ If they use ChatGPT, their connector gets its own callback URL, which must be ad
 
 Apple Health has no web API, so an iPhone Shortcut reads it and posts to
 `https://chomp.<your-domain>/ingest/health`: your latest weigh-in (a scale like VeSync writes
-it to Health) and today's steps, active and resting energy, exercise minutes, walking +
-running distance and flights climbed. First make each person's token on the server; it is
+it to Health) and today's steps, active and resting energy, exercise minutes and walking +
+running distance. First make each person's token on the server; it is
 shown once, and running it again replaces the old one:
 
 ```bash
@@ -264,14 +264,18 @@ name in the search box at the bottom; it lands under the one before. Steps, acti
 weight are enough to start; the rest are optional.
 
 1. **Find Health Samples**. Tap *Type* and pick *Weight*. Turn on *Sort by* *Start Date*,
-   *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*.
+   *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*. If Shortcuts added a
+   filter *Start Date is in the last 7 days*, tap *days* and pick *years*, so a weigh-in from
+   more than a week ago is still found.
 2. **Format Date**. Shortcuts fills *Date* with the *Health Samples* from step 1; tap that
    bubble and choose *Start Date*. Tap *Date Format* and pick *ISO 8601*, then turn on
    *Include ISO 8601 Time*.
 3. **Find Health Samples** again, *Type* *Steps*. Tap *Add Filter*, set it to *Start Date*
    *is today*, and set *Group By* to *Day*.
-4. Repeat step 3 with *Active Energy*. Optional, the same way: *Resting Energy*, *Exercise
-   Minutes*, *Walking + Running Distance* (set its *Unit* to *mi*) and *Flights Climbed*.
+4. Repeat step 3 with *Active Energy*: another **Find Health Samples** (not *Filter Health
+   Samples*, which only sifts the Steps above and finds nothing). Optional, the same way:
+   *Resting Energy*, *Exercise Minutes* and *Walking + Running Distance* (set its *Unit* to
+   *mi*). Each optional one also needs its row in step 6.
 5. **Format Date**. Leave *Date* as *Current Date*, set *Date Format* to *Custom* and type
    `yyyy-MM-dd` in *Format String*.
 6. **Get Contents of URL**. Shortcuts puts the last result where the URL goes: tap that
@@ -279,8 +283,10 @@ weight are enough to start; the rest are optional.
    to show more and set *Method* to *POST*. Under *Headers*, tap *Add new header*: *Key*
    `Authorization`, *Text* `Bearer ` (with one space) and then paste the token. Set *Request
    Body* to *JSON*, and for each row below tap *Add new field*, pick *Text*, type the *Key*
-   exactly, then tap the *Text* box, tap *Select Variable* and tap the action's output named
-   here (choosing *Value* isn't needed; Chomp reads the samples as they are):
+   exactly, then tap the *Text* box, tap *Select Variable* and tap the output of the action
+   named here. Every Find Health Samples output is called *Health Samples*, so tap the label
+   right under the action you mean (choosing *Value* isn't needed; Chomp reads the samples as
+   they are):
 
    | Key | Text (Select Variable, then tap) |
    |---|---|
@@ -292,15 +298,18 @@ weight are enough to start; the rest are optional.
    | `resting_kcal` | optional: Resting Energy |
    | `exercise_min` | optional: Exercise Minutes |
    | `distance_mi` | optional: Walking + Running Distance |
-   | `flights` | optional: Flights Climbed |
 
 7. **Show Content** (called *Show Result* on older iPhones) with *Contents of URL*, to see
    Chomp's answer while setting up. You can delete it once it works.
 
 Tap ▶ to run it. The first time, iPhone asks to let the Shortcut read Health data and to send
 it to your Chomp address: allow both (*Always Allow* for the second). Chomp answers with how
-many readings it added, updated or already had, and names any field it couldn't read; the
-dashboard's **Activity** and **Weight** tabs show them, with when the phone last sent.
+many readings it added, updated or already had, names any field it couldn't read, and shows
+what each field held under `received`; the
+dashboard's **Activity** and **Weight** tabs show them, with when the phone last sent. A
+field that finds nothing in Health is skipped quietly, and one pointing at the wrong action
+shows that action's number (active calories equal to your steps): check its *Health Samples*
+label.
 
 Then make it run by itself: **Automation** tab > **+** > **App** > choose an app you open a
 few times a day (Messages, Hevy) > *Is Opened* > *Run Immediately* > pick `Send to Chomp`.
@@ -314,6 +323,19 @@ add a REST API automation with the URL above, JSON format, a header `Authorizati
 Grouping* to *Day* and leave *Date Range* on *Default* (not *Since Last Sync*, which would
 send part of a day as the whole day). Keep weight in its own automation without summarizing,
 so weigh-ins keep their times.
+
+**Your history.** The Shortcut sends today; for everything before, Health exports it all.
+In the Health app: tap your picture > *Export All Health Data* > *Save to Files*. Then on the
+dashboard's **Activity** tab, open *Import from Apple Health* and pick `export.zip`. Past
+weigh-ins and each day's steps, energy, exercise and distance come in; days the
+phone already sent stay as it sent them. Health lists the iPhone's and the Watch's samples
+separately, so each imported day keeps its larger source's total (Health's own figure for a
+day can be a little higher). An export over 95 MB is too big for the browser (Cloudflare caps
+a request at 100 MB); copy it to the server and import it there:
+
+```bash
+docker compose exec -T chomp chomp import-health - --user Will < export.zip
+```
 
 Sending the same readings again is harmless: Chomp keeps one weigh-in per time and one total
 per day for each activity metric. Don't put Cloudflare Access in front of `/ingest` (the

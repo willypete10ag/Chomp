@@ -44,7 +44,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import db, hevy, logic, serving_fill, store, users
+from chomp import db, health_export, hevy, logic, serving_fill, store, users
 from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
@@ -62,13 +62,16 @@ COOKIE = "chomp_session"
 SESSION_TTL_S = 30 * 86400
 HISTORY_RANGES = (7, 30, 90)
 WEIGHT_RANGES = ((30, "30 days"), (90, "90 days"), (365, "1 year"))  # Weight page (#94)
+WEIGHT_TABS = (*WEIGHT_RANGES, (0, "All"))  # 0: since the first weigh-in
 WEIGHT = f"{PREFIX}/weight"
 WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here"}
 WORKOUTS = f"{PREFIX}/workouts"  # Workouts page (#94)
 HEVY_MAX = 20 * 1024 * 1024
+# Health's export.zip; Cloudflare's tunnel takes 100 MB a request at most
+HEALTH_MAX = 95 * 1024 * 1024
 SET_MARKS = {"warmup": "W", "failure": "F", "dropset": "D"}
 ACTIVITY = f"{PREFIX}/activity"  # Activity page (#94)
-ACTIVITY_RANGES = ((7, "7 days"), (30, "30 days"), (90, "90 days"))
+ACTIVITY_RANGES = ((7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year"))
 FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
@@ -360,9 +363,11 @@ def bar_chart(
     title: str,
     *,
     link: bool = True,
+    values: bool = False,
+    target_label: str = "target",
 ) -> str:
     """Inline SVG bars, one per day (with link, a link to that day's meals); an optional
-    dashed target line."""
+    dashed target line, named target_label. With values, a week's bars show their numbers."""
     w, h, top, bottom = 320, 150, 14, 18
     plot = h - top - bottom
     values = [v for _, v in points if v]
@@ -387,6 +392,11 @@ def bar_chart(
                 f' height="{top + plot - y(v):.1f}"><title>{e(label)}</title></rect>'
             )
             parts.append(f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if link else rect)
+            if values and len(points) <= 7:
+                parts.append(
+                    f'<text class="tick value" x="{x + bar / 2:.1f}" y="{y(v) - 3:.1f}"'
+                    f' text-anchor="middle">{num(v)}</text>'
+                )
         last = i == len(points) - 1
         if (len(points) - 1 - i) % step == 0 or last:
             text = d.strftime("%a")[0] if len(points) <= 7 else f"{d.month}/{d.day}"
@@ -399,8 +409,8 @@ def bar_chart(
     if target:
         parts.append(
             f'<line class="target" x1="0" x2="{w}" y1="{y(target):.1f}" y2="{y(target):.1f}"/>'
-            f'<text class="tick" x="{w - 2}" y="{y(target) - 3:.1f}" text-anchor="end">'
-            f"target {num(target)}</text>"
+            f'<text class="tick label" x="{w - 2}" y="{y(target) - 3:.1f}" text-anchor="end">'
+            f"{e(target_label)} {num(target)}</text>"
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -442,9 +452,11 @@ def weight_chart(points: list[tuple[date, float]], first: date, last: date) -> s
             f"<title>{e(d.strftime('%a %b'))} {d.day}: {v:,.1f} lb</title></circle>"
         )
     for d, anchor in ((first, "start"), (last, "end")):
+        # Over a year, the month and year say more than the day
+        label = f"{d.month}/{d.day}" if span <= 366 else f"{d.strftime('%b')} {d.year}"
         parts.append(
             f'<text class="tick" x="{x(d):.1f}" y="{h - 4}" text-anchor="{anchor}">'
-            f"{d.month}/{d.day}</text>"
+            f"{e(label)}</text>"
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -582,6 +594,20 @@ def hevy_form(opened: bool) -> str:
     return fold("hevy", "Import from Hevy", body, opened=opened)
 
 
+def health_form(opened: bool) -> str:
+    body = (
+        f'<form class="stack" method="post" action="{ACTIVITY}/import"'
+        ' enctype="multipart/form-data">'
+        '<p class="muted small">Brings in your past weigh-ins and each day&rsquo;s activity.'
+        " In Health: tap your picture &rsaquo; Export All Health Data &rsaquo; Save to Files,"
+        " then pick export.zip here. Days your phone already sent stay as they are. A big"
+        " export takes a minute.</p>"
+        '<input type="file" name="export" accept=".zip,.xml,application/zip" required>'
+        '<button type="submit">Import</button></form>'
+    )
+    return fold("health", "Import from Apple Health", body, opened=opened)
+
+
 def activity_bits(day: Mapping[str, float]) -> list[str]:
     """A day's activity other than steps, as short phrases (HTML)."""
     bits = []
@@ -593,9 +619,6 @@ def activity_bits(day: Mapping[str, float]) -> list[str]:
         bits.append(f"{num(day['exercise_min'])}{NBSP}min exercise")
     if "distance_m" in day:
         bits.append(f"{num(logic.miles(day['distance_m']), 1)}{NBSP}mi")
-    if "flights" in day:
-        flights = round(day["flights"])
-        bits.append(f"{flights}{NBSP}flight{'' if flights == 1 else 's'}")
     return bits
 
 
@@ -1456,6 +1479,10 @@ PROBLEMS = {
     "hevy": "That file isn't a Hevy workout export. In Hevy: Profile > Settings > Export &"
     " Import Data > Export Workouts.",
     "hevy_big": "That file is too big for a Hevy export (20 MB at most).",
+    "health": "That file isn't Apple Health's export. In Health: tap your picture > Export All"
+    " Health Data, then pick export.zip.",
+    "health_big": "That export is over 95 MB, too big to send through the browser. Import it"
+    " on the server instead (README, step 9).",
 }
 PHOTO_TOASTS = {"saved": "Photo saved.", "removed": "Photo removed."}
 
@@ -2128,6 +2155,7 @@ def add_routes(
     photos = photos or Photos(settings.photos_path, off)
     ocr_limit = anyio.CapacityLimiter(1)  # one label photo at a time; OCR is CPU-heavy
     photo_limit = anyio.CapacityLimiter(2)  # resizing a phone photo takes a moment too
+    health_limit = anyio.CapacityLimiter(1)  # a Health export can be millions of samples
 
     def user_of(request: Request) -> int | None:
         """The signed-in user (#46), or None. Local-only mode is always the owner."""
@@ -4839,6 +4867,44 @@ def add_routes(
             user=account(request),
         )
 
+    @server.custom_route(ACTIVITY + "/import", methods=["POST"])
+    async def activity_import(request: Request) -> Response:
+        """Apple Health's export.zip from the Activity page: past weigh-ins, and whole days
+        of activity the phone hasn't sent."""
+        if (no := refused(request, "Import Apple Health data")) is not None:
+            return no
+        size = int_param(request.headers.get("content-length"))
+        if size is not None and size > HEALTH_MAX:
+            return go(f"{ACTIVITY}?problem=health_big")
+        async with request.form(max_files=1, max_fields=2) as form:
+            upload = form.get("export")
+            if not hasattr(upload, "file"):
+                return go(f"{ACTIVITY}?problem=health")
+            if (upload.size or 0) > HEALTH_MAX:
+                return go(f"{ACTIVITY}?problem=health_big")
+            try:
+                parsed = await anyio.to_thread.run_sync(
+                    health_export.read, upload.file, tz, limiter=health_limit
+                )
+            except health_export.ExportError:
+                return go(f"{ACTIVITY}?problem=health")
+        with connect(request) as conn:
+            weights = store.add_weights(conn, parsed.weights.items(), "health")
+            activity = store.import_activity_days(conn, health_export.day_rows(parsed, tz))
+        log.info(
+            "dashboard: Health export import, %d weigh-ins added, %d days added, %d updated,"
+            " %d kept, %d samples skipped",
+            weights.added,
+            activity.added,
+            activity.updated,
+            activity.kept,
+            parsed.rejected,
+        )
+        done = (
+            f"{weights.added}-{activity.added}-{activity.updated}-{activity.kept}-{parsed.rejected}"
+        )
+        return go(f"{ACTIVITY}?days=365&imported={done}")
+
     @server.custom_route(WORKOUTS + "/import", methods=["POST"])
     async def workouts_import(request: Request) -> Response:
         if (no := refused(request, "Import workouts")) is not None:
@@ -4933,17 +4999,36 @@ def add_routes(
         with connect(request) as conn:
             by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
             synced = store.last_activity_sync(conn)
+        params = request.query_params
+        banner = ""
+        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
+            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        elif (done := params.get("imported", "")).count("-") == 4:
+            weighed, added, updated, kept, skipped = (int_param(x) or 0 for x in done.split("-"))
+            text = (
+                f"Imported {added} day{'' if added == 1 else 's'} of activity and {weighed}"
+                f" weigh-in{'' if weighed == 1 else 's'}"
+            )
+            extra = [f"{updated} day{'' if updated == 1 else 's'} updated"] if updated else []
+            extra += (
+                [f"{kept} day{'' if kept == 1 else 's'} kept as your phone sent"] if kept else []
+            )
+            if skipped:
+                extra.append(f"{skipped} unreadable samples skipped")
+            text += f" ({', '.join(extra)})." if extra else "."
+            banner = toast(f"<span>{e(text)}</span>", "status")
         tabs = "".join(
             f'<a href="{ACTIVITY}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
             for n, label in ACTIVITY_RANGES
         )
-        parts = [f'<h1>Activity</h1><nav class="segment">{tabs}</nav>']
+        parts = [f'<h1>Activity</h1><nav class="segment">{tabs}</nav>', banner]
         if synced is None:
             parts.append(
                 '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
-                "Steps, energy, exercise minutes, distance and flights arrive from Apple Health"
+                "Steps, energy, exercise minutes and distance arrive from Apple Health"
                 " once your phone sends them (README, step 9).</p></section>"
             )
+            parts.append(health_form(opened=True))
             return render(
                 "Activity",
                 "".join(parts),
@@ -4962,12 +5047,12 @@ def add_routes(
         )
         stats = [
             stat(num(now.get("active_kcal")), "kcal active"),
+            stat(num(now.get("resting_kcal")), "kcal resting"),
             stat(num(now.get("exercise_min")), "min exercise"),
             stat(
                 num(logic.miles(now["distance_m"]), 1) if "distance_m" in now else num(None),
                 "miles",
             ),
-            stat(num(now.get("flights")), "flights"),
         ]
         burned = logic.burned_kcal(now)
         parts.append(
@@ -4984,15 +5069,23 @@ def add_routes(
             + f'<p class="muted small">Last sent from your phone {sent}</p></section>'
         )
         days = logic.date_range(first, last)
+        done = {d: v for d, v in by_day.items() if d != last}
+        average = logic.activity_average(done)
         if any("steps" in v for v in by_day.values()):
             points = [(d, by_day.get(d, {}).get("steps")) for d in days]
             title = f"Steps per day over {dict(ACTIVITY_RANGES)[span]}"
-            parts.append(
-                '<section class="card"><h2>Steps</h2>'
-                f"{bar_chart(points, None, 'steps', title, link=False)}</section>"
+            # A week's bars carry their numbers; longer ranges get a dashed daily average
+            chart = bar_chart(
+                points,
+                None if len(points) <= 7 else average.get("steps"),
+                "steps",
+                title,
+                link=False,
+                values=True,
+                target_label="avg",
             )
-        done = {d: v for d, v in by_day.items() if d != last}
-        if average := logic.activity_average(done):
+            parts.append(f'<section class="card"><h2>Steps</h2>{chart}</section>')
+        if average:
             bits = activity_bits(average)
             parts.append(
                 '<section class="card"><div class="row"><h2>Daily average</h2>'
@@ -5006,6 +5099,7 @@ def add_routes(
             parts.append(f'<section class="card"><ul class="entries">{items}</ul></section>')
         else:
             parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
+        parts.append(health_form(opened=False))
         return render(
             "Activity",
             "".join(parts),
@@ -5039,16 +5133,23 @@ def add_routes(
         if not signed_in(request):
             return to_login(request)
         params = request.query_params
-        span = int_param(params.get("days")) or 30
-        if span not in dict(WEIGHT_RANGES):
+        span = int_param(params.get("days"))
+        if span is None or span not in dict(WEIGHT_TABS):
             span = 30
         last = today()
-        first = last - timedelta(days=span - 1)
+        first = last - timedelta(days=max(span, 1) - 1)
         lo, _ = logic.local_day_bounds(first, tz)
         _, hi = logic.local_day_bounds(last, tz)
         with connect(request) as conn:
-            rows = store.weights_between(conn, lo, hi)
+            rows = store.weights_between(conn, "0" if span == 0 else lo, hi)
             latest = store.latest_weight(conn)
+        if span == 0 and rows:
+            first = min(logic.local_date(rows[0]["measured_at"], tz), last)
+        over = (
+            f"since {first.strftime('%b')} {first.year}"
+            if span == 0
+            else f"over {dict(WEIGHT_TABS)[span]}"
+        )
         by_day = {logic.local_date(r["measured_at"], tz): r["kg"] for r in rows}
 
         banner = ""
@@ -5060,7 +5161,7 @@ def add_routes(
             banner = toast("<span>Weigh-in deleted.</span>", "status")
         tabs = "".join(
             f'<a href="{WEIGHT}?days={n}"{" aria-current=page" if n == span else ""}>{label}</a>'
-            for n, label in WEIGHT_RANGES
+            for n, label in WEIGHT_TABS
         )
         parts = [f'<h1>Weight</h1><nav class="segment">{tabs}</nav>', banner]
 
@@ -5071,7 +5172,7 @@ def add_routes(
             if rows:
                 change = (
                     f'<p class="small">{change_text(rows[-1]["kg"] - rows[0]["kg"])}'
-                    f' <span class="muted">over {dict(WEIGHT_RANGES)[span]}</span></p>'
+                    f' <span class="muted">{e(over)}</span></p>'
                 )
             parts.append(
                 '<section class="card summary"><div class="big weight">'

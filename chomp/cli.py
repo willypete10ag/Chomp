@@ -6,6 +6,9 @@
     chomp export --format csv|json [--user NAME] [--start D] [--end D] [-o FILE]
     chomp import-hevy FILE [--user NAME]
                                import a Hevy workout CSV export (repeats are skipped)
+    chomp import-health FILE [--user NAME]
+                               import past weight and activity from Apple Health's
+                               export.zip (days the phone already sent are kept)
     chomp user list            who keeps a log here
     chomp user add NAME        add a person with their own log and password (asks for it)
     chomp user password NAME   change someone's password (signs them out everywhere)
@@ -27,7 +30,7 @@ from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
-from chomp import auth, backup, db, export, health, hevy, store, users
+from chomp import auth, backup, db, export, health, health_export, hevy, logic, store, users
 from chomp.config import Settings
 
 
@@ -74,6 +77,12 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     h = sub.add_parser("import-hevy", help="import a Hevy workout CSV export")
     h.add_argument("file", help="the CSV from Hevy's Export Workouts, or - for standard input")
     h.add_argument("--user", help="whose workouts these are (default: the owner)")
+
+    hh = sub.add_parser("import-health", help="import Apple Health's export.zip")
+    hh.add_argument(
+        "file", help="export.zip from Health's Export All Health Data, or - for standard input"
+    )
+    hh.add_argument("--user", help="whose health data this is (default: the owner)")
 
     u = sub.add_parser("user", help="manage the people who keep a log here")
     us = u.add_subparsers(dest="action", required=True)
@@ -132,6 +141,33 @@ def user_command(args, settings: Settings) -> None:
                 print(f"{user['name']}'s ingest token (shown once; any older one stops working):")
                 print(token)
                 print(f"Post to {health.PATH} with the header: Authorization: Bearer <token>")
+
+
+def import_health(args, settings: Settings) -> None:
+    with closing(
+        db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)
+    ) as conn:
+        conn.user_id = users.get_by_name(conn, args.user)["id"] if args.user else users.OWNER_ID
+        print("reading the export (a few minutes for years of data)...", file=sys.stderr)
+        if args.file == "-":
+            with health_export.spool(sys.stdin.buffer) as copy:
+                parsed = health_export.read(copy, settings.tz)
+        else:
+            with open(args.file, "rb") as f:
+                parsed = health_export.read(f, settings.tz)
+        weights = store.add_weights(conn, parsed.weights.items(), "health")
+        activity = store.import_activity_days(conn, health_export.day_rows(parsed, settings.tz))
+    first = min((start for _, start in parsed.days), default=None)
+    print(
+        f"{weights.added} weigh-ins added, {weights.updated} updated,"
+        f" {weights.unchanged} already there; {activity.added} days of activity added,"
+        f" {activity.updated} updated, {activity.unchanged} already there,"
+        f" {activity.kept} kept as the phone sent them"
+        + (f" (from {logic.local_date(first, settings.tz)})" if first else "")
+        + f"; {parsed.rejected} samples skipped"
+    )
+    for problem in parsed.problems:
+        print(f"  {problem}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -213,12 +249,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             for problem in parsed.problems:
                 print(f"  {problem}")
+        elif args.command == "import-health":
+            import_health(args, settings)
         elif args.command == "user":
             user_command(args, settings)
     except (
         auth.AuthConfigError,
         backup.BackupError,
         db.MigrationError,
+        health_export.ExportError,
         hevy.HevyError,
         users.UserError,
         OSError,
