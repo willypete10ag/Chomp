@@ -14,6 +14,8 @@ These payload shapes are accepted:
     Flat (one Shortcut): {"date": "2026-10-13", "steps": 8123, "active_kcal": 412,
                            "distance_mi": 3.8, "weight_lb": 182.4,
                            "weight_date": "2026-10-13T07:02:11-04:00"}
+                         (a flat field may also be the Health samples as text, one per line:
+                           "9,898 count\n0 count" adds up to 9898 steps)
 
 Weight is kept per weigh-in. Activity (steps, active and resting energy, walking + running
 distance, exercise minutes, flights) is kept per time bucket: Health Auto Export with Summarize
@@ -233,6 +235,54 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# One line of a Shortcut's text: "9,898", "9898 count", "412.5 kcal", "182.4 lb", or the
+# phone region's way of writing numbers: "9.898", "9 898", "412,5"
+FLAT_LINE = re.compile(r"(\d[\d,.' \u00a0\u202f]*|[.,]\d+)\s*([a-z]*)", re.IGNORECASE)
+GROUPED = re.compile(r"[1-9]\d{0,2}(?:([,.' \u00a0\u202f])\d{3})(?:\1\d{3})*")
+
+
+def _region_number(text: str) -> float:
+    """A number as the phone's region writes it. With both "," and ".", the last is the
+    decimal mark; a lone mark is digit grouping only where it splits off groups of three
+    after a leading 1-9 ("9.898" steps, "1,234"), else the decimal mark ("412,5", "182.4",
+    "0.250"). Health shows at most two decimals, so three after the mark is grouping."""
+    text = text.strip()
+    if GROUPED.fullmatch(text):
+        return float(re.sub(r"\D", "", text))
+    text = re.sub(r"[' \u00a0\u202f]", "", text)
+    if "," in text and "." in text:
+        mark = max(",.", key=text.rfind)
+        whole, _, fraction = text.rpartition(mark)
+        text = re.sub(r"\D", "", whole) + "." + fraction
+    elif text.count(",") == 1 or text.count(".") == 1:
+        text = text.replace(",", ".")
+    if not re.fullmatch(r"\d*\.?\d+", text):
+        raise ValueError(f"not a number: {text!r}")
+    return float(text)
+
+
+def _flat_amount(value: Any, *, first: bool) -> dict[str, Any]:
+    """A flat field's amount, and its unit when the text names one. A Shortcut that inserts
+    Health samples as they are sends text with one sample per line ("9898 count", and "0
+    count" for tomorrow when grouped by day): activity lines are added up, and for weight
+    (latest first) the first line is the reading."""
+    if not isinstance(value, str):
+        return {"value": value}
+    total, units = 0.0, set()
+    for line in filter(None, (part.strip() for part in value.splitlines())):
+        match = FLAT_LINE.fullmatch(line)
+        if match is None:
+            raise ValueError(f"not a number: {line[:40]!r}")
+        total += _region_number(match[1])
+        if match[2]:
+            units.add(match[2])
+        if first:
+            break
+    if len(units) > 1:
+        raise ValueError(f"mixed units: {', '.join(sorted(units))}")
+    return {"value": total} | ({"unit": units.pop()} if units else {})
+
+
 def _items(value: Any) -> list:
     if isinstance(value, list):
         return value
@@ -269,6 +319,9 @@ def parse(payload: Any, tz: str) -> Parsed:
         found = False
         for name, value in payload.items():
             key = metric_key(str(name))
+            flat = key in FLAT_ACTIVITY or key in FLAT_WEIGHT
+            if isinstance(value, list) and flat and not any(isinstance(v, dict) for v in value):
+                value = "\n".join(str(v) for v in value)  # a Number field given a list
             if isinstance(value, dict | list):
                 if key in WEIGHT_METRICS:
                     for item in _items(value):
@@ -277,18 +330,27 @@ def parse(payload: Any, tz: str) -> Parsed:
                     _activity(parsed, ACTIVITY_METRICS[key], _items(value), None, tz)
                 else:
                     continue
-            elif key in FLAT_ACTIVITY or key in FLAT_WEIGHT:
+            elif flat:
                 if _blank(value):  # a Shortcut sends "" when Health has none today
                     found = True
                     continue
-                value = value.replace(",", "") if isinstance(value, str) else value
                 if key in FLAT_WEIGHT:
-                    item = {"date": payload.get("weight_date"), "value": value}
-                    _weight(parsed, item, FLAT_WEIGHT[key], tz)
+                    item = {"date": payload.get("weight_date"), "unit": FLAT_WEIGHT[key]}
+                    try:
+                        item |= _flat_amount(value, first=True)
+                    except ValueError as e:
+                        parsed.reject(f"weight: {e}")
+                    else:
+                        _weight(parsed, item, None, tz)
                 else:
                     metric, unit = FLAT_ACTIVITY[key]
-                    item = {"date": payload.get("date"), "value": value}
-                    _activity(parsed, metric, [item], unit, tz)
+                    item = {"date": payload.get("date"), "unit": unit}
+                    try:
+                        item |= _flat_amount(value, first=False)
+                    except ValueError as e:
+                        parsed.reject(f"{metric}: {e}")
+                    else:
+                        _activity(parsed, metric, [item], None, tz)
             else:
                 continue
             found = True

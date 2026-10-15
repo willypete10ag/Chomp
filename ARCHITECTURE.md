@@ -251,9 +251,13 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   date is that day's total). Or the flat fields of the iOS Shortcut in README step 9:
   `date` (the day) with `steps`, `active_kcal`, `resting_kcal`, `exercise_min`,
   `distance_mi`/`distance_km`, `flights`, and `weight_lb`/`weight_kg` with `weight_date`;
-  empty fields (nothing in Health) are skipped. Bad readings are skipped and reported;
-  metrics Chomp doesn't keep are counted under `ignored`. The reply gives added, updated and
-  unchanged counts for weights and activity.
+  empty fields (nothing in Health) are skipped. A flat field may be a number or text such
+  as the Health samples themselves, one per line (`"9,898 count\n0 count"`, or `"9.898"`
+  where the region writes numbers that way): activity lines are added up (grouping by day
+  adds an empty tomorrow), weight takes the first (latest), and a unit in the text wins
+  over the field name's. Bad readings are skipped and reported; metrics Chomp doesn't keep
+  are counted under `ignored`. The reply gives added, updated and unchanged counts for
+  weights and activity.
 - Every food records its `source` (`fdc`, `off`, `label`, `manual`) and `source_id`.
 - Confirmed (`foods.verified`): checked by the person. That is a label food saved through
   `save_food_from_label`, a food confirmed with `confirm_food` (any food the person approves),
