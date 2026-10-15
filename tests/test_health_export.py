@@ -176,6 +176,7 @@ def test_dashboard_import(http, conn, monkeypatch):
     sign_in(http)
     page = http.get("/app/activity").text
     assert '<details class="fold" data-fold="health" open>' in page  # nothing yet: open
+    assert 'data-busy="Importing your Health data"' in page  # a spinner while it uploads
     store.add_activity(conn, [("steps", "day", day("2026-10-12"), 9963)])
     page = follow(http, upload(http, zipped()))
     assert (

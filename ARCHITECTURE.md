@@ -57,12 +57,13 @@ days or a year with their count and pounds lifted, an Import from Hevy card (ope
 are workouts) that takes the CSV export, and each workout's title, date, length, exercises and
 volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
-Activity (#94, `/app/activity`, the sixth tab: today's steps, active and resting energy,
+Activity (#94, `/app/activity`, the sixth tab: today's (or, until today has numbers, the latest day's) steps, active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
 last sent; an inline-SVG bar of steps per day over 7, 30 or 90 days or a year (the week's bars show
 their counts, longer ranges a dashed daily-average line); the daily
 average over the range's full days; each day's numbers, newest first; and Import from Apple
-Health for past data)
+Health for past data; the Hevy and Health import forms turn into a spinner with a seconds
+count while they upload)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
 (most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
