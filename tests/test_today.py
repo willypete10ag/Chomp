@@ -85,7 +85,14 @@ def test_today_has_energy_your_day_and_meal_sheets(http, conn, logged):
     text = http.get("/app").text.replace("\xa0", " ")
     assert '<section class="card energy"' in text and 'class="ring"' in text
     assert f'href="/app/day-menu?date={today()}" data-sheet' in text
-    assert f'<a class="entry" href="/app/entries/{entries[0].id}" data-sheet>' in text
+    entry = f"/app/entries/{entries[0].id}"
+    assert f'<a class="entry food-link" href="{entry}" data-sheet>' in text
+    # swipe right for Delete, which doesn't ask (Undo brings it back); hold to edit
+    row = text[text.index(f'id="entry-{entries[0].id}"') :]
+    row = row[: row.index("</li>")]
+    assert f'class="swipe" data-sheet-hold="{entry}"' in row
+    assert f'<form class="swipe-action start js-only" method="post" action="{entry}/delete">' in row
+    assert "data-confirm" not in row
     assert f'href="/app/meals/{entries[0].meal_id}" data-sheet' in text
     # nothing from the phone or Hevy yet: the tiles say where it comes from
     assert "Connect Apple Health" in text and "Import from Hevy" in text

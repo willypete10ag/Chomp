@@ -388,6 +388,7 @@
   reveal();
   window.addEventListener("hashchange", reveal);
 
+  // Today's entries (#105) swipe right to show Delete (.swipe-action.start) and hold to edit.
   // Foods (#72): a tap opens a food's page. Swipe a food left to show its Delete button,
   // or an unconfirmed one right to show Confirm; swipe back, tap it or swipe another to hide
   // it again. Only one shows at a time. Press and hold a food for a menu (Edit, Rename,
@@ -413,7 +414,7 @@
     var right = null; // Delete, behind its right edge
     Array.prototype.forEach.call(li.children, function (child) {
       if (!child.classList.contains("swipe-action")) return;
-      if (child.classList.contains("confirm")) left = child;
+      if (child.classList.contains("confirm") || child.classList.contains("start")) left = child;
       else right = child;
     });
     var details = body.querySelector(":scope > details");

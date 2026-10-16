@@ -264,7 +264,7 @@ def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
     card = text[text.index(f'id="meal-{meal}"') :]
     card = card[: card.index("</section>")]
     assert "Meal total" not in card
-    row = card[card.index('<a class="entry"') : card.index("</a>")]
+    row = card[card.index('<a class="entry food-link"') : card.index("</a>")]
     assert "kcal" not in row  # the header carries the calories
     assert 'class="label"' not in card  # no guessed label
 

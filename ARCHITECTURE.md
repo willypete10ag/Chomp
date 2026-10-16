@@ -39,7 +39,7 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`. Its shell
 (#105): four tabs, Today, Progress (`/app/progress` and `/app/progress/{nutrition,weight,activity,training}`, pills
-between them and one range control, 7D/30D/60D/1Y/All via `?days=` with 0 for all time, the
+between them and one range control, Today/7D/30D/6M/1Y/All via `?days=` (1 for Today, 182 for 6M, 0 for all time; Nutrition leaves out its charts on Today), the
 bar charts grouped by week past 60 days and by month past 400, `logic.chart_unit`), Foods and
 You (`/app/you`: goals, integrations at `/app/you/integrations` with the Apple Health and Hevy
 imports and the connector address, a System/Dark/Light theme kept per device in localStorage
@@ -78,7 +78,7 @@ its Progress screen or, with no data, where it comes from; meals led by their ti
 that opens the meal sheet (`/app/meals/{id}`: add food to it, rename or change its time,
 combine, save it as a saved meal via POST `/app/meals/{id}/save`, delete); tapping an entry
 opens its edit sheet (`/app/entries/{id}`: amount by slider, servings or grams with a live
-preview, move to another meal, open the food, delete with Undo). Today reloads itself when it
+preview, move to another meal, open the food, delete with Undo); swiping an entry right shows Delete (no asking, Undo brings it back) and holding it opens the sheet. Today reloads itself when it
 comes back to the foreground after 5 minutes away, unless a sheet is open or a field has focus;
 tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
@@ -103,7 +103,7 @@ against the period before, volume by week (by month past 400 days) with ghosts, 
 at least 13 weeks, personal bests newest first with a PR mark on records set in the range, and
 the range's workouts grouped by week with their count and volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
-Activity (#94, `/app/progress/activity`, whose range control starts with Today (`?days=1`, the default): today's steps (0 until the phone sends some), active and resting energy,
+Activity (#94, `/app/progress/activity`, which opens on Today (`?days=1`): today's steps (0 until the phone sends some), active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
 last sent, and the share of the step goal; on a longer range a switcher picks Steps, Energy (active kcal), Exercise or Distance:
 that metric's daily average over the full days against the period before, its best day and
