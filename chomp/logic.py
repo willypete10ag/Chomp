@@ -811,6 +811,28 @@ def weekly_rate(trend: list[tuple[date, float]]) -> float | None:
     return None if span < 7 else (end - start) / span * 7
 
 
+def trend_on(trend: list[tuple[date, float]], day: date) -> float | None:
+    """The trend weight as of a day: its value on the last weighed day up to it, or None
+    before the first."""
+    found = None
+    for d, v in trend:
+        if d > day:
+            break
+        found = v
+    return found
+
+
+def week_change(trend: list[tuple[date, float]], day: date) -> float | None:
+    """How the trend moved in the week up to a day (#105), for Today's weight tile: the
+    trend on that day minus the trend a week before. None without a reading in that week or
+    without one before it to compare with."""
+    start = day - timedelta(days=7)
+    if not any(start < d <= day for d, _ in trend):
+        return None
+    then, now = trend_on(trend, start), trend_on(trend, day)
+    return None if then is None or now is None else now - then
+
+
 E1RM_MAX_REPS = 12  # past a dozen reps the estimate says more about endurance than strength
 
 

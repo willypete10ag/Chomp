@@ -135,20 +135,16 @@ def test_edit_by_servings_and_reopen(http, conn, logged, pizza):
     store.add_to_meal(conn, meal, [(pizza, 85.4)])
     entry = store.meal_entries(conn, meal)[-1]
     sign_in(http)
-    page = http.get("/app").text
-    item = page[page.index(f'id="entry-{entry.id}"') :]
-    assert 'value="servings" checked' in item
-    r = http.post(
-        f"/app/entries/{entry.id}", data={"by": "servings", "servings": "3"}, headers=ORIGIN
-    )
+    sheet = f"/app/entries/{entry.id}"
+    assert 'value="servings" checked' in http.get(sheet).text
+    r = http.post(sheet, data={"by": "servings", "servings": "3"}, headers=ORIGIN)
     assert store.get_entry(conn, entry.id).grams == pytest.approx(256.2)
-    page = follow(http, r)
-    item = page[page.index(f'id="entry-{entry.id}"') :]
+    assert r.headers["location"].endswith(f"#entry-{entry.id}")
+    item = http.get(sheet).text
     assert 'value="servings" checked' in item and 'value="3"' in item
     # a weighed amount opens on Grams
-    http.post(f"/app/entries/{entry.id}", data={"by": "grams", "grams": "150"}, headers=ORIGIN)
-    page = http.get("/app").text
-    item = page[page.index(f'id="entry-{entry.id}"') :]
+    http.post(sheet, data={"by": "grams", "grams": "150"}, headers=ORIGIN)
+    item = http.get(sheet).text
     assert 'value="grams" checked' in item and 'value="1.76"' in item
 
 
@@ -162,8 +158,7 @@ def test_edit_rejects_bad_servings(http, conn, logged, pizza):
         f"/app/entries/{entry.id}", data={"by": "servings", "servings": "-2"}, headers=ORIGIN
     )
     assert store.get_entry(conn, entry.id).grams == pytest.approx(85.4)
-    page = http.get(r.headers["location"]).text
-    item = page[page.index(f'id="entry-{entry.id}"') :]
-    assert item.startswith(f'id="entry-{entry.id}"><details open>')
+    item = http.get(r.headers["location"]).text
+    assert r.headers["location"].startswith(f"/app/entries/{entry.id}?error=1")
     assert 'value="servings" checked' in item and 'value="-2"' in item
     assert 'role="alert"' in item and "Servings must be" in item

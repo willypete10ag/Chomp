@@ -159,8 +159,10 @@ def test_macro_kcal():
 def test_add_page_lists_foods_saved_meals_and_sliders(http, logged):
     sign_in(http)
     text = http.get(f"/app/add?date={today()}").text.replace("\xa0", " ")
-    assert "<h1>Add food</h1>" in text and "Logging a new meal" in text
-    assert "Usual breakfast" in text and "Log this meal" in text
+    assert '<h2 id="log-title">Log food</h2>' in text and "<span>New meal at " in text
+    assert "aria-current=page>Recent</a>" in text  # recently logged foods come first
+    meals = http.get(f"/app/add?date={today()}&view=meals").text
+    assert "Usual breakfast" in meals and "Log this meal" in meals
     assert "Egg white" in text and "Egg, whole" in text
     assert 'type="range"' in text and "data-per100=" in text
     assert "1 serving" not in text  # no serving size known for these foods
@@ -205,7 +207,9 @@ def test_log_food_into_an_existing_meal(http, conn, logged):
     meal = entries[0].meal_id
     sign_in(http)
     text = http.get(f"/app/add?date={today()}&meal={meal}").text
-    assert "Adding to" in text and 'name="meal"' in text and "A new meal" not in text
+    assert 'name="meal"' in text and "A new meal" not in text
+    dest = text[text.index('<details class="dest">') :]
+    assert "Breakfast</span>" in dest[: dest.index("</summary>")]  # the chip names the meal
     r = http.post(
         "/app/log",
         data={"food_id": eggs, "grams": "50", "date": today(), "meal": meal},
@@ -297,9 +301,7 @@ def test_add_page_without_usda_says_how_to_find_new_foods(http, logged):
 def test_entry_slider_preview_and_quick_picks(http, logged):
     _, _, entries = logged
     sign_in(http)
-    text = http.get("/app").text.replace("\xa0", " ")
-    item = text[text.index(f'id="entry-{entries[0].id}"') :]
-    item = item[: item.index("</li>")]
+    item = http.get(f"/app/entries/{entries[0].id}").text.replace("\xa0", " ")
     assert 'type="range"' in item and 'max="500"' in item
     assert 'data-set="100"' in item and 'data-set="400"' in item  # half and double
     # preview from the food's per-100 g values: 200 g eggs = 286 kcal; day 442 kcal
@@ -363,8 +365,8 @@ def test_combine_and_delete_meals(http, conn, logged):
     first = entries[0].meal_id
     second = store.log_meal(conn, [(eggs, 100)], logic.format_utc(datetime.now(UTC)), None)
     sign_in(http)
-    text = http.get("/app").text
-    assert "Combine with another meal" in text and "Delete meal" in text
+    text = http.get(f"/app/meals/{second}").text
+    assert "Combine with another meal" in text and "Delete this meal" in text
     r = http.post(f"/app/meals/{second}/merge", data={"into": first}, headers=ORIGIN)
     page = follow(http, r)
     assert "Combined" in page and len(store.meal_entries(conn, first)) == 3
@@ -407,8 +409,7 @@ def test_undo_after_a_change_from_elsewhere_is_refused(http, conn, logged):
 
 def test_goals_page_calorie_bar(http, conn, logged):
     sign_in(http)
-    text = http.get("/app").text
-    assert "Edit goals" in text
+    assert "Edit goals" in http.get("/app/day-menu").text
     text = http.get("/app/targets?back=/app").text.replace("\xa0", " ")
     assert "<h1>Daily goals</h1>" in text
     assert 'type="range"' not in text and text.count('data-handle="') == 2

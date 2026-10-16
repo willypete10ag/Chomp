@@ -257,7 +257,9 @@ def test_today_lists_vitamins_with_daily_value(http, conn, logged):  # noqa: F81
     assert '<th scope="row">Iron</th><td>1.8 mg' in text
     assert '<td class="muted">10%</td>' in text  # 1.8 of 18 mg
     assert "real amount is higher" in text  # the egg whites don't report iron
-    assert "Iron 1.8 mg" in text  # on the entry itself
+    (entry,) = conn.execute("SELECT id FROM entries WHERE food_id = ?", (eggs,)).fetchall()
+    sheet = http.get(f"/app/entries/{entry[0]}").text.replace("\xa0", " ")
+    assert "Iron 1.8 mg" in sheet  # on the entry's sheet
 
 
 def test_export_carries_micros(conn):

@@ -66,10 +66,21 @@ tools don't report them. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inl
 Screens: Today
 (any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
 day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
-goal, months back to the first logged one and a year list; calories remaining as the big number,
-amber up to 100 kcal over the goal and red past that, then protein/carbs/fat with bars; goals
-not set count as 2,000 kcal split in even thirds, for the connector's progress too; plus fiber/sugar/sodium; meals led by their
-time; tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the
+goal, months back to the first logged one and a year list; an Energy card (#105) with a ring
+and calories left as the big number, amber up to 100 kcal over the goal and red past that,
+eaten, burned so far, net and the goal, and a … sheet (`/app/day-menu`: Breakdown, Edit goals,
+Pick a day); then protein/carbs/fat with bars, and More nutrients folding away fiber/sugar/
+sodium and vitamins; goals not set count as 2,000 kcal split in even thirds, for the
+connector's progress too; Your day tiles for steps (against the step goal or the 30-day
+average), exercise, weight (the latest up to that day and the trend's change over the week,
+`logic.week_change`) and training (that day's workout or when the last one was), each opening
+its Progress screen or, with no data, where it comes from; meals led by their time, with a …
+that opens the meal sheet (`/app/meals/{id}`: add food to it, rename or change its time,
+combine, save it as a saved meal via POST `/app/meals/{id}/save`, delete); tapping an entry
+opens its edit sheet (`/app/entries/{id}`: amount by slider, servings or grams with a live
+preview, move to another meal, open the food, delete with Undo). Today reloads itself when it
+comes back to the foreground after 5 minutes away, unless a sheet is open or a field has focus;
+tapping the calories or a macro opens that day's Breakdown at `/app/breakdown`: the
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
 nutrition facts, where tapping a nutrient lists the foods that gave the most; a food with no
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
@@ -83,8 +94,10 @@ is here; each day with a slim macro bar links to that day and its Breakdown),
 Weight (#94, `/app/progress/weight`: the trend weight in lb as the hero with the latest reading,
 the change over the range and a week, the distance to the goal weight; each day's reading as a
 dot under the trend line; lowest, highest, average and the average against the period before;
-the weigh-ins by month with where they came from, swiped left to delete after asking; and an
-Add a weigh-in form (lb, time, date), which the + in the header jumps to),
+the weigh-ins by month with where they came from, swiped left to delete after asking, tapped (or
+held) to open the weigh-in sheet (`/app/weight/{id}`: change its weight, time or date, or
+delete it); the + in the header and the Log sheet open Add a weigh-in (`/app/weight/new`,
+prefilled with the last weight), which goes back where it came from (`back`)),
 Training (#94, `/app/progress/training`: workouts, volume, average length and sessions a week
 against the period before, volume by week (by month past 400 days) with ghosts, a heat strip of
 at least 13 weeks, personal bests newest first with a PR mark on records set in the range, and
@@ -109,14 +122,24 @@ grams, or + Add portion), then Log it, Confirm, Edit (all values, `/foods/{id}/e
 Undo), Rename and Delete, and how often you've logged it. Press and hold a food in the list
 for a menu over the blurred page (Edit, Rename, Confirm on amber foods, Log it, Delete);
 swipe it left to Delete, or an amber one right to Confirm). An entry whose
-grams were estimated shows a muted "~" before them until new grams are saved, and Add food
+grams were estimated shows a muted "~" before them until new grams are saved, and Log food
 offers your portions as chips ("1 handful · 30 g") next to the gram chips. For a food with a serving
-size, Add food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
+size, Log food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
 stepper in whole servings (a typed 1.5 still counts) and the server logs servings × the serving size; it is picked when the
 amount is a whole or half number of servings, and a food without a serving size shows grams only.
 
-It also works without Claude (#54): Add food (search your foods, portions and saved meals, or
-USDA when `FDC_API_KEY` is set, on its own when fewer than 3 of your foods match (#88); log to a new meal at a time or into an existing one), change an
+Sheets (#105): a link with `data-sheet` opens its page's `?part=1` fragment in a bottom sheet
+(`app.js` keeps a stack with back and close, Escape, a tap outside or a drag down closes it, and
+a POST from it submits as a page); `data-sheet-swap` replaces the sheet's content, and
+`data-sheet-full` makes it tall. Without the script every sheet is a page of its own with a back
+link (`sheet_or_page`).
+
+It also works without Claude (#54): Log food (`/app/add`, a tall sheet: a chip picks a new
+meal at a time or one of the day's meals, a live search as you type (prefix matching, USDA only
+on submit), and Recent / Frequent / Saved meals / Recipes pills; each food row has a + that logs
+it again at the amount it was last logged (`store.last_amounts`), or opens to pick an amount;
+search covers your foods, portions and saved meals, or
+USDA when `FDC_API_KEY` is set, on its own when fewer than 3 of your foods match (#88)), change an
 entry's grams, move it to another meal, edit a meal's name, time, date and note, combine or
 delete meals, and set daily goals. Every edit is a form post through `store.py` like the
 tools, so macros still come only from the database. Each edit records the rows it touched
@@ -152,7 +175,7 @@ New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA F
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
 `/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run
 side by side and cached into `foods`. Both sources' hits go through `sources/rank.py` (#97,
-shared with `search_food` and Add food): every query word first, then the food the name leads
+shared with `search_food` and Log food): every query word first, then the food the name leads
 with, then the plain food before processed or prepared ones the query didn't name (breaded,
 dried, "with bacon"), then generic before Branded unless the query names the brand. A hit
 missing query words others have is dropped, and listings of one product (same barcode, or the
@@ -176,7 +199,7 @@ with `save_food_from_label`. An Open Food Facts hit Claude looks up stays unconf
 until `confirm_food`.
 
 Food photos (#74, `chomp/photos.py`): one picture per food, shown at the top of its page, as
-a small square on Foods, Today and Add food rows (a food without one shows its first letter),
+a small square on Foods, Today and Log food rows (a food without one shows its first letter),
 and added, replaced or removed from its page or its hold menu. A food with a barcode gets
 Open Food Facts' front-of-package photo in the background after any barcode lookup (tool or
 dashboard), and a one-time backfill (started by the first lookup or Foods page after a
@@ -266,7 +289,9 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   person per second: saving another at the same time replaces it, which de-duplicates the
   phone's repeated sends. Deleting one (tool or Weight page) keeps the row with `deleted = 1`,
   so the phone resending it doesn't bring it back; saving the same time from chat or the
-  page does.
+  page does. Editing one on the dashboard (#105, migration 0018, `store.update_weight`) marks it
+  `edited`, so the phone resending its original doesn't change it back; a new time moves it,
+  leaving the old time deleted.
 - Activity (#94, migration 0015): each user's `activity` readings (metric, `period`, UTC
   `start_at` of its time bucket, `qty` in the stored unit: `steps`, `active_kcal`,
   `resting_kcal`, `distance_m`, `exercise_min`, `flights`; `logic.to_activity` converts kJ,
