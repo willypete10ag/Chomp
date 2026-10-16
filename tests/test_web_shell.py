@@ -89,13 +89,14 @@ def test_you_page(http):
     assert 'href="/app/you/integrations#health"' in page
     assert 'href="/app/you/integrations#hevy"' in page
     assert 'href="/app/you/integrations#claude"' in page  # public: there's a connector URL
+    assert 'href="/app/you/integrations#chatgpt"' in page
     assert "data-theme-pick" in page
     assert 'action="/app/logout"' in page and "Sign out" in page
 
 
 def test_you_page_locally(local):
     page = local.get("/app/you").text
-    assert "Sign out" not in page and "#claude" not in page
+    assert "Sign out" not in page and "#claude" not in page and "#chatgpt" not in page
 
 
 def test_integrations_page(http):
@@ -103,6 +104,9 @@ def test_integrations_page(http):
     page = http.get("/app/you/integrations").text
     assert 'id="health"' in page and 'id="hevy"' in page and 'id="claude"' in page
     assert "/mcp" in page and "No workouts yet." in page
+    assert 'id="chatgpt"' in page and "User-Defined OAuth Client" in page
+    assert "client_secret_post" in page
+    assert "https://chatgpt.com/connector/oauth/" in page  # the allowlisted callback
 
 
 def test_log_button_keeps_the_day_on_breakdown_and_add(http):

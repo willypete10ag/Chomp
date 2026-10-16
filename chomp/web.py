@@ -60,7 +60,7 @@ from chomp import (
     users,
 )
 from chomp import label as label_reader
-from chomp.auth import ChompAuthProvider
+from chomp.auth import CONNECTOR_CALLBACKS, ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.photos import PhotoError, Photos
@@ -7579,6 +7579,9 @@ def add_routes(
             integrations.append(
                 item(f"{INTEGRATIONS}#claude", "sparkles", "protein", "Claude", "Connector address")
             )
+            integrations.append(
+                item(f"{INTEGRATIONS}#chatgpt", "bot", "protein", "ChatGPT", "Connector setup")
+            )
         picks = "".join(
             f'<button type="button" data-theme-pick="{key}">{label}</button>'
             for key, label in (("system", "System"), ("dark", "Dark"), ("light", "Light"))
@@ -7753,7 +7756,7 @@ def add_routes(
     @server.custom_route(INTEGRATIONS, methods=["GET"])
     async def integrations(request: Request) -> Response:
         """Where data comes in from (#105): Apple Health (the phone's sends and the export
-        import), Hevy's CSV, and the Claude connector's address. Imports land back here."""
+        import), Hevy's CSV, and the Claude and ChatGPT connectors. Imports land back here."""
         if not signed_in(request):
             return to_login(request)
         params = request.query_params
@@ -7860,6 +7863,40 @@ def add_routes(
                 " (README, step 6) to log and look things up from a chat.</p>"
                 f'<input readonly value="{e(settings.public_url.rstrip("/"))}/mcp"'
                 ' aria-label="Connector address"></section>'
+            )
+            callbacks = "".join(
+                f"<li><code>{e(url)}</code></li>"
+                for url in CONNECTOR_CALLBACKS
+                if url.startswith("https://chatgpt.com/")
+            )
+            client_id = (
+                f'<input readonly value="{e(settings.oauth_client_id)}"'
+                ' aria-label="OAuth client ID">'
+                if settings.oauth_client_id
+                else ""
+            )
+            parts.append(
+                f'<section class="card" id="chatgpt"><h2>{icon("bot")} ChatGPT</h2>'
+                '<p class="small muted">Add Chomp as a custom MCP server in ChatGPT'
+                ' (README, "Add the ChatGPT connector") to log and look things up from a'
+                " chat.</p>"
+                f'<input readonly value="{e(settings.public_url.rstrip("/"))}/mcp"'
+                ' aria-label="ChatGPT connector address">'
+                '<ol class="small">'
+                "<li>Use the address above as the server URL.</li>"
+                "<li>Pick <b>OAuth</b> with <b>User-Defined OAuth Client</b>.</li>"
+                "<li>Enter the same <code>OAUTH_CLIENT_ID</code> and"
+                " <code>OAUTH_CLIENT_SECRET</code> Chomp runs with"
+                f"{' (the client ID is below)' if client_id else ''}.</li>"
+                "<li>Choose <b>client_secret_post</b> and leave scopes blank.</li>"
+                "<li>Keep the prefilled callback URL and discovered endpoints.</li>"
+                f"</ol>{client_id}"
+                "<p class=\"small muted\">ChatGPT's callback URL must be on Chomp's allowlist"
+                " (<code>CONNECTOR_CALLBACKS</code> in <code>chomp/auth.py</code>). A new or"
+                " recreated connector gets its own callback: add that exact URL and redeploy"
+                " before connecting."
+                + (f' Allowed now:</p><ul class="small">{callbacks}</ul>' if callbacks else "</p>")
+                + "</section>"
             )
         return you_page(request, "Integrations", "".join(parts))
 
