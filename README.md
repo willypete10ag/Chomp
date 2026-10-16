@@ -29,18 +29,18 @@ can be estimated, and those are marked.
 **On the dashboard** (`/app`, works on a phone and installs to the home screen):
 
 - **Today:** calories left as the big number, macro bars, meals by time. Arrows, a week strip
-  or a month calendar (dots on logged days, stars on days within 10% of every goal) move
+  or a month calendar (dots on logged days, a ring around days within 10% of every goal) move
   between days. Tap a number for that day's Breakdown: calories by macro and meal, top foods,
   full nutrition facts.
 - **Log and edit:** Add food in servings or grams with your portions as chips; change, move
   or delete entries; rename, retime, combine or delete meals. Every change has Undo.
 - **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
-- **Progress:** Nutrition, Weight, Activity and Training, each over 7, 30 or 60 days, a
+- **Progress:** Nutrition, Weight, Activity and Training, each over today, 7 or 30 days, 6 months, a
   year or all time, with averages and charts.
 - **Log (+):** the button in the middle of the tab bar logs food, scans a barcode, logs a
   saved meal or adds a weigh-in from any page.
 - **You:** goals, Apple Health and Hevy imports, the Claude connector address, a light or
-  dark theme (or the phone's), and signing out.
+  dark theme (or the phone's), CSV and JSON downloads of your log, and signing out.
 - **Foods:** your foods with photos, sorted by most logged, recent, calories and more; each
   food has a page with nutrition facts, portions, Log it, Confirm, Edit and Delete. Search
   filters as you type; a food that isn't there is one tap from a database search or typing it
@@ -48,6 +48,8 @@ can be estimated, and those are marked.
   first, scanning its barcode with the camera, reading a label photo (tesseract on the
   server, no AI), or typing it in.
 - **Saved meals and Recipes:** build, edit and log them from the Foods tab.
+- **On a computer:** a sidebar instead of the tab bar, two columns where they help, and
+  keyboard shortcuts (press **?** to see them).
 
 **Running it:** several people, each with their own log, goals, portions, saved meals and
 recipes (the food list is shared); OAuth sign-in for the Claude and ChatGPT connectors;

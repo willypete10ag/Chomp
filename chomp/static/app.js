@@ -745,6 +745,7 @@
         close();
         if (history.state && history.state.holdMenu) history.back();
       }
+      if (event.key === "Tab") trapFocus(layer, event);
     }
     function onBack() {
       close();
@@ -814,6 +815,7 @@
       if (pending) pending.abort();
       pending = window.AbortController ? new AbortController() : null;
       var url = live.action + (q ? "?" + new URLSearchParams({ q: q }).toString() : "");
+      results.setAttribute("aria-busy", "true");
       fetch(url + (q ? "&" : "?") + "part=1" + (typing && q ? "&typing=1" : ""), {
         credentials: "same-origin",
         signal: pending ? pending.signal : undefined,
@@ -823,6 +825,7 @@
       }).then(function (html) {
         if (mine !== asked) return;
         pending = null;
+        results.removeAttribute("aria-busy");
         results.innerHTML = html;
         results.querySelectorAll("details[data-fold]").forEach(foldable);
         results.querySelectorAll("[data-swipe]").forEach(swipeable);
@@ -835,6 +838,7 @@
         }
       }).catch(function (err) {
         if (err && err.name === "AbortError") return;
+        results.removeAttribute("aria-busy");
         // Offline or signed out: the Search button still works
       });
     }
@@ -940,6 +944,7 @@
         if (years) years.open = false;
         else dismiss();
       }
+      if (event.key === "Tab") trapFocus(sheet, event);
     }
     layer.addEventListener("click", function (event) {
       if (event.target === layer) dismiss();
@@ -978,6 +983,27 @@
     box.value = String(Math.round(next * 100) / 100);
   });
 
+
+  // Steppers (#105): − and + change the box beside them a step at a time, never under its
+  // minimum. In the saved meal editor the step follows the unit picked beside the box
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest && event.target.closest("[data-stepper] [data-dir]");
+    if (!button) return;
+    var box = button.closest("[data-stepper]");
+    var input = box.querySelector("input");
+    var unit = box.querySelector("select[name=unit]");
+    var step = parseFloat(unit && unit.value === "g" && box.dataset.stepG ? box.dataset.stepG : box.dataset.step);
+    var low = parseFloat(box.dataset.min) || 0;
+    var now = parseFloat(input.value.replace(/,/g, ""));
+    if (!isFinite(now)) now = 0;
+    var dir = parseInt(button.dataset.dir, 10);
+    // Off-step values land on the next step in that direction first
+    var next = dir > 0 ? Math.floor(now / step + 1e-9) * step + step : Math.ceil(now / step - 1e-9) * step - step;
+    next = Math.max(low, Math.round(next * 100) / 100);
+    input.value = String(next);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 
   // Deleting a saved meal (#60) asks first
   document.addEventListener("submit", function (event) {
@@ -1238,6 +1264,7 @@
       }
       function onKey(event) {
         if (event.key === "Escape") dismiss();
+        if (event.key === "Tab") trapFocus(sheet, event);
       }
       layer.addEventListener("click", function (event) {
         if (event.target === layer) dismiss();
@@ -1340,6 +1367,8 @@
       if (live) params.set("live", "1");
       params.set("part", "1");
       var mine = ++asked;
+      var shown = form.parentNode.querySelector("[data-results]");
+      if (shown) shown.setAttribute("aria-busy", "true");
       fetch(form.action + "?" + params.toString(), { credentials: "same-origin" })
         .then(function (r) {
           if (!r.ok) throw new Error(r.status);
@@ -1367,6 +1396,8 @@
           }
         })
         .catch(function () {
+          var still = form.parentNode.querySelector("[data-results]");
+          if (still) still.removeAttribute("aria-busy");
           // Offline: Enter still submits the form
         });
     }
@@ -1416,17 +1447,26 @@
   }
 
   // A screen's large title (#105) shows small in a bar at the top once it scrolls away
-  var bigTitle = document.querySelector("h1[data-title]");
-  if (bigTitle && window.IntersectionObserver) {
-    var mini = document.createElement("div");
-    mini.className = "minihead";
-    mini.setAttribute("aria-hidden", "true");
+  var miniWatch = null;
+  function watchTitle() {
+    var bigTitle = document.querySelector("h1[data-title]");
+    var mini = document.querySelector(".minihead");
+    if (miniWatch) miniWatch.disconnect();
+    if (mini) mini.classList.remove("on");
+    if (!bigTitle || !window.IntersectionObserver) return;
+    if (!mini) {
+      mini = document.createElement("div");
+      mini.className = "minihead";
+      mini.setAttribute("aria-hidden", "true");
+      document.body.appendChild(mini);
+    }
     mini.textContent = bigTitle.textContent;
-    document.body.appendChild(mini);
-    new IntersectionObserver(function (seen) {
+    miniWatch = new IntersectionObserver(function (seen) {
       mini.classList.toggle("on", !seen[0].isIntersecting);
-    }).observe(bigTitle);
+    });
+    miniWatch.observe(bigTitle);
   }
+  watchTitle();
 
   // Appearance on You (#105): System, Dark or Light, kept on this device (theme.js applies it)
   var picks = document.querySelectorAll("[data-theme-pick]");
@@ -1456,116 +1496,326 @@
   // Letting go (or a tap) pins the point, with a link to its day where it has one; a tap
   // anywhere else lets it go. Compare shows the previous period as outlined bars. The
   // points come from the figure's data-points, written by chomp/charts.py.
-  document.querySelectorAll("[data-chart]").forEach(function (fig) {
-    var svg = fig.querySelector("svg.chart");
-    var line = fig.querySelector(".inspect");
-    var points;
+  function initCharts(root) {
+    root.querySelectorAll("[data-chart]").forEach(function (fig) {
+      var svg = fig.querySelector("svg.chart");
+      var line = fig.querySelector(".inspect");
+      var points;
+      try {
+        points = JSON.parse(fig.getAttribute("data-points"));
+      } catch (err) {
+        return;
+      }
+      if (!svg || !line || !points.length) return;
+      var summary = line.innerHTML;
+      var cross = svg.querySelector(".cross");
+      var width = svg.viewBox.baseVal.width;
+      var marks = {};
+      svg.querySelectorAll("[data-i]").forEach(function (m) {
+        marks[m.getAttribute("data-i")] = m;
+      });
+      var current = -1;
+      var pinned = false;
+      var dragging = false;
+
+      function add(tag, value) {
+        var el = document.createElement(tag);
+        el.textContent = value;
+        line.appendChild(el);
+        return el;
+      }
+      function show(i) {
+        if (marks[current]) marks[current].classList.remove("on");
+        current = i;
+        if (i < 0) {
+          svg.classList.remove("scrub");
+          line.innerHTML = summary;
+          return;
+        }
+        var p = points[i];
+        svg.classList.add("scrub");
+        if (marks[i]) marks[i].classList.add("on");
+        cross.setAttribute("x1", p.x);
+        cross.setAttribute("x2", p.x);
+        line.textContent = "";
+        add("span", p.title);
+        add("b", p.value);
+        if (p.note) add("span", p.note);
+        if (p.prev && fig.classList.contains("compare")) add("span", p.prev);
+        if (p.href && pinned) add("a", "Open day \u203a").href = p.href;
+      }
+      function nearest(event) {
+        var box = svg.getBoundingClientRect();
+        var x = ((event.clientX - box.left) / box.width) * width;
+        var best = 0;
+        points.forEach(function (p, i) {
+          if (Math.abs(p.x - x) < Math.abs(points[best].x - x)) best = i;
+        });
+        return best;
+      }
+      function clear() {
+        pinned = false;
+        show(-1);
+      }
+      svg.addEventListener("pointerdown", function (event) {
+        dragging = true;
+        pinned = false;
+        show(nearest(event));
+      });
+      svg.addEventListener("pointermove", function (event) {
+        if (dragging || (event.pointerType === "mouse" && !pinned)) show(nearest(event));
+      });
+      svg.addEventListener("pointerup", function () {
+        if (!dragging) return;
+        dragging = false;
+        pinned = true;
+        show(current);
+      });
+      // A vertical swipe scrolls the page instead (touch-action: pan-y), which cancels this
+      svg.addEventListener("pointercancel", function () {
+        dragging = false;
+        if (!pinned) show(-1);
+      });
+      svg.addEventListener("pointerleave", function (event) {
+        if (event.pointerType === "mouse" && !pinned && !dragging) show(-1);
+      });
+      document.addEventListener("pointerdown", function (event) {
+        if (pinned && !svg.contains(event.target) && !line.contains(event.target)) clear();
+      });
+      svg.addEventListener("keydown", function (event) {
+        var step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+        if (event.key === "Escape" && current >= 0) {
+          clear();
+          return;
+        }
+        if (!step) return;
+        event.preventDefault();
+        var i = current < 0 ? (step < 0 ? points.length - 1 : 0) : current + step;
+        pinned = true;
+        show(Math.max(0, Math.min(points.length - 1, i)));
+      });
+      var compare = fig.querySelector("[data-compare]");
+      if (compare) {
+        compare.addEventListener("click", function () {
+          var on = !fig.classList.contains("compare");
+          fig.classList.toggle("compare", on);
+          compare.setAttribute("aria-pressed", String(on));
+          if (current >= 0) show(current);
+        });
+      }
+    });
+  }
+  initCharts(document);
+
+  var reduceMotion = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+  // Tab stays inside an open sheet or menu (#105)
+  function trapFocus(box, event) {
+    var all = Array.prototype.filter.call(
+      box.querySelectorAll("a[href], button:not([disabled]), input:not([disabled]):not([type=hidden])," +
+        " select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"),
+      function (el) { return !el.hidden && el.offsetParent !== null; });
+    if (!all.length) return;
+    var first = all[0];
+    var last = all[all.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === box)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  // The sidebar's areas under Progress and Foods (#105): the one open is marked
+  function markArea() {
+    document.querySelectorAll(".tabs .subnav").forEach(function (nav) {
+      var best = null;
+      nav.querySelectorAll("a").forEach(function (a) {
+        a.removeAttribute("aria-current");
+        var p = a.pathname;
+        if ((location.pathname === p || location.pathname.indexOf(p + "/") === 0) &&
+            (!best || p.length > best.pathname.length)) best = a;
+      });
+      if (best && nav.previousElementSibling && nav.previousElementSibling.hasAttribute("aria-current")) {
+        best.setAttribute("aria-current", "page");
+      }
+    });
+  }
+  markArea();
+
+  // Big numbers count up the first time a page shows in a visit (#105)
+  function countUp(root) {
+    if (reduceMotion || !window.requestAnimationFrame) return;
+    var seen = [];
     try {
-      points = JSON.parse(fig.getAttribute("data-points"));
+      seen = JSON.parse(sessionStorage.getItem("chomp-counted") || "[]");
+      if (seen.indexOf(location.pathname) >= 0) return;
+      seen.push(location.pathname);
+      sessionStorage.setItem("chomp-counted", JSON.stringify(seen));
     } catch (err) {
+      return; // no storage: no way to do it only once, so not at all
+    }
+    root.querySelectorAll(".ring-num b, .hero-metric .display").forEach(function (el) {
+      var node = el.firstChild;
+      if (!node || node.nodeType !== 3) return;
+      var m = /^(\D*)(\d[\d,]*(?:\.\d+)?)([\s\S]*)$/.exec(node.nodeValue);
+      if (!m) return;
+      var target = parseFloat(m[2].replace(/,/g, ""));
+      var places = (m[2].split(".")[1] || "").length;
+      if (!(target > 0)) return;
+      var start = null;
+      function frame(t) {
+        if (start === null) start = t;
+        var k = Math.min(1, (t - start) / 700);
+        var v = target * (1 - Math.pow(1 - k, 3));
+        node.nodeValue = m[1] + v.toLocaleString("en-US", {
+          minimumFractionDigits: places, maximumFractionDigits: places,
+          useGrouping: m[2].indexOf(",") >= 0,
+        }) + m[3];
+        if (k < 1) requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+  countUp(document);
+
+  // Progress (#105): a range, metric or area changes in place, the charts morphing to the
+  // new one, instead of loading a whole page. Back and Forward step through them the same
+  // way. Without the script these are plain links.
+  var PROGRESS = /\/progress(\/|$)/;
+  var shownUrl = location.pathname + location.search;
+  function initPage(root) {
+    enhance(root);
+    root.querySelectorAll("details[data-fold]").forEach(foldable);
+    root.querySelectorAll("[data-swipe]").forEach(swipeable);
+    root.querySelectorAll("select[data-autosubmit]").forEach(autosubmit);
+    initCharts(root);
+    watchTitle();
+    markArea();
+  }
+  function swapTo(url, push) {
+    return fetch(url, { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok || r.redirected) throw new Error(r.status);
+      return r.text();
+    }).then(function (html) {
+      var page = new DOMParser().parseFromString(html, "text/html");
+      var fresh = page.querySelector("main");
+      var main = document.querySelector("main");
+      if (!fresh || !main) throw new Error("no page");
+      function apply() {
+        main.innerHTML = fresh.innerHTML;
+        document.title = page.title;
+        var hue = page.body.getAttribute("data-hue");
+        if (hue) document.body.setAttribute("data-hue", hue);
+        else document.body.removeAttribute("data-hue");
+        initPage(main);
+      }
+      if (push) history.pushState({ swap: true }, "", url);
+      shownUrl = location.pathname + location.search;
+      if (document.startViewTransition && !reduceMotion) document.startViewTransition(apply);
+      else apply();
+    });
+  }
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey ||
+        event.shiftKey || !window.fetch || !window.DOMParser) return;
+    var link = event.target.closest && event.target.closest(
+      "main nav.segment a, main nav.pills a, .tabs .subnav a");
+    if (!link || link.origin !== location.origin || !PROGRESS.test(location.pathname) ||
+        !PROGRESS.test(link.pathname)) return;
+    event.preventDefault();
+    if (link.getAttribute("aria-current")) return;
+    swapTo(link.href, true).catch(function () {
+      location.href = link.href;
+    });
+  });
+  window.addEventListener("popstate", function () {
+    var now = location.pathname + location.search;
+    if (now === shownUrl || sheetNow || !PROGRESS.test(location.pathname)) return;
+    swapTo(location.href, false).catch(function () {
+      location.reload();
+    });
+  });
+
+  // Keyboard shortcuts (#105), listed on the sheet ? opens. They wait while you type in a
+  // box, hold a modifier, or have a sheet or menu open.
+  var tabs = document.querySelector(".tabs[data-shortcuts]");
+  var gAt = 0;
+  document.addEventListener("keydown", function (event) {
+    if (!tabs || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    var t = event.target;
+    if (t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName))) return;
+    if (document.querySelector(".sheet-layer, .cal-layer, .hold-layer")) return;
+    var k = event.key;
+    var log = tabs.querySelector(".log");
+    if (gAt && Date.now() - gAt < 1500) {
+      gAt = 0;
+      var to = tabs.querySelector('a[aria-keyshortcuts="g ' + k + '"]');
+      if (to) {
+        event.preventDefault();
+        location.href = to.href;
+      }
       return;
     }
-    if (!svg || !line || !points.length) return;
-    var summary = line.innerHTML;
-    var cross = svg.querySelector(".cross");
-    var width = svg.viewBox.baseVal.width;
-    var marks = {};
-    svg.querySelectorAll("[data-i]").forEach(function (m) {
-      marks[m.getAttribute("data-i")] = m;
-    });
-    var current = -1;
-    var pinned = false;
-    var dragging = false;
-
-    function add(tag, value) {
-      var el = document.createElement(tag);
-      el.textContent = value;
-      line.appendChild(el);
-      return el;
-    }
-    function show(i) {
-      if (marks[current]) marks[current].classList.remove("on");
-      current = i;
-      if (i < 0) {
-        svg.classList.remove("scrub");
-        line.innerHTML = summary;
-        return;
-      }
-      var p = points[i];
-      svg.classList.add("scrub");
-      if (marks[i]) marks[i].classList.add("on");
-      cross.setAttribute("x1", p.x);
-      cross.setAttribute("x2", p.x);
-      line.textContent = "";
-      add("span", p.title);
-      add("b", p.value);
-      if (p.note) add("span", p.note);
-      if (p.prev && fig.classList.contains("compare")) add("span", p.prev);
-      if (p.href && pinned) add("a", "Open day \u203a").href = p.href;
-    }
-    function nearest(event) {
-      var box = svg.getBoundingClientRect();
-      var x = ((event.clientX - box.left) / box.width) * width;
-      var best = 0;
-      points.forEach(function (p, i) {
-        if (Math.abs(p.x - x) < Math.abs(points[best].x - x)) best = i;
-      });
-      return best;
-    }
-    function clear() {
-      pinned = false;
-      show(-1);
-    }
-    svg.addEventListener("pointerdown", function (event) {
-      dragging = true;
-      pinned = false;
-      show(nearest(event));
-    });
-    svg.addEventListener("pointermove", function (event) {
-      if (dragging || (event.pointerType === "mouse" && !pinned)) show(nearest(event));
-    });
-    svg.addEventListener("pointerup", function () {
-      if (!dragging) return;
-      dragging = false;
-      pinned = true;
-      show(current);
-    });
-    // A vertical swipe scrolls the page instead (touch-action: pan-y), which cancels this
-    svg.addEventListener("pointercancel", function () {
-      dragging = false;
-      if (!pinned) show(-1);
-    });
-    svg.addEventListener("pointerleave", function (event) {
-      if (event.pointerType === "mouse" && !pinned && !dragging) show(-1);
-    });
-    document.addEventListener("pointerdown", function (event) {
-      if (pinned && !svg.contains(event.target) && !line.contains(event.target)) clear();
-    });
-    svg.addEventListener("keydown", function (event) {
-      var step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-      if (event.key === "Escape" && current >= 0) {
-        clear();
-        return;
-      }
-      if (!step) return;
+    gAt = 0;
+    if (k === "g") {
+      gAt = Date.now();
+    } else if (k === "/") {
       event.preventDefault();
-      var i = current < 0 ? (step < 0 ? points.length - 1 : 0) : current + step;
-      pinned = true;
-      show(Math.max(0, Math.min(points.length - 1, i)));
-    });
-    var compare = fig.querySelector("[data-compare]");
-    if (compare) {
-      compare.addEventListener("click", function () {
-        var on = !fig.classList.contains("compare");
-        fig.classList.toggle("compare", on);
-        compare.setAttribute("aria-pressed", String(on));
-        if (current >= 0) show(current);
-      });
+      var box = document.querySelector("main input[name=q], main input[type=search]");
+      if (box) {
+        box.focus();
+        box.select();
+      } else if (log) {
+        openSheet(log.href.replace(/\/actions(\?|$)/, "/add$1"), log);
+      }
+    } else if (k === "n" && log) {
+      event.preventDefault();
+      log.click();
+    } else if (k === "?") {
+      event.preventDefault();
+      openSheet(tabs.getAttribute("data-shortcuts"), document.activeElement);
+    } else if (k === "ArrowLeft" || k === "ArrowRight") {
+      var step = document.querySelector(
+        'main .step[aria-label="' + (k === "ArrowLeft" ? "Previous" : "Next") + ' day"]');
+      if (step) {
+        event.preventDefault();
+        location.href = step.href;
+      }
     }
   });
 
-  // Range and metric controls keep your place: the next page opens where this one was
+  // Tapping the tab you're on goes back to the top of it (#105)
+  if (tabs) {
+    tabs.addEventListener("click", function (event) {
+      var link = event.target.closest("a[aria-current]");
+      if (!link || link.parentNode !== tabs || scrollY < 40) return;
+      if (link.pathname !== location.pathname || location.search) return;
+      event.preventDefault();
+      scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+    });
+  }
+
+  // The phone's tab bar steps aside while the keyboard is up (#105)
+  if (window.visualViewport) {
+    var vv = window.visualViewport;
+    var typing = function () {
+      var a = document.activeElement;
+      var field = a && (/^(TEXTAREA|SELECT)$/.test(a.tagName) ||
+        (a.tagName === "INPUT" && !/^(range|checkbox|radio|button|submit|file)$/.test(a.type)));
+      document.body.classList.toggle("kb", !!field && vv.height < innerHeight * 0.8);
+    };
+    vv.addEventListener("resize", typing);
+    document.addEventListener("focusout", function () {
+      setTimeout(typing, 50);
+    });
+  }
+
+  // Range and metric controls keep your place when they load a page: the next page opens
+  // where this one was
   document.addEventListener("click", function (event) {
+    if (event.defaultPrevented) return;
     var link = event.target.closest && event.target.closest("nav.segment a");
     if (!link) return;
     try {

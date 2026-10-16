@@ -119,7 +119,7 @@ def test_entry_sheet_is_a_fragment_or_a_page(http, logged):
     part = http.get(f"/app/entries/{entries[0].id}", params={"part": "1"}).text
     assert not part.startswith("<!doctype") and 'id="entry-title"' in part
     whole = http.get(f"/app/entries/{entries[0].id}").text
-    assert whole.startswith("<!doctype") and 'class="backlink"' in whole
+    assert whole.startswith("<!doctype") and 'class="iconbtn back"' in whole
     assert http.get("/app/entries/9999").status_code == 404
 
 

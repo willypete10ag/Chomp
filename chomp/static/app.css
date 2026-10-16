@@ -206,7 +206,7 @@ a.step:active { background: var(--track); }
 .opencal { color: inherit; text-decoration: none; }
 .opencal .caret { font-size: .9rem; color: var(--muted); vertical-align: middle; }
 
-/* Month view (#71): ‹ month › and a year box, then the days with dots and stars */
+/* Month view (#71): ‹ month › and a year box, then the days with dots and goal rings */
 .calhead { display: flex; align-items: center; gap: .25rem; margin-bottom: .5rem; }
 .calhead h2 { margin: 0; min-width: 7.5rem; text-align: center; font-size: 1.15rem; }
 .years { position: relative; margin-left: auto; }
@@ -242,12 +242,21 @@ a.step:active { background: var(--track); }
   display: inline-block; width: .38rem; height: .38rem; border-radius: 50%;
   background: var(--accent); margin-top: .2rem;
 }
-.calendar .star { font-style: normal; color: var(--carbs); font-size: .8rem; line-height: 1; margin-top: .1rem; }
+/* A day within 10% of every goal (#105): a ring around its date */
+.caldays a.met b {
+  display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem;
+  margin-top: -.2rem; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--accent);
+}
+.caldays a.met .dot { margin-top: 0; }
+.calendar .ring {
+  display: inline-block; width: .8rem; height: .8rem; border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .caldays a[aria-current] .dot { background: var(--on-accent); }
-.caldays a[aria-current] .star { color: var(--on-accent); }
+.caldays a[aria-current].met b { box-shadow: inset 0 0 0 2px var(--on-accent); }
 .calfoot { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-top: .75rem; }
 .calfoot p { margin: 0; }
-.calfoot .dot, .calfoot .star { vertical-align: middle; margin: 0 .1rem 0 .4rem; }
+.calfoot .dot, .calfoot .ring { vertical-align: middle; margin: 0 .1rem 0 .4rem; }
 .calfoot .dot:first-child { margin-left: 0; }
 
 /* The month view as a sheet over Today */
@@ -1268,7 +1277,6 @@ details.opt[open] > summary .chev { transform: rotate(90deg); }
 details.opt .chev { transition: transform .2s var(--ease); }
 details.opt > form { padding: 0 1rem 1rem; margin: 0; }
 .group > details.opt + *, .group > * + details.opt, .group > a + form .item, .group > details + form .item { border-top: 1px solid var(--line); }
-.backlink { margin: .5rem 0 0; }
 .sheet-page { margin-top: .5rem; }
 @media (min-width: 40rem) {
   .sheet { width: 30rem; }
@@ -1527,3 +1535,251 @@ details.opt.danger > form { padding: 0 1rem 1rem; }
 .chooser .item { min-height: 5rem; }
 .ways.group > .item + .item { border-top: 1px solid var(--line); }
 body:not(.has-tabs) main { padding-bottom: 2rem; }
+
+/* --- Desktop and polish (#105) ------------------------------------------------------------ */
+
+/* Pushed pages: a back chevron over the large title, icon buttons on the right */
+.pagehead.pushed { flex-wrap: wrap; padding-top: .25rem; }
+.pagehead.pushed .back { order: 0; }
+.pagehead.pushed .actions { order: 1; margin-left: auto; }
+.pagehead.pushed .pagetitle { order: 2; flex-basis: 100%; min-width: 0; }
+.pagehead.pushed h1 { margin: .5rem 0 .25rem; overflow-wrap: anywhere; }
+.pagesub { margin: 0 0 1rem; color: var(--muted); font-size: .9rem; }
+.pagehead.pushed .pagetitle:not(:has(.pagesub)) h1 { margin-bottom: 1rem; }
+
+/* Field: a caption over a box with its unit inside it, a hint under it */
+.fld { display: grid; gap: .35rem; min-width: 0; }
+.fld + .fld { margin-top: .9rem; }
+.fld-label { font-size: .82rem; font-weight: 600; color: var(--muted); }
+.fld-box {
+  display: flex; align-items: center; gap: .4rem; min-width: 0; padding: 0 .8rem 0 0;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.fld-box:focus-within { border-color: var(--hue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--hue) 22%, transparent); }
+.fld-box input {
+  flex: 1; min-width: 0; background: none; border: 0; font-variant-numeric: tabular-nums;
+}
+.fld-box input:focus-visible { outline: none; }
+.fld-box .unit { flex: none; color: var(--muted); font-size: .95rem; white-space: nowrap; }
+.fld-box select {
+  width: auto; min-height: 2.2rem; padding: .25rem .4rem; border: 0; background: var(--card);
+  border-radius: var(--r-sm); font-size: .9rem;
+}
+.fld-hint { color: var(--muted); font-size: .8rem; }
+.fld textarea { background: var(--surface-2); border-radius: var(--r); }
+
+/* Stepper: minus and plus either side of the box */
+.steps { display: flex; align-items: center; gap: .5rem; }
+.steps .fld-box { flex: 1; }
+.steps .fld-box input { text-align: center; font-weight: 650; font-size: 1.05rem; padding-right: 0; }
+.steps .stepper {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 2.75rem; height: 2.75rem; color: var(--hue); border: 0;
+  background: color-mix(in srgb, var(--hue) 13%, var(--surface-2));
+  transition: transform .12s var(--ease), background .12s;
+}
+.steps .stepper .icon { width: 1.2rem; height: 1.2rem; stroke-width: 2.25; }
+.steps .stepper:active { transform: scale(.92); background: color-mix(in srgb, var(--hue) 24%, var(--surface-2)); }
+
+/* The saved meal and recipe editors: name and amount boxes, foods as rows, Save at the bottom */
+.group > h2 small { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.editor .group .body { padding-top: .75rem; }
+.editor ul.ingredients:not(.plain) li { display: block; padding: .75rem 0; }
+.editor .ing-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
+.editor .ing-head .name { flex: 1; font-weight: 600; }
+.editor .ing-head .kcal { font-weight: 400; }
+.iconbtn.remove {
+  width: 2.25rem; height: 2.25rem; min-height: 0; padding: 0; flex: none; color: var(--muted);
+  background: var(--surface-2);
+}
+.iconbtn.remove .icon { width: 1.05rem; height: 1.05rem; }
+.addsearch { position: relative; margin: .75rem 0 0; }
+.addsearch .field-icon {
+  position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: var(--muted);
+  display: flex; pointer-events: none;
+}
+.addsearch .field-icon .icon { width: 1.1rem; height: 1.1rem; }
+.addsearch input { padding-left: 2.5rem; border-radius: 999px; }
+.addsearch button { border-radius: 999px; }
+button.pick .plus {
+  width: 2.25rem; height: 2.25rem; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+button.pick .plus .icon { width: 1.1rem; height: 1.1rem; stroke-width: 2.5; }
+.editor .macro-tiles { margin-bottom: .5rem; }
+.editor .logbar button { width: 100%; pointer-events: auto; }
+
+/* Weigh-ins: when and where from on the left, the weight on the right */
+.row.food-link { display: flex; align-items: center; }
+.source { display: inline-flex; align-items: center; gap: .3rem; }
+.source .icon { width: .95rem; height: .95rem; }
+.source .src-health { color: var(--burn); } .source .src-chat { color: var(--train); }
+.source .src-app { color: var(--accent); }
+
+/* Workout (#105): each exercise's sets as a table, PR badges, and how it went last time */
+.settable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.settable th {
+  text-align: left; font-size: .72rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted); padding: 0 0 .35rem;
+}
+.settable td { padding: .45rem 0; border-top: 1px solid var(--line); }
+.settable th:first-child, .settable td:first-child { width: 3rem; }
+.settable .num { text-align: right; }
+.badge.pr {
+  margin-left: .4rem; border: 0; font-weight: 700; color: var(--on-accent); background: var(--train);
+  font-size: .68rem; padding: .1rem .4rem; vertical-align: .1em;
+}
+.lasttime { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin: .6rem 0 0; }
+.exercise h2 { margin-bottom: .5rem; }
+
+/* Breakdown (#105): the macro split as a ring beside the three macros; top foods with thumbs */
+.split-hero { display: flex; align-items: center; gap: 1rem; }
+.split-hero .macros { flex: 1; grid-template-columns: 1fr; gap: .35rem; margin: 0; text-align: left; }
+.split-hero .macro { display: grid; grid-template-columns: 1fr auto; column-gap: .5rem; padding: .2rem 0; }
+.split-hero .macro > :first-child { grid-column: 1 / -1; }
+.split-ring { width: 7.5rem; height: 7.5rem; }
+.split-ring .seg { stroke-linecap: round; }
+.split-ring .seg.protein_g { stroke: var(--protein); }
+.split-ring .seg.carbs_g { stroke: var(--carbs); }
+.split-ring .seg.fat_g { stroke: var(--fat); }
+.split-ring .ring-num b { font-size: 1.55rem; }
+.top.thumbs li { align-items: center; }
+.top.thumbs .thumb { width: 2rem; height: 2rem; border-radius: 8px; font-size: .85rem; }
+
+/* Skip link: first thing a keyboard reaches, shown only when focused */
+.skip {
+  position: fixed; left: 1rem; top: -4rem; z-index: 200; padding: .6rem 1rem; border-radius: var(--r);
+  background: var(--accent); color: var(--on-accent); font-weight: 600; text-decoration: none;
+}
+.skip:focus { top: calc(env(safe-area-inset-top) + .75rem); }
+main:focus { outline: none; }
+/* One focus ring for everything a keyboard can reach */
+a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm);
+}
+.subnav { display: none; }
+
+/* Wide screens (#105): the sidebar nests Progress's and Foods' areas; pages with two
+   columns use up to 76rem, the rest stay at a reading width */
+@media (min-width: 64rem) {
+  main { max-width: 48rem; padding: 1.75rem 2rem 0; }
+  main:has(> .cols), main:has(> .detail), main:has(> form.editor), main:has(> .overview),
+  main:has(> .exercises) { max-width: 76rem; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+  .col-side { position: sticky; top: 1.25rem; }
+  /* Progress: charts on the left get more room than the day list */
+  main:has(> .pills) .cols { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+  main:has(> .pills) .col-side { position: static; }
+  /* Today: the meals on the left, the energy and Your day kept in view on the right */
+  .cols:has(.energy) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); }
+  .cols:has(.energy) .col-main { grid-column: 2; grid-row: 1; position: sticky; top: 1.25rem; }
+  .cols:has(.energy) .col-side { grid-column: 1; grid-row: 1; position: static; }
+  .cols:has(.energy) .col-side > .section-title:first-child { margin-top: 0; }
+  .cols .tiles:has(> .day-tile) { grid-template-columns: 1fr 1fr; }
+  .tabs .subnav {
+    display: grid; gap: .1rem; margin: -.1rem 0 .4rem 2.6rem; padding-left: .6rem;
+    border-left: 1px solid var(--line);
+  }
+  .tabs .subnav a {
+    padding: .4rem .7rem; font-size: .88rem; font-weight: 550; border-radius: var(--r-sm);
+  }
+  .tabs .subnav a[aria-current] { color: var(--text); background: var(--surface-2); }
+  .tabs .subnav a:hover, .tabs > a:hover { color: var(--text); }
+  /* Progress overview, workouts and You: cards side by side */
+  .overview { grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr)); }
+  .exercises { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: 0 1rem; align-items: start; }
+  /* The editors: the form on the left, what it comes to and the steps on the right */
+  form.editor { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 0 1.5rem; align-items: start; }
+  form.editor > .sr { position: absolute; }
+  form.editor .editor-side { position: sticky; top: 1.25rem; }
+  form.editor .logbar { grid-column: 1 / -1; }
+  /* Sheets open as a centered dialog, a little wider */
+  .sheet { width: 30rem; }
+  .sheet.full { width: 36rem; max-height: 82vh; }
+  /* Pointer hover on rows and buttons */
+  .item:hover, .days a:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .button:hover, button:not(.item):not(.chip):not(.remove):not(.stepper):hover { filter: brightness(1.06); }
+}
+/* Food, saved meal and recipe pages on a wide screen: the photo or initials kept on the
+   left, the name, numbers and lists on the right */
+@media (min-width: 64rem) {
+  .detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); column-gap: 2rem; align-items: start; }
+  .detail > * { grid-column: 2; }
+  .detail > .food-photo, .detail > .detail-art {
+    grid-column: 1; grid-row: 1 / span 12; margin: 0; position: sticky; top: 1.25rem;
+    border-radius: var(--r-xl); overflow: hidden;
+  }
+  .detail .food-photo img { height: 26rem; }
+  .detail-art { height: 22rem; }
+  .detail > .detail-head { margin-top: 0; }
+  .detail > .logbar { grid-column: 2; }
+  .detailbar { position: static; height: auto; margin: 0 0 .75rem; pointer-events: auto; }
+  .detailbar .iconbtn { margin-top: 0; box-shadow: none; }
+}
+
+/* Loading (#105): results being fetched dim under a sweeping line; with none yet, grey
+   rows stand in for them */
+[data-results] { position: relative; transition: opacity .2s var(--ease); }
+[data-results][aria-busy="true"] { opacity: .6; }
+[data-results][aria-busy="true"]::before {
+  content: ""; position: absolute; left: 0; right: 0; top: -.4rem; height: 2px; border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat;
+  animation: sweep 1s linear infinite;
+}
+[data-results][aria-busy="true"]:empty {
+  opacity: 1; min-height: 9rem; border-radius: var(--r);
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 6%, transparent), transparent)
+      -60% 0 / 60% 100% no-repeat,
+    repeating-linear-gradient(var(--surface-2) 0 2.6rem, transparent 2.6rem 3rem);
+  animation: shimmer 1.2s linear infinite;
+}
+@keyframes sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@keyframes shimmer { to { background-position: 160% 0, 0 0; } }
+
+/* At the goal, Today's ring shines once (#105) */
+.ring-box.met .arc { animation: shine 1.4s .5s var(--ease) both; }
+@keyframes shine {
+  40% { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--kcal) 80%, transparent)); stroke-width: 13; }
+}
+
+/* Keyboard shortcuts sheet (#105) */
+.keylist { padding: .25rem 0; }
+.keylist li {
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .6rem 1rem;
+}
+.keylist li + li { border-top: 1px solid var(--line); }
+.keys { display: flex; gap: .3rem; flex: none; }
+kbd {
+  min-width: 1.7rem; padding: .15rem .45rem; border-radius: .4rem; text-align: center;
+  font: 600 .8rem/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--line); border-bottom-width: 2px;
+}
+
+/* The phone's tab bar steps aside while the keyboard is up (#105) */
+@media (max-width: 63.99rem) {
+  body.kb .tabs { transform: translateY(110%); }
+  .tabs { transition: transform .2s var(--ease); }
+}
+
+/* Page changes (#105): the tab bar stays put while the page under it cross-fades and rises */
+.tabs { view-transition-name: tabs; }
+::view-transition-old(root) { animation: .16s var(--ease) both vt-out; }
+::view-transition-new(root) { animation: .24s .04s var(--ease) both vt-in; }
+@keyframes vt-out { to { opacity: 0; } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(.5rem); } }
+@media (prefers-reduced-motion: reduce) {
+  .ring-box.met .arc, [data-results][aria-busy="true"]::before,
+  [data-results][aria-busy="true"]:empty { animation: none; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+  .tabs { transition: none; }
+}
+
+/* Wide screens draw charts about twice the phone's size, so their labels shrink to match (#105) */
+@media (min-width: 64rem) {
+  .chart .tick { font-size: 7px; }
+  .chart .tick.label { font-size: 6.75px; stroke-width: 2px; }
+}
+/* A sheet or the page takes focus to move the reader there, not to show a ring */
+.sheet:focus-visible, .cal-sheet:focus-visible, main:focus-visible { outline: none; }

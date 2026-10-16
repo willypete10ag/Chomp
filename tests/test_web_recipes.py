@@ -145,3 +145,16 @@ def test_posts_need_the_dashboard(http, conn):
     sign_in(http)
     assert http.post(f"/app/recipes/{recipe.id}/delete").status_code == 403
     assert len(store.list_recipes(conn)) == 1
+
+
+def test_editor_uses_fields_and_steppers(http, conn):
+    _, _, recipe = chili(conn)
+    sign_in(http)
+    page = http.get(f"/app/recipes/{recipe.id}/edit").text
+    assert 'class="iconbtn back"' in page and "<h1 data-title>" in page
+    assert '<label class="fld"><span class="fld-label">Name</span>' in page
+    # Servings it makes and each ingredient's grams step, without going below their floor
+    assert 'data-stepper data-step="1" data-min="1"' in page
+    assert page.count('data-stepper data-step="10" data-min="1"') == 2
+    assert 'aria-label="Less: grams of Black beans"' in page
+    assert "Per serving" in page and 'class="logbar"' in page and "Save recipe" in page

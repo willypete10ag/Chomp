@@ -306,9 +306,9 @@ def test_month_view_marks_logged_and_near_goal_days(http, conn, logged):
     store.set_targets(conn, {k: round(totals[k]) for k in logic.CORE})
     text = http.get(f"/app/calendar?month={month:%Y-%m}&part=1").text
     assert text.startswith('<div class="calendar"')  # just the calendar, for the sheet
-    today = text[text.index('class="is-today"') :]
+    today = text[text.index('class="is-today met"') :]
     today = today[: today.index("</a>")]
-    assert 'class="star"' in today and "near your goals" in today
+    assert "near your goals" in today  # ringed
 
     # An older meal opens earlier months; the year box lists each year back to it
     old = logic.format_utc(datetime(2024, 3, 5, 17, tzinfo=UTC))

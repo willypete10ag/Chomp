@@ -218,3 +218,33 @@ def test_all_time_overview_starts_at_the_first_weigh_in(http, conn):
     page = http.get("/app/progress?days=0").text.replace("\xa0", " ")
     first = logic.local_date(old, "America/New_York")
     assert f"since {first.strftime('%b')} {first.year}" in page and "&minus;" in page
+
+
+def test_desktop_shell_shortcuts_and_skip_link(http):
+    sign_in(http)
+    page = http.get("/app/progress/nutrition").text
+    assert '<a class="skip" href="#main">' in page and '<main id="main"' in page
+    # The sidebar nests Progress's areas and Foods' sides; the script marks the open one
+    assert '<div class="subnav"><a href="/app/progress">Overview</a>' in page
+    assert '<a href="/app/recipes">Recipes</a></div>' in page
+    assert 'aria-keyshortcuts="g p"' in page and 'data-shortcuts="/app/shortcuts"' in page
+    # Two columns past 64rem: Today's summary beside its meals
+    today = http.get("/app").text
+    assert '<div class="cols"><div class="col-main">' in today and 'class="col-side"' in today
+    assert "<!--cols:" not in today + page
+    sheet = http.get("/app/shortcuts", params={"part": 1}).text
+    assert sheet.startswith('<h2 id="keys-title">') and "<kbd>?</kbd>" in sheet
+    assert "<kbd>g</kbd><kbd>t</kbd>" in sheet
+    assert '<main id="main"' in http.get("/app/shortcuts").text  # a page without the script
+    assert 'href="/app/shortcuts" data-sheet' in http.get("/app/you").text
+
+
+def test_export_downloads(http, conn):
+    sign_in(http)
+    r = http.get("/app/you/export.csv")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert r.headers["content-disposition"].startswith('attachment; filename="chomp-')
+    r = http.get("/app/you/export.json")
+    assert r.status_code == 200 and r.json() is not None
+    assert http.get("/app/you/export.xml").status_code == 404
+    assert 'href="/app/you/export.csv" download' in http.get("/app/you").text

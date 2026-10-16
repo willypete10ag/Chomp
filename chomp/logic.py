@@ -7,7 +7,7 @@ to the logged grams at log time, so later edits to the food never rewrite histor
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -882,3 +882,46 @@ def exercise_bests(workouts: Iterable[tuple[date, int, Iterable[Mapping]]]) -> l
                 None if held is None else held.e1rm_kg,
             )
     return sorted(bests.values(), key=lambda b: (b.day, b.e1rm_kg), reverse=True)
+
+
+def set_records(earlier: Iterable[Mapping], sets: Sequence[Mapping]) -> set[int]:
+    """The sets of one workout (by index in `sets`) that beat their exercise's best estimated
+    one-rep max from `earlier` workouts' sets (#105): one per exercise, its best. An exercise
+    done for the first time sets no record, since there's nothing to beat."""
+    held: dict[str, float] = {}
+    for s in earlier:
+        e1rm = None if s["set_type"] == "warmup" else estimated_1rm(s["weight_kg"], s["reps"])
+        if e1rm is not None and e1rm > held.get(s["exercise"], 0.0):
+            held[s["exercise"]] = e1rm
+    top: dict[str, tuple[float, int]] = {}
+    for i, s in enumerate(sets):
+        if s["set_type"] == "warmup":
+            continue
+        e1rm = estimated_1rm(s["weight_kg"], s["reps"])
+        if e1rm is None or s["exercise"] not in held or e1rm <= held[s["exercise"]] + 1e-9:
+            continue
+        if s["exercise"] not in top or e1rm > top[s["exercise"]][0] + 1e-9:
+            top[s["exercise"]] = (e1rm, i)
+    return {i for _, i in top.values()}
+
+
+@dataclass(frozen=True)
+class LastTime:
+    """An exercise the last time it was done before a workout (#105): when, its working
+    sets, its best set and its volume."""
+
+    day: date
+    sets: int
+    best: Mapping | None
+    volume_kg: float
+
+
+def last_time(earlier: Iterable[tuple[date, Iterable[Mapping]]], exercise: str) -> LastTime | None:
+    """`exercise` in the newest of `earlier` (day, sets) workouts, newest first, that has
+    it; None when it was never done before."""
+    for day, sets in earlier:
+        mine = [s for s in sets if s["exercise"] == exercise]
+        if mine:
+            working = [s for s in mine if s["set_type"] != "warmup"]
+            return LastTime(day, len(working), best_set(mine), workout_volume_kg(mine))
+    return None

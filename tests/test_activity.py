@@ -364,7 +364,7 @@ async def test_get_activity_with_nothing_sent(server):
 def test_empty_activity_page_says_where_it_comes_from(http):
     sign_in(http)
     page = http.get("/app/progress/activity").text
-    assert 'href="/app/progress" aria-current=page>' in page
+    assert 'href="/app/progress" aria-current=page ' in page
     assert 'href="/app/progress/activity" aria-current=page>Activity<' in page
     assert "No activity yet." in page and "Apple Health" in page
 

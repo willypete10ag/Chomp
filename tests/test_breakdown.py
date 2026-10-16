@@ -147,7 +147,7 @@ def test_breakdown_shows_split_meals_top_foods_and_facts(http, conn, logged):  #
     )
     sign_in(http)
     text = page(http, "/app/breakdown")
-    assert "<h1>Breakdown</h1>" in text
+    assert "<h1 data-title>Breakdown</h1>" in text
     # 58 g protein (232 kcal), 3.6 g carbs (14), 19.5 g fat (176): 55% / 3% / 42%
     assert "<strong>55%</strong>" in text and "<strong>42%</strong>" in text
     assert 'href="#top-protein_g"' in text
@@ -179,7 +179,7 @@ def test_breakdown_empty_day_bad_date_and_back_link(http, logged):  # noqa: F811
     assert "Nothing logged on this day" in page(http, "/app/breakdown?date=2020-01-01")
     assert http.get("/app/breakdown?date=nope").status_code == 400
     text = page(http, "/app/breakdown?back=/app/history%3Fdays%3D30")
-    assert 'href="/app/history?days=30" aria-label="Back"' in text
+    assert 'href="/app/history?days=30" aria-label="Back to' in text
     text = page(http, "/app/breakdown?back=https://evil.example/")
     assert "evil.example" not in text
 

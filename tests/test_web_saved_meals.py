@@ -65,6 +65,9 @@ def test_editor_in_servings_or_grams(http, conn, foods):
     page = http.get(f"/app/saved-meals/{template_id}/edit").text
     assert 'value="2"' in page and '<option value="servings" selected>' in page
     assert 'name="est" value="250"' in page
+    # #105: each amount is a stepper (servings by halves, grams by tens) and Save is pinned
+    assert 'data-stepper data-step="0.5" data-min="0.5" data-step-g="10"' in page
+    assert 'class="stepper js-only" data-dir="-1"' in page and 'class="logbar"' in page
     # adding a food with a serving size starts at 1 serving, one without at 100 g
     base = {"template_id": template_id, "name": "Oatmeal"}
     page = http.post(

@@ -45,7 +45,19 @@ You (`/app/you`: goals, integrations at `/app/you/integrations` with the Apple H
 imports and the connector address, a System/Dark/Light theme kept per device in localStorage
 and applied before paint by `static/theme.js`, and Sign out), plus a raised Log (+) button in
 the middle that opens `/app/actions` as a bottom sheet (`?part=1` is the sheet's fragment; it
-is a page without the script). Past 64rem the tabs become a left sidebar. The old
+is a page without the script). Past 64rem the tabs become a left sidebar with Progress's
+areas and Foods' sides nested under them (`subnav`), and pages go two-column: `render` splits a
+body at the `MAIN_COL`/`SIDE_COL` markers (`columns`) into a main column and a sticky side one
+(Today's summary beside its meals, a Progress chart beside its list of days or weigh-ins), and
+the editors, a food's page, a workout and Overview use wider grids. Keyboard shortcuts
+(`SHORTCUT_KEYS`, listed on `/app/shortcuts`, which ? opens): / search or log food, n Log,
+←/→ the day before or after, g then t/p/f/y to a tab. On Progress the range, metric and area
+links swap the page's `main` in place inside a view transition (pushState; Back steps through
+them), and pages cross-fade with cross-document view transitions; both are off under reduced
+motion, as are the count-up of the big numbers, the ring's shine at the goal and loading
+shimmer. Sheets keep Tab inside them, a skip link leads to `main`, tapping the open tab
+scrolls to the top, and the phone's tab bar steps aside while the keyboard is up. Pushed pages
+share one header (`back_head`: a round back button, actions and the title). The old
 `/app/history`, `/app/activity`, `/app/workouts` and GET `/app/weight` 301 to their Progress
 pages.
 Charts (#105, `chomp/charts.py`) are server-drawn SVG with no chart library: bars (a missing day
@@ -65,8 +77,8 @@ draw the goal weight on Weight and the step goal on Activity; they aren't macro 
 tools don't report them. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
 Screens: Today
 (any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
-day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
-goal, months back to the first logged one and a year list; an Energy card (#105) with a ring
+day's title opens as a sheet, with a dot on logged days and a ring around days within 10% of
+every goal, months back to the first logged one and a year list; an Energy card (#105) with a ring
 and calories left as the big number, amber up to 100 kcal over the goal and red past that,
 eaten, burned so far, net and the goal, and a … sheet (`/app/day-menu`: Breakdown, Edit goals,
 Pick a day); then protein/carbs/fat with bars, and More nutrients folding away fiber/sugar/
@@ -164,7 +176,8 @@ ingredients as a list that opens each food, steps, Log it pinned at the bottom, 
 food log sheet in servings for the recipe's food row, and Edit and Delete in its … menu,
 `/app/recipes/{id}/menu`), and an
 editor (name, servings it makes, ingredients found by searching your foods with grams for the
-whole recipe, steps one per line). The editor goes back to the server to search, add or remove
+whole recipe, steps one per line; #105 builds it, like the saved meal editor, from the shared
+`form_field` and `stepper` components with a running per-serving total beside it). The editor goes back to the server to search, add or remove
 an ingredient (`/app/recipes/draft`); the script swaps the new form in place. A recipe's food
 row stays out of Foods, and opening it as a food opens the recipe.
 
