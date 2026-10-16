@@ -48,15 +48,23 @@ def test_import_list_and_workout_page(http, conn):
 
     push = next(w for w in store.workouts_between(conn, "2026", "2027") if w["title"] == "Push Day")
     page = http.get(f"/app/workouts/{push['id']}").text.replace("\xa0", " ")
-    assert "<h1>Push Day</h1>" in page and "Felt strong" in page
+    assert "<h1 data-title>Push Day</h1>" in page and "Felt strong" in page
     assert "Monday, October 12, 6:30 PM" in page
-    assert '<span class="setno warmup" title="warmup">W</span> 95 lb &times; 10' in page
-    assert '<span class="setno normal" title="normal">1</span> 185 lb &times; 6' in page
+    assert '<span class="setno warmup" title="warmup">W</span></td><td>95 lb &times; 10' in page
+    assert '<span class="setno normal" title="normal">1</span></td><td>185 lb &times; 6' in page
     assert '<span class="setno failure" title="failure">F</span>' in page
-    assert "RPE 8.5" in page and "Rope" in page and "20 reps" in page
+    assert (
+        ">RPE</th>" in page
+        and '<td class="num">8.5</td>' in page
+        and "Rope" in page
+        and "20 reps" in page
+    )
     legs = next(w for w in store.workouts_between(conn, "2026", "2027") if w["title"] == "Legs")
     assert "1.25 mi · 20:15" in http.get(f"/app/workouts/{legs['id']}").text.replace("\xa0", " ")
     assert http.get("/app/workouts/9999").status_code == 404
+    # Its … menu (#105): the food that day, and Delete
+    menu = http.get(f"/app/workouts/{push['id']}/menu", params={"part": 1}).text
+    assert "Food that day" in menu and f'action="/app/workouts/{push["id"]}/delete"' in menu
 
     r = http.post(f"/app/workouts/{push['id']}/delete", headers=ORIGIN)
     assert r.headers["location"] == "/app/progress/training?removed=1"

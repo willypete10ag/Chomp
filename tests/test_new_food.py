@@ -407,7 +407,10 @@ def test_foods_sort_by_and_per_serving(app, conn):
     assert current + "Most logged" in sheet and current + "Most logged first" in sheet
     assert current + "Per serving" in sheet
     assert 'href="/app/foods?sort=protein&amp;dir=down&amp;per=serving"' in sheet
-    assert "<main>" in app.get("/app/foods/sort").text  # a page of its own without the script
+    # a page of its own without the script
+    assert (
+        '<main id="main"' in app.get("/app/foods/sort").text
+    )  # a page of its own without the script
 
     page = app.get("/app/foods?sort=protein&per=100g").text
     assert "Protein &darr;" in page and "/100 g" in page

@@ -449,3 +449,33 @@ def test_exercise_bests_newest_record_first():
     assert bench.beat_kg == pytest.approx(80 * (1 + 5 / 30))
     # A tie isn't a record: Squat's best stays the first one
     assert (squat.day, squat.workout_id, squat.beat_kg) == (d1, 1, None)
+
+
+def _set(exercise, kg, reps, kind="normal"):
+    return {"exercise": exercise, "weight_kg": kg, "reps": reps, "set_type": kind}
+
+
+def test_set_records_marks_the_best_set_that_beats_earlier_ones():
+    earlier = [_set("Bench", 80, 5), _set("Squat", 100, 5), _set("Bench", 200, 1, "warmup")]
+    sets = [
+        _set("Bench", 120, 1, "warmup"),  # a warm-up never counts
+        _set("Bench", 82, 5),
+        _set("Bench", 85, 5),  # the best of the two that beat 80 x 5
+        _set("Squat", 100, 5),  # a tie isn't a record
+        _set("Curl", 20, 8),  # first time: nothing to beat
+    ]
+    assert logic.set_records(earlier, sets) == {2}
+    assert logic.set_records([], sets) == set()
+
+
+def test_last_time_finds_the_newest_workout_with_the_exercise():
+    d1, d2 = date(2026, 9, 1), date(2026, 9, 8)
+    earlier = [
+        (d2, [_set("Squat", 100, 5)]),
+        (d1, [_set("Bench", 60, 8, "warmup"), _set("Bench", 80, 5), _set("Bench", 85, 3)]),
+    ]
+    last = logic.last_time(earlier, "Bench")
+    assert last.day == d1 and last.sets == 2
+    assert (last.best["weight_kg"], last.best["reps"]) == (85, 3)
+    assert last.volume_kg == pytest.approx(80 * 5 + 85 * 3)
+    assert logic.last_time(earlier, "Curl") is None

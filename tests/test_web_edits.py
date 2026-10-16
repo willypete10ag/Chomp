@@ -411,7 +411,7 @@ def test_goals_page_calorie_bar(http, conn, logged):
     sign_in(http)
     assert "Edit goals" in http.get("/app/day-menu").text
     text = http.get("/app/targets?back=/app").text.replace("\xa0", " ")
-    assert "<h1>Daily goals</h1>" in text
+    assert "<h1 data-title>Daily goals</h1>" in text
     assert 'type="range"' not in text and text.count('data-handle="') == 2
     # no calorie goal yet: 2,000 kcal, and protein 180 g alone isn't a split, so even thirds
     assert 'autocomplete="off" required value="2000"' in text
