@@ -42,7 +42,7 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 between them and one range control, Today/7D/30D/6M/1Y/All via `?days=` (1 for Today, 182 for 6M, 0 for all time; Nutrition leaves out its charts on Today), the
 bar charts grouped by week past 60 days and by month past 400, `logic.chart_unit`), Foods and
 You (`/app/you`: goals, integrations at `/app/you/integrations` with the Apple Health and Hevy
-imports and the connector address, a System/Dark/Light theme kept per device in localStorage
+imports and the Claude and ChatGPT connector setup, a System/Dark/Light theme kept per device in localStorage
 and applied before paint by `static/theme.js`, and Sign out), plus a raised Log (+) button in
 the middle that opens `/app/actions` as a bottom sheet (`?part=1` is the sheet's fragment; it
 is a page without the script). Past 64rem the tabs become a left sidebar with Progress's
