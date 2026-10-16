@@ -12,6 +12,7 @@ import pytest
 import test_web
 from test_auth import PASSWORD
 from test_hevy_sync import FakeHevy, api_workout
+from test_tools import add_food
 from test_web import ORIGIN, client_for, sign_in
 from test_web_edits import follow
 
@@ -116,6 +117,11 @@ def test_rename_and_remove(public_settings, owner, conn):
         store.set_targets(hers, {"kcal": 1800})
         health.new_token(hers, sam)
         hevy_sync.save_key(hers, sam, "her-hevy-key")
+        beans = add_food(hers, "Beans", 100, 7, 20, 1)
+        recipe, _ = store.save_recipe(hers, "Chili", 2, [(beans, 200)])
+    # The owner kept Sam's recipe in a saved meal: removing Sam takes it out, as deleting
+    # the recipe would, and drops the meal left empty
+    store.save_template(conn, "chili night", [(recipe.food_id, 100)])
     other = users.add_user(conn, "Max", "max's own password", PASSWORD)
     r = owner.post(f"/app/you/people/{sam}/rename", data={"name": "Max"}, headers=ORIGIN)
     assert r.status_code == 400 and "already a user named" in r.text
@@ -134,6 +140,9 @@ def test_rename_and_remove(public_settings, owner, conn):
             == 0
         )
     assert users.name_of(conn, other) == "Max"
+    gone = conn.execute("SELECT deleted FROM foods WHERE id = ?", (recipe.food_id,)).fetchone()
+    assert gone["deleted"] == 1
+    assert store.list_templates(conn) == []
     assert owner.get("/app/you/people/1").status_code == 404  # the owner isn't removable here
     assert (
         owner.post(

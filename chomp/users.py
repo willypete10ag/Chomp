@@ -16,6 +16,7 @@ import secrets
 import sqlite3
 import time
 
+from chomp import store
 from chomp.db import transaction
 
 OWNER_ID = 1
@@ -218,15 +219,21 @@ def accept_invite(conn: sqlite3.Connection, token: str, password: str, owner_pas
 
 def remove_user(conn: sqlite3.Connection, user_id: int) -> None:
     """Delete someone and their whole log (#109). Foods stay, being shared; their recipes'
-    food rows are marked deleted like a food deleted from the dashboard."""
+    food rows are deleted like any food (gone from everyone's saved meals and portions)."""
     if user_id == OWNER_ID:
         raise UserError("the owner can't be removed")
     with transaction(conn):
-        conn.execute(
-            "UPDATE foods SET deleted = 1"
-            " WHERE id IN (SELECT food_id FROM recipes WHERE user_id = ? AND food_id IS NOT NULL)",
-            (user_id,),
-        )
+        recipe_foods = [
+            r["food_id"]
+            for r in conn.execute(
+                "SELECT food_id FROM recipes WHERE user_id = ? AND food_id IS NOT NULL",
+                (user_id,),
+            )
+        ]
+        conn.execute("DELETE FROM recipes WHERE user_id = ?", (user_id,))
+        for food_id in recipe_foods:
+            # As deleting the recipe would: out of everyone's saved meals and portions
+            store.delete_food(conn, food_id)
         # These predate ON DELETE CASCADE on user_id (0006); the rest cascade from users
         for table in ("meals", "meal_templates", "targets"):
             conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))

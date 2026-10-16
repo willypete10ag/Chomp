@@ -248,7 +248,7 @@ adds a name only and shows a one-time invite link (`/app/invite/<token>`, 7 days
 SHA-256 hashed in `user_invites`, migration 0020); opening it sets the person's password and
 signs them in, so the owner never sees it. Reset password is a new link; the old password
 works until it is used. Removing someone deletes their whole log (foods stay; their recipes'
-food rows are marked deleted). A password alone identifies the person (no two
+food rows are deleted like any food, leaving others' saved meals). A password alone identifies the person (no two
 users may share one; the server won't start if `AUTH_PASSWORD` matches another user's), so the consent page and dashboard sign-in stay a single password box;
 the sign-in's user becomes the OAuth token's subject or the dashboard session's user.
 `store.py` reads the user from the connection (`db.connect(path, user_id)`) and treats

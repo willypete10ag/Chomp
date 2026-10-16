@@ -177,8 +177,9 @@ def key_for(conn: sqlite3.Connection, settings: Settings, user_id: int) -> str:
 
 def save_key(conn: sqlite3.Connection, user_id: int, api_key: str) -> None:
     """Keep someone's key and start their sync over: a new key may be another Hevy account,
-    so the next run pulls every workout (adopting the ones already here)."""
-    with db.transaction(conn):
+    so the next run pulls every workout (adopting the ones already here). Waits for a run
+    already going, so it can't write back the old key's cursor afterwards."""
+    with _lock, db.transaction(conn):
         conn.execute(
             "INSERT INTO hevy_keys (user_id, api_key) VALUES (?, ?)"
             " ON CONFLICT(user_id) DO UPDATE SET api_key = excluded.api_key,"
@@ -189,7 +190,7 @@ def save_key(conn: sqlite3.Connection, user_id: int, api_key: str) -> None:
 
 
 def remove_key(conn: sqlite3.Connection, user_id: int) -> None:
-    with db.transaction(conn):
+    with _lock, db.transaction(conn):
         conn.execute("DELETE FROM hevy_keys WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM hevy_sync WHERE user_id = ?", (user_id,))
 
