@@ -10,7 +10,7 @@ Python 3.12 · `mcp` SDK v2 (`MCPServer`, which v1 called FastMCP; streamable HT
 chomp/
   server.py        # MCPServer app + tool registrations, /health
   auth.py          # OAuth 2.1 server + bearer token, consent page (password picks the user)
-  users.py         # users and their scrypt passwords (`chomp user add`)
+  users.py         # users, their scrypt passwords and invite links (People page, `chomp user add`)
   health.py        # /ingest/health: phone posts Apple Health data (weight, activity) with an ingest token
   health_export.py # Apple Health's export.zip reader (past weigh-ins and daily activity)
   hevy.py          # Hevy workouts: CSV export parser and the API's workout objects

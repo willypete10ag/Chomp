@@ -323,7 +323,8 @@ def test_run_opens_the_hevy_users_log(settings, conn, fake):
     nobody = dataclasses.replace(with_key, hevy_user="nobody")
     with pytest.raises(Exception, match="no user named"):
         hevy_sync.run(nobody, client=fake.client())
-    assert hevy_sync.start_background(settings) is None  # no key, no thread
+    assert hevy_sync.keyed_users(conn, nobody) == []  # an unknown HEVY_USER syncs no one
+    assert hevy_sync.run(settings, 1).error == "no Hevy API key for this person"
 
 
 def test_cli_sync_needs_a_key(settings, conn, monkeypatch, capsys):
@@ -333,14 +334,16 @@ def test_cli_sync_needs_a_key(settings, conn, monkeypatch, capsys):
     monkeypatch.setenv("HEVY_API_KEY", "test-key")
     calls = []
 
-    def fake_run(s, full=False):
-        calls.append((s.hevy_api_key, full))
+    def fake_run(s, user_id, full=False):
+        calls.append((s.hevy_api_key, user_id, full))
         return hevy_sync.SyncResult(full=full, added=2)
 
     monkeypatch.setattr(hevy_sync, "run", fake_run)
     assert cli.main(["sync-hevy", "--full"]) == 0
-    assert calls == [("test-key", True)]
-    assert "2 workouts added" in capsys.readouterr().out
+    assert calls == [("test-key", 1, True)]
+    assert "owner: 2 workouts added" in capsys.readouterr().out
+    assert cli.main(["sync-hevy", "--user", "owner"]) == 0
+    assert calls[-1] == ("test-key", 1, False)
 
 
 # --- Dashboard -------------------------------------------------------------------------------
@@ -357,7 +360,8 @@ def test_integrations_sync_now(public_settings, conn, monkeypatch):
         hevy_sync.SyncResult(error="Hevy refused the API key (HTTP 401)."),
     ]
 
-    def fake_run(s):
+    def fake_run(s, user_id):
+        assert user_id == 1
         result = results.pop(0)
         with closing(db.connect(s.db_path, 1)) as mine:  # runs in a worker thread
             store.record_hevy_sync(

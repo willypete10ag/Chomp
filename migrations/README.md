@@ -28,3 +28,4 @@ commit when a migration changes the design.
 | `0017_body_goals.sql` | `targets.goal_weight_kg` and `targets.step_goal`: optional body goals drawn as reference lines on Weight and Activity (#105) |
 | `0018_weight_edits.sql` | `weights.edited`: weigh-ins changed on the dashboard, which the phone's resends leave as edited (#105) |
 | `0019_hevy_sync.sql` | `workouts.hevy_id` (Hevy's workout id, unique per person) and `hevy_sync`: each person's Hevy API sync cursor and last result (#113) |
+| `0020_people.sql` | `user_invites` (hashed one-time invite links), `hevy_keys` (each person's Hevy API key) and `app_settings` (the shared Shortcut's link) (#109) |

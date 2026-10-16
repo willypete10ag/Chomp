@@ -2,7 +2,8 @@
 
 Apple Health has no web API, so an iPhone app (Health Auto Export's REST automation, or an
 iOS Shortcut) posts readings to POST /ingest/health. Each person has their own ingest token,
-made with `chomp user ingest-token NAME`; it is stored as a SHA-256 hash, can only add that
+made with Connect iPhone on the dashboard's Integrations page (#109) or with
+`chomp user ingest-token NAME`; it is stored as a SHA-256 hash, can only add that
 person's health readings, and is refused everywhere else (as OAuth tokens are refused here).
 
 These payload shapes are accepted:
@@ -105,6 +106,13 @@ def new_token(conn: sqlite3.Connection, user_id: int) -> str:
             (user_id, _hash(token)),
         )
     return token
+
+
+def token_info(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    """When a person's token was made and last used, or None when they have none."""
+    return conn.execute(
+        "SELECT created_at, last_used_at FROM ingest_tokens WHERE user_id = ?", (user_id,)
+    ).fetchone()
 
 
 def revoke_token(conn: sqlite3.Connection, user_id: int) -> bool:

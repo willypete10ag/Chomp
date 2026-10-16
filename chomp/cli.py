@@ -6,13 +6,16 @@
     chomp export --format csv|json [--user NAME] [--start D] [--end D] [-o FILE]
     chomp import-hevy FILE [--user NAME]
                                import a Hevy workout CSV export (repeats are skipped)
-    chomp sync-hevy [--full]   pull new, edited and deleted workouts from Hevy's API now
-                               (HEVY_API_KEY; --full pulls every workout again)
+    chomp sync-hevy [--full] [--user NAME]
+                               pull new, edited and deleted workouts from Hevy's API now,
+                               for everyone with a key (theirs from Integrations, or
+                               HEVY_API_KEY); --full pulls every workout again
     chomp import-health FILE [--user NAME]
                                import past weight and activity from Apple Health's
                                export.zip (days the phone already sent are kept)
     chomp user list            who keeps a log here
     chomp user add NAME        add a person with their own log and password (asks for it)
+                               (the dashboard's You > People does it with an invite link)
     chomp user password NAME   change someone's password (signs them out everywhere)
     chomp user rename OLD NEW  change someone's display name
     chomp user ingest-token NAME [--revoke]
@@ -93,6 +96,7 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     h.add_argument("--user", help="whose workouts these are (default: the owner)")
     hs = sub.add_parser("sync-hevy", help="pull workouts from Hevy's API now")
     hs.add_argument("--full", action="store_true", help="pull every workout again")
+    hs.add_argument("--user", help="only this person (default: everyone with a key)")
 
     hh = sub.add_parser("import-health", help="import Apple Health's export.zip")
     hh.add_argument(
@@ -266,16 +270,31 @@ def main(argv: list[str] | None = None) -> int:
             for problem in parsed.problems:
                 print(f"  {problem}")
         elif args.command == "sync-hevy":
-            if not settings.hevy_api_key:
-                log.error("HEVY_API_KEY is not set (see .env.example)")
-                return 1
             with closing(
                 db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)
-            ):
-                pass  # apply migrations before syncing
-            result = hevy_sync.run(settings, full=args.full)
-            print(result.summary())
-            return 1 if result.error else 0
+            ) as conn:  # applies migrations before syncing
+                if args.user:
+                    user = users.get_by_name(conn, args.user)
+                    if not hevy_sync.key_for(conn, settings, user["id"]):
+                        log.error("%s has no Hevy API key", user["name"])
+                        return 1
+                    names = {user["id"]: user["name"]}
+                else:
+                    names = {r["id"]: r["name"] for r in users.list_users(conn)}
+                    if not hevy_sync.keyed_users(conn, settings):
+                        log.error(
+                            "nobody has a Hevy API key: set HEVY_API_KEY (see .env.example)"
+                            " or paste one on the dashboard's Integrations page"
+                        )
+                        return 1
+            if args.user:
+                (user_id,) = names
+                results = {user_id: hevy_sync.run(settings, user_id, full=args.full)}
+            else:
+                results = hevy_sync.run_all(settings, full=args.full)
+            for user_id, result in results.items():
+                print(f"{names.get(user_id, user_id)}: {result.summary()}")
+            return 1 if any(r.error for r in results.values()) else 0
         elif args.command == "import-health":
             import_health(args, settings)
         elif args.command == "user":

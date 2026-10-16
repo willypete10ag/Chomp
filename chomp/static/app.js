@@ -324,6 +324,26 @@
     if (estimated && chip.dataset.estimated) estimated.value = "1";
   });
 
+  // Copy buttons (#109): an invite link or a phone token to the clipboard
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-copy]");
+    if (!button) return;
+    var field = document.getElementById(button.dataset.copy);
+    if (!field) return;
+    var done = function () {
+      button.textContent = "Copied";
+      setTimeout(function () { button.textContent = "Copy"; }, 2000);
+    };
+    field.select();
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(field.value).then(done, function () {
+        if (document.execCommand("copy")) done();
+      });
+    } else if (document.execCommand("copy")) {
+      done();
+    }
+  });
+
   // Time nudges on meal times: -15 min, +15 min, now
   document.addEventListener("click", function (event) {
     var chip = event.target.closest("[data-nudge]");
