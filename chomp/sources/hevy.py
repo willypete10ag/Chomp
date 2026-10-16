@@ -30,6 +30,26 @@ class HevyKeyError(SourceError):
     """Hevy refused the API key (wrong key, or Pro has lapsed)."""
 
 
+def _items(body: dict, key: str, path: str) -> list:
+    """The list in a page. The live server doesn't always match the spec: with nothing to
+    list, the events feed answers without an `events` list at all, so a page with no list in
+    it is empty, and one list under another name is taken as the items."""
+    items = body.get(key)
+    if isinstance(items, list):
+        return items
+    lists = {k: v for k, v in body.items() if isinstance(v, list)}
+    if not lists:
+        log.info(
+            "hevy %s: no %s in the reply (keys: %s); taking it as empty", path, key, sorted(body)
+        )
+        return []
+    if len(lists) == 1:
+        ((other, items),) = lists.items()
+        log.warning("hevy %s: items under %r instead of %r", path, other, key)
+        return items
+    raise SourceError(f"Hevy's {path} returned no {key} list (keys: {', '.join(sorted(body))})")
+
+
 class HevyClient:
     def __init__(
         self,
@@ -116,9 +136,7 @@ class HevyClient:
             body = self._get(path, {**params, "page": page, "pageSize": PAGE_SIZE})
             if body is None:
                 return
-            items = body.get(key)
-            if not isinstance(items, list):
-                raise SourceError(f"Hevy's {path} returned no {key} list")
+            items = _items(body, key, path)
             yield from (x for x in items if isinstance(x, dict))
             count = body.get("page_count")
             if not items or not isinstance(count, int) or page >= count:
