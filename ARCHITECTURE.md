@@ -112,16 +112,22 @@ averages; and each day, newest first (the latest 100), whose row opens all its n
 sheet (`/app/progress/activity/day?date=`, `?part=1` for the sheet); the Hevy and Health import forms turn into a spinner with a seconds
 count while they upload)
 and Foods (one search over saved
-meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
-(most logged, recent, newest, unconfirmed first, calories, protein, fat, carbs;
-`store.FOOD_SORTS`) with an arrow for high or low, remembered on the device in a cookie (#91),
-and sections that fold away, remembered in the browser. A tap opens a food's page (#72): name, brand and calories, protein, carbs
-and fat, nutrition facts per serving and per 100 g, vitamins and minerals folded away, your
-portions of it (#75: swipe one left to delete it, press and hold it to change its name or
-grams, or + Add portion), then Log it, Confirm, Edit (all values, `/foods/{id}/edit`, with
-Undo), Rename and Delete, and how often you've logged it. Press and hold a food in the list
-for a menu over the blurred page (Edit, Rename, Confirm on amber foods, Log it, Delete);
-swipe it left to Delete, or an amber one right to Confirm). An entry whose
+meals and used foods, most logged first and per serving unless picked otherwise. A sort
+button over the list opens the sort sheet (`/app/foods/sort`, #105): sort by (most logged,
+recent, newest, unconfirmed first, calories, protein, fat, carbs; `store.FOOD_SORTS`), which
+way, and per serving or per 100 g, remembered on the device in a cookie (#91). Each row has a
+… that opens the food's menu sheet (`/app/foods/{id}/menu`: Log it, Edit, Rename, its photo,
+Confirm or Mark unconfirmed, Delete). A tap opens a food's page (#72, #105): its photo edge to
+edge (or a tile to add one; `/app/foods/{id}#photo` lands there, the link the connector gives
+Claude), name, brand and Confirmed or Unconfirmed, a per serving / per 100 g switch (radios
+the stylesheet reads, so no reload) over calorie and macro tiles and label-style nutrition
+facts, vitamins and minerals folded away, your portions of it as a list (#75: swipe one left
+to delete it, press and hold it to change its name or grams, or Add a portion), how often
+you've logged it, and Log it pinned at the bottom (`/app/foods/{id}/log`, a sheet with the
+amount, preview and meal); back and the same … menu float over the photo. Edit
+(`/foods/{id}/edit`) changes all values, with Undo. Press and hold a food in the list
+for a menu over the blurred page (Edit, Rename, its photo, Confirm on amber foods, Log it,
+Delete); swipe it left to Delete, or an amber one right to Confirm). An entry whose
 grams were estimated shows a muted "~" before them until new grams are saved, and Log food
 offers your portions as chips ("1 handful · 30 g") next to the gram chips. For a food with a serving
 size, Log food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
@@ -151,27 +157,34 @@ the day's total, and the goals page's calorie bar (drag the borders between prot
 and fat; the calorie total stays fixed, `logic.fit_macros` is the same split); it repeats `logic.scale` only for the preview, and every page works without
 it. A web app manifest lets phones add it to the home screen.
 
-Recipes (#82) open from a book button in the bottom corner of Foods (`/app/recipes`): a list with
-calories per serving (tap to open, press and hold to edit, swipe left to delete), a recipe page
-(per-serving calories and macros, Ingredients and Steps folds, and a Log it card pinned at the
-bottom with the servings stepper, posting to `/app/log` with the recipe's food row), and an
+Recipes (#82) are the Recipes pill on Foods (`/app/recipes`): a list with
+calories per serving (tap to open, … for its menu, press and hold to edit, swipe left to
+delete), a recipe page on the food page's template (#105: per serving / whole recipe tiles,
+ingredients as a list that opens each food, steps, Log it pinned at the bottom, opening the
+food log sheet in servings for the recipe's food row, and Edit and Delete in its … menu,
+`/app/recipes/{id}/menu`), and an
 editor (name, servings it makes, ingredients found by searching your foods with grams for the
 whole recipe, steps one per line). The editor goes back to the server to search, add or remove
 an ingredient (`/app/recipes/draft`); the script swaps the new form in place. A recipe's food
 row stays out of Foods, and opening it as a food opens the recipe.
 
-The Foods tab has a Foods / Meals switch at the top (#60); the tab always opens on Foods,
-and each side's search box searches only that side. Meals (`/app/saved-meals`) lists the
-saved meals (`meal_templates`) with their calories and macros (tap to open, press and hold
-to edit, swipe left to delete after a confirm), a saved meal's page shows its totals and
-foods with a Log it card (posting to `/app/log-template`, a new meal at a time and date or
-into one of today's meals), and + New saved meal opens the editor: a name, then foods found
+The Foods tab has Foods / Meals / Recipes pills under its title, and a + in the title bar for
+a new one of whichever is shown (#60, #105); the tab always opens on Foods, and each side's
+search box searches only that side. Meals (`/app/saved-meals`) lists the
+saved meals (`meal_templates`) with their calories and macros (tap to open, … for its menu,
+press and hold to edit, swipe left to delete after a confirm, swipe right to log it as a new
+meal now), a saved meal's page shows its totals as tiles and its foods as a list, with Log it
+pinned at the bottom (`/app/saved-meals/{id}/log`, a sheet posting to `/app/log-template`, a
+new meal at a time and date or into one of today's meals) and Edit and Delete in its … menu,
+and the + opens the editor: a name, then foods found
 by searching your foods, each in servings (when the food has a serving size) or grams. It
 works like the recipe editor (`/app/saved-meals/draft`), saves through
 `store.edit_template`, which refuses a name another saved meal already has, and an item's
 estimated flag (#75) stays only while its grams are unchanged.
 
-New food (#59, Foods > Add a new food) starts with a name search (#88) of USDA FoodData
+New food (#59, the + on Foods) is a chooser of four ways (#105): Scan a barcode, Read a
+nutrition label, Search databases and Type it in (`/app/foods/new?how=scan|label|search|type`),
+each full screen with Cancel and its title and no tab bar. The search (#88) looks in USDA FoodData
 Central (`search_ranked`) and Open Food Facts (`OFFClient.search`, its full-text
 `/cgi/search.pl`, cached and never retried since OFF allows about 10 searches a minute), run
 side by side and cached into `foods`. Both sources' hits go through `sources/rank.py` (#97,

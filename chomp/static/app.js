@@ -277,6 +277,26 @@
       });
     });
     // "Move to" and "Add to" menus: the time box only matters for a new meal
+    // A food's photo (#74): choosing a picture sends it, no Save button needed. In a sheet
+    // the sheet sends it once it has closed
+    root.querySelectorAll("input[type=file][data-autosubmit]").forEach(function (file) {
+      file.addEventListener("change", function () {
+        if (!file.files.length) return;
+        file.closest("label").classList.add("busy");
+        if (file.form.requestSubmit) file.form.requestSubmit();
+        else file.form.submit();
+      });
+    });
+    // A saved meal's "Today after this" (#60) only shows while the new meal is on today
+    root.querySelectorAll("[data-today]").forEach(function (note) {
+      var date = note.closest("form").querySelector('input[name="date"]');
+      if (!date) return;
+      function sync() {
+        note.hidden = date.value !== note.dataset.today;
+      }
+      date.addEventListener("input", sync);
+      date.addEventListener("change", sync);
+    });
     root.querySelectorAll("select[data-new-meal]").forEach(function (select) {
       var time = select.form.querySelector(".new-meal");
       var sync = function () {
@@ -550,6 +570,8 @@
     layer.className = "hold-layer";
     var lifted = body.cloneNode(true);
     lifted.removeAttribute("data-swipe");
+    var more = lifted.querySelector(".more"); // the menu is open already
+    if (more) more.remove();
     lifted.removeAttribute("style");
     lifted.className = "swipe-body lifted" + (li.classList.contains("unconfirmed") ? " unconfirmed" : "");
     lifted.style.top = rect.top + "px";
@@ -620,7 +642,11 @@
         post("/confirm", { back: back, confirmed: "1" });
       }, "ok");
     }
-    if (li.dataset.log) item("Log it", go(li.dataset.log));
+    if (li.dataset.log) {
+      item("Log it", function () {
+        openSheet(li.dataset.log, body.querySelector(".food-link"));
+      });
+    }
     item("Delete", function () {
       post("/delete", { back: back });
     }, "danger");
@@ -760,14 +786,6 @@
     menu.querySelector("button").focus({ preventScroll: true });
   }
 
-  // A food's photo (#74): choosing a picture sends it, no Save button needed
-  document.querySelectorAll("input[type=file][data-autosubmit]").forEach(function (file) {
-    file.addEventListener("change", function () {
-      if (!file.files.length) return;
-      file.closest("label").classList.add("busy");
-      file.form.submit();
-    });
-  });
 
   // Foods (#91): picking per 100 g / per serving or a sort shows it, no Go button needed
   function autosubmit(select) {
@@ -959,16 +977,6 @@
     box.value = String(Math.round(next * 100) / 100);
   });
 
-  // A saved meal's "Today after this" (#60) only shows while the new meal is on today
-  document.querySelectorAll("[data-today]").forEach(function (note) {
-    var date = note.closest("form").querySelector('input[name="date"]');
-    if (!date) return;
-    function sync() {
-      note.hidden = date.value !== note.dataset.today;
-    }
-    date.addEventListener("input", sync);
-    date.addEventListener("change", sync);
-  });
 
   // Deleting a saved meal (#60) asks first
   document.addEventListener("submit", function (event) {
@@ -1068,6 +1076,21 @@
   }
 
   enhance(document);
+
+  // New food (#105): an old link to its #scan opens the scanner, now a page of its own
+  if (location.hash === "#scan" && document.querySelector("[data-chooser]")) {
+    location.replace(location.pathname + "?how=scan");
+  }
+  // Cancel at the top of a full-screen flow goes back where it was opened from
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("a[data-back]");
+    if (!link || event.defaultPrevented) return;
+    var from = document.referrer;
+    if (from && new URL(from).origin === location.origin && history.length > 1) {
+      event.preventDefault();
+      history.back();
+    }
+  });
 
   // Imports (#94): a big upload can take a while, so the form turns into a spinner with a
   // running count of seconds until the next page arrives

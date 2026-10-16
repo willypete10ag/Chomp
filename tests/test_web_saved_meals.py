@@ -32,7 +32,10 @@ def test_meals_side_lists_saved_meals(http, conn, foods):
     assert "Oatmeal" in page and "454 <small>kcal" in page  # 304 + 150
     assert f'data-hold="/app/saved-meals/{template_id}/edit"' in page
     assert 'data-confirm="Delete the saved meal Oatmeal?"' in page
-    assert "+ New saved meal" in page and 'href="/app/recipes">Recipes<' in page
+    assert 'href="/app/saved-meals/new" aria-label="New saved meal"' in page
+    assert 'href="/app/recipes">Recipes<' in page
+    # Swipe right logs it again now (#105)
+    assert f'name="template_id" value="{template_id}"' in page and 'name="now" value="1"' in page
     assert "Oatmeal" not in http.get("/app/saved-meals", params={"q": "pizza"}).text
     assert "Oatmeal" in http.get("/app/saved-meals", params={"q": "oatmeal"}).text
 
@@ -43,7 +46,11 @@ def test_saved_meal_page_and_logging_it(http, conn, foods):
     page = http.get(f"/app/saved-meals/{template_id}").text.replace("\xa0", " ")
     assert "Rolled oats" in page and "2 servings · 80 g" in page
     assert 'title="Estimated amount">~</span>250 g' in page
-    assert 'type="date" name="date"' in page and "Log this meal" in page
+    assert f'href="/app/saved-meals/{template_id}/log" data-sheet' in page
+    sheet = http.get(f"/app/saved-meals/{template_id}/log", params={"part": "1"}).text
+    assert 'type="date" name="date"' in sheet and "Log this meal" in sheet
+    menu = http.get(f"/app/saved-meals/{template_id}/menu").text
+    assert "Yes, delete Oatmeal" in menu and f"/app/saved-meals/{template_id}/edit" in menu
     r = http.post(
         "/app/log-template",
         data={"template_id": template_id, "to": "new", "date": today(), "time": "08:00"},
@@ -151,5 +158,5 @@ def test_a_food_deleted_while_editing_drops_out(http, conn, foods):
 def test_today_note_is_marked_for_the_script(http, conn, foods):
     _, _, template_id = foods
     sign_in(http)
-    page = http.get(f"/app/saved-meals/{template_id}").text
+    page = http.get(f"/app/saved-meals/{template_id}/log").text
     assert f'data-today="{today()}"' in page

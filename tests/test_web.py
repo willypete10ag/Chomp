@@ -435,13 +435,14 @@ def test_foods_and_templates(http, conn, logged):
     sign_in(http)
     r = http.get("/app/foods")
     text = r.text.replace("\xa0", " ")
-    assert "Egg white" in text and "Confirmed" in text
+    assert "Egg white" in text and "Kirkland" in text
     assert "logged 1&times;" not in text  # on the food's page now (#72)
     assert "Cached FDC hit" not in text
     assert "Usual breakfast" not in text  # on the Meals side now (#60)
     assert 'href="/app/foods" aria-current=page>Foods<' in text and ">Meals</a>" in text
     assert text.count('class="swipe unconfirmed"') == 1 and "Unconfirmed" in text  # eggs only
-    assert "143 <small>kcal</small>" in text  # eggs per 100 g, with its unit
+    assert "143 <small>kcal</small>" in text  # eggs per 100 g (no serving size), with its unit
+    assert '<span class="badge">100 g</span>' in text
     r = http.get("/app/foods", params={"q": "whites"})
     assert "Egg white" in r.text and "Egg, whole" not in r.text
     assert "Nicknames" not in r.text
@@ -479,9 +480,15 @@ def test_food_details_show_serving_and_extra_nutrients(http, conn, logged):
     assert link in text  # a tap opens the food's page (#72)
     text = http.get(f"/app/foods/{whites}?back=/app/foods").text.replace("\xa0", " ")
     # 52 kcal per 100 g -> 23.92 kcal in a 46 g serving
-    assert '<span class="big kcal">24</span> kcal' in text
-    assert "per serving · 3 tbsp (46 g)" in text
-    assert '<th scope="row">Sodium</th><td>76 mg</td><td>166 mg</td>' in text
-    assert "Mark unconfirmed" in text and "Logged 1 time, last" in text
+    assert "24<small> kcal</small>" in text and "Per serving · 3 tbsp (46 g)" in text
+    assert '<th scope="row">Sodium</th><td>76 mg</td>' in text  # per serving
+    assert '<th scope="row">Sodium</th><td>166 mg</td>' in text  # per 100 g
+    # Per serving / per 100 g switch in place (#105)
+    assert 'name="basis" value="serving" checked' in text and 'value="100g"' in text
+    assert 'class="basis basis-serving"' in text and 'class="basis basis-100g"' in text
+    assert "Logged 1 time, last" in text and "Confirmed" in text
+    assert f'href="/app/foods/{whites}/log?back=' in text and "Log it" in text
+    menu = http.get(f"/app/foods/{whites}/menu", params={"back": "/app/foods"}).text
+    assert "Mark unconfirmed" in menu and "Rename" in menu and "Edit" in menu
     assert "Source: " in text and 'href="/app/foods"' in text
     assert http.get("/app/foods/9999").status_code == 404
