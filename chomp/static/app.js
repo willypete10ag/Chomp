@@ -974,7 +974,8 @@
   document.addEventListener("change", function (event) {
     var unit = event.target;
     if (unit.name !== "unit" || !unit.dataset.serving) return;
-    var box = unit.parentNode.querySelector('input[name="amount"]');
+    var row = unit.closest("[data-stepper]") || unit.parentNode; // the stepper it's inside
+    var box = row.querySelector('input[name="amount"]');
     if (!box) return;
     var size = parseFloat(unit.dataset.serving);
     var value = parseFloat(box.value.replace(/,/g, ""));
