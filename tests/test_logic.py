@@ -366,3 +366,86 @@ def test_bucket_days_averages_only_days_with_values():
     assert logic.bucket_days(days, "month") == [(date(2026, 10, 1), 3), (date(2026, 11, 1), 10)]
     with pytest.raises(ValueError):
         logic.bucket_days(days, "year")
+
+
+def test_bucket_days_can_sum_a_week():
+    days = [(date(2026, 10, 5) + timedelta(days=i), v) for i, v in enumerate([100, None, 50])]
+    assert logic.bucket_days(days, "week", how="sum") == [(date(2026, 10, 5), 150)]
+    assert logic.bucket_days([(date(2026, 10, 5), None)], "week", how="sum") == [
+        (date(2026, 10, 5), None)
+    ]
+    with pytest.raises(ValueError):
+        logic.bucket_days(days, "week", how="max")
+
+
+def test_previous_period_and_change_percent():
+    assert logic.previous_period(date(2026, 10, 9), date(2026, 10, 15)) == (
+        date(2026, 10, 2),
+        date(2026, 10, 8),
+    )
+    assert logic.change_percent(110, 100) == pytest.approx(10)
+    assert logic.change_percent(90, 100) == pytest.approx(-10)
+    assert logic.change_percent(5, 0) is None and logic.change_percent(None, 4) is None
+    assert logic.change_percent(5, None) is None
+
+
+def test_rolling_average_skips_days_without_values():
+    start = date(2026, 10, 1)
+    points = [(start + timedelta(days=i), v) for i, v in enumerate([None, 10, None, 20, 30])]
+    out = logic.rolling_average(points, days=3)
+    assert [v for _, v in out] == [None, 10, 10, 15, 25]
+    assert [d for d, _ in out] == [d for d, _ in points]
+
+
+def test_weight_trend_smooths_and_respects_gaps():
+    start = date(2026, 10, 1)
+    flat = [(start + timedelta(days=i), 180.0) for i in range(5)]
+    assert [v for _, v in logic.weight_trend(flat)] == pytest.approx([180.0] * 5)
+    # A one-day spike moves the trend a little, not all the way
+    spiky = [*flat, (start + timedelta(days=5), 184.0)]
+    trend = logic.weight_trend(spiky)
+    assert 180 < trend[-1][1] < 181
+    # The same jump after ten days without weighing moves it much further
+    gap = [*flat, (start + timedelta(days=14), 184.0)]
+    assert logic.weight_trend(gap)[-1][1] > 182
+    # Two readings on a day count as their average, and order doesn't matter
+    two = [(start + timedelta(days=1), 182.0), (start, 180.0), (start + timedelta(days=1), 184.0)]
+    out = logic.weight_trend(two)
+    assert out[0] == (start, 180.0) and len(out) == 2
+    assert out[1][1] == pytest.approx(180 + 3 * 2 / 11)
+    assert logic.weight_trend([]) == []
+
+
+def test_weekly_rate_needs_a_week():
+    start = date(2026, 10, 1)
+    assert logic.weekly_rate([(start, 180.0), (start + timedelta(days=14), 178.0)]) == -1.0
+    assert logic.weekly_rate([(start, 180.0), (start + timedelta(days=6), 178.0)]) is None
+    assert logic.weekly_rate([(start, 180.0)]) is None
+
+
+def test_estimated_1rm():
+    assert logic.estimated_1rm(100, 1) == 100
+    assert logic.estimated_1rm(100, 6) == pytest.approx(120)
+    assert logic.estimated_1rm(100, 13) is None
+    assert logic.estimated_1rm(None, 5) is None and logic.estimated_1rm(100, None) is None
+    assert logic.estimated_1rm(0, 5) is None and logic.estimated_1rm(100, 0) is None
+
+
+def test_exercise_bests_newest_record_first():
+    def s(exercise, kg, reps, kind="normal"):
+        return {"exercise": exercise, "weight_kg": kg, "reps": reps, "set_type": kind}
+
+    d1, d2, d3 = date(2026, 9, 1), date(2026, 9, 8), date(2026, 9, 15)
+    workouts = [
+        (d1, 1, [s("Bench", 80, 5), s("Squat", 100, 5), s("Bench", 200, 1, "warmup")]),
+        (d2, 2, [s("Bench", 85, 5), s("Squat", 100, 5), s("Plank", None, None)]),
+        (d3, 3, [s("Squat", 90, 3), s("Curl", 20, 20)]),
+    ]
+    bests = logic.exercise_bests(workouts)
+    assert [b.exercise for b in bests] == ["Bench", "Squat"]
+    bench, squat = bests
+    assert (bench.weight_kg, bench.reps, bench.day, bench.workout_id) == (85, 5, d2, 2)
+    assert bench.e1rm_kg == pytest.approx(85 * (1 + 5 / 30))
+    assert bench.beat_kg == pytest.approx(80 * (1 + 5 / 30))
+    # A tie isn't a record: Squat's best stays the first one
+    assert (squat.day, squat.workout_id, squat.beat_kg) == (d1, 1, None)

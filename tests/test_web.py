@@ -401,16 +401,23 @@ def test_history_charts_and_averages(http, logged):
     sign_in(http)
     r = http.get("/app/progress/nutrition")
     assert r.status_code == 200
-    assert 'class="chart"' in r.text
-    assert "Over the 1 of 7 days with entries." in r.text
-    assert "target 180" in r.text  # protein target line
-    assert "target 2,000" not in r.text  # no calorie goal set: no default line on History
+    page = r.text.replace("\xa0", " ")
+    assert page.count("data-chart") == 2 and 'class="chart bars kcal"' in page
+    # Only today is logged, so the tiles say so and its bars are hatched as "so far"
+    assert "Days logged" in page and "of 7 days · today so far" in page
+    assert "goal 180 g" in page  # protein goal line
+    assert "goal 2,000" not in page  # no calorie goal set: no default line here
+    assert 'class="bar protein_g partial"' in page and 'fill="url(#hatch-protein_g' in page
+    assert "so far" in page and "Show as table" in page
+    assert '"href":"/app?date=' in page.replace("&quot;", '"')  # a pinned day opens it
     r = http.get("/app/progress/nutrition?days=30")
-    assert "Over the 1 of 30 days" in r.text
+    assert "of 30 days" in r.text and "7-day average line" in r.text
     assert 'aria-label="30 days" aria-current=page>30D<' in r.text
+    assert "Compare" in r.text  # 30D has a previous 30 days to show as ghosts
     assert http.get("/app/progress/nutrition?days=9999").status_code == 200  # falls back to 7
-    # All runs from the first meal; the old address sends you on, range and all
-    assert "Over the 1 of " in http.get("/app/progress/nutrition?days=0").text
+    # All runs from the first meal, with no previous period; the old address moves you on
+    page = http.get("/app/progress/nutrition?days=0").text
+    assert "Days logged" in page and "vs prev" not in page and "data-compare" not in page
     r = http.get("/app/history?days=30")
     assert r.status_code == 301 and r.headers["location"] == "/app/progress/nutrition?days=30"
 

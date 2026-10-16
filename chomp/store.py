@@ -1171,6 +1171,29 @@ def _write_targets(conn: sqlite3.Connection, values: Mapping[str, float | None])
     )
 
 
+BODY_GOAL_KEYS = ("goal_weight_kg", "step_goal")
+
+
+def get_body_goals(conn: sqlite3.Connection) -> dict[str, float | None]:
+    """The optional goal weight (kg) and daily step goal (#105); None when not set."""
+    row = conn.execute(
+        "SELECT goal_weight_kg, step_goal FROM targets WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()
+    return {k: (row[k] if row else None) for k in BODY_GOAL_KEYS}
+
+
+def set_body_goals(conn: sqlite3.Connection, values: Mapping[str, float | None]) -> dict:
+    """Set both body goals (None clears one); the macro targets on the row stay as they are."""
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO targets (user_id, goal_weight_kg, step_goal) VALUES (?, ?, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET goal_weight_kg = excluded.goal_weight_kg,"
+            " step_goal = excluded.step_goal",
+            (user_of(conn), *(values.get(k) for k in BODY_GOAL_KEYS)),
+        )
+    return get_body_goals(conn)
+
+
 # --- Undo (dashboard edits) -----------------------------------------------------------------
 
 # The columns an undo restores, per table. Foods only ever change name from the dashboard.
@@ -1388,6 +1411,14 @@ def weights_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqli
         " AND measured_at >= ? AND measured_at < ? ORDER BY measured_at",
         (user_of(conn), start, end),
     ).fetchall()
+
+
+def first_weight_at(conn: sqlite3.Connection) -> str | None:
+    """When the user's earliest weigh-in was (UTC), or None before any."""
+    return conn.execute(
+        "SELECT min(measured_at) FROM weights WHERE user_id = ? AND NOT deleted",
+        (user_of(conn),),
+    ).fetchone()[0]
 
 
 def latest_weight(conn: sqlite3.Connection, before: str | None = None) -> sqlite3.Row | None:

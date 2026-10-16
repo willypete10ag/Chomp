@@ -30,9 +30,10 @@ chomp/
   label.py         # nutrition label photo OCR (tesseract) and its text parser
   photos.py        # food photos: files, Open Food Facts fill and backfill
   serving_fill.py  # serving sizes for used USDA generic foods from household measures
-  logic.py         # per-100g math, snapshots, totals, local-day boundaries
+  logic.py         # per-100g math, snapshots, totals, local-day boundaries, trends (weight trend, deltas, bests)
   text.py          # word matching (plural folding) for search ranking
   web.py           # /app web dashboard (server-rendered: Today, Progress, Foods, You, the Log sheet, saved meals, recipes, goals)
+  charts.py        # server-drawn SVG charts for Progress (bars, lines, sparklines, heat strip) and their inspector data
   static/          # dashboard CSS, JS, icons, vendored ZXing barcode reader
 migrations/        # 0002_*.sql and up; SCHEMA.sql is baseline v1
 tests/             # fixtures/ holds recorded upstream responses

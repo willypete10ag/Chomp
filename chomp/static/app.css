@@ -93,6 +93,8 @@
 body[data-hue="steps"] { --hue: var(--steps); }
 body[data-hue="train"] { --hue: var(--train); }
 body[data-hue="weight"] { --hue: var(--protein); }
+/* Activity's metrics: exercise borrows the accent, distance the steps hue */
+:root { --exercise: var(--accent); --distance: var(--steps); }
 body[data-hue="you"] { --hue: var(--train); }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -513,16 +515,6 @@ button.link { background: none; color: var(--muted); text-decoration: underline;
 .big.carbs_g { color: var(--carbs); } .big.fat_g { color: var(--fat); }
 /* Calories remaining once past the goal: amber up to 100 kcal over, red beyond */
 .big.caution { color: var(--carbs-text); } .big.over { color: var(--over); }
-.chart { display: block; width: 100%; height: auto; }
-.chart .axis { stroke: var(--line); }
-.chart .bar.kcal { fill: var(--kcal); } .chart .bar.protein_g { fill: var(--protein); }
-.chart .bar.steps { fill: var(--steps); }
-.chart .target { stroke: var(--muted); stroke-dasharray: 4 3; }
-.chart .tick { fill: var(--muted); font-size: 10px; }
-/* a line's label stays readable where it crosses the bars */
-.chart .tick.label { paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
-.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
-.chart .dot { fill: var(--accent); }
 .big.weight { font-size: 2.75rem; line-height: 1.05; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; text-align: center; }
 /* Stat tiles: a tint of the section's hue under each number */
@@ -999,7 +991,168 @@ form.busy > :not(.busy-note) { display: none; }
   background: var(--card); color: var(--hue); box-shadow: 0 1px 3px rgb(0 0 0 / .25);
 }
 .card h2 .icon { width: 1.25rem; height: 1.25rem; color: var(--hue); margin: -.15rem .3rem 0 0; }
-.chart.weight .line { stroke: var(--hue); stroke-width: 2.25; }
-.chart.weight .dot { fill: var(--hue); }
 .sheet-page h2 { margin-top: .5rem; }
 h2 small { font-weight: 400; font-size: .8rem; }
+
+/* --- Charts and Progress (#105) ---------------------------------------------------------- */
+
+/* Stat tiles: a caption in the metric's hue, the value, then a delta or context */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: 0 0 .875rem; }
+.tile {
+  --tone: var(--hue); border-radius: var(--r-lg); padding: .75rem .85rem;
+  background: color-mix(in srgb, var(--tone) 10%, var(--card)); min-width: 0;
+}
+.tile .cap {
+  font-size: .7rem; font-weight: 650; letter-spacing: .05em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--tone) 75%, var(--text));
+}
+.tile .val {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; font-weight: 700;
+  font-size: 1.35rem; font-variant-numeric: tabular-nums; margin: .15rem 0 .1rem; white-space: nowrap;
+}
+.tile .sub { font-size: .78rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .25rem .4rem; }
+.group .body .tiles { margin-bottom: .25rem; }
+.tone-exercise { --tone: var(--exercise); } .tone-distance { --tone: var(--distance); }
+.tone-weight { --tone: var(--protein); }
+.kcal-ate { color: var(--kcal); } .kcal-burn { color: var(--burn); }
+
+/* Delta chip: "▲ 12% vs prev 30D", green or amber only where up is plainly good or bad */
+.delta {
+  display: inline-flex; align-items: center; gap: .25rem; font-size: .78rem; font-weight: 600;
+  padding: .12rem .5rem; border-radius: 999px; white-space: nowrap; color: var(--text);
+  background: var(--surface-2); font-variant-numeric: tabular-nums;
+}
+.delta span:last-child { font-weight: 400; color: var(--muted); }
+.delta.good { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.delta.bad { color: var(--carbs-text); background: color-mix(in srgb, var(--carbs) 16%, transparent); }
+
+/* Metric hero: one Display number per screen */
+.hero-metric .display {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; font-weight: 700;
+  font-size: 2.75rem; line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.hero-metric .display .unit { font-size: 1.1rem; font-weight: 600; color: var(--muted); margin-left: .35rem; letter-spacing: 0; }
+.hero-metric .context { margin: .3rem 0 0; color: var(--muted); font-size: .9rem; }
+.chips-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .65rem; }
+.hero-metric .meter { margin-top: .75rem; height: 10px; }
+.fill.steps { fill: var(--steps); }
+.note { margin: -.25rem .25rem .875rem; }
+
+/* A chart: a title row, the inspector line, the plot and its table */
+.chart-box { margin: 0; }
+.chart-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.chart-head h2 { margin: 0; }
+.chart-head .chip { min-height: 2rem; padding: .2rem .75rem; background: var(--surface-2); border: 0; color: var(--muted); }
+.chart-head .chip[aria-pressed="true"] { color: var(--hue); background: color-mix(in srgb, var(--hue) 18%, var(--surface-2)); }
+.inspect {
+  min-height: 2.6rem; margin: .35rem 0 .4rem; font-size: .85rem; color: var(--muted);
+  display: flex; flex-wrap: wrap; align-items: center; gap: .15rem .45rem; font-variant-numeric: tabular-nums;
+}
+.inspect b { color: var(--text); font-weight: 650; }
+.inspect a { font-weight: 600; text-decoration: none; }
+.chart { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
+.chart:focus { outline: none; }
+.chart:focus-visible { outline: 2px solid var(--hue); outline-offset: 4px; border-radius: 6px; }
+.chart .grid { stroke: var(--line); }
+.chart .axis { stroke: color-mix(in srgb, var(--text) 18%, transparent); }
+.chart .tick { fill: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart .tick.label { font-size: 9.5px; font-weight: 600; paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
+.chart .tick.label.avg { fill: var(--muted); }
+.chart .ref { stroke-width: 1.25; }
+.chart .ref.avg { stroke: var(--muted); stroke-dasharray: 1.5 3; stroke-linecap: round; }
+.chart .ref.goal { stroke: var(--hue); stroke-dasharray: 5 4; }
+.bar, .chart .goal.kcal, .chart .roll.kcal { --m: var(--kcal); }
+.chart .kcal { --m: var(--kcal); } .chart .protein_g { --m: var(--protein); }
+.chart .steps { --m: var(--steps); } .chart .burn { --m: var(--burn); }
+.chart .exercise { --m: var(--exercise); } .chart .distance { --m: var(--distance); }
+.chart .train { --m: var(--train); } .chart .weight { --m: var(--protein); }
+.chart .ref.goal, .chart .tick.label.goal { stroke: var(--m, var(--hue)); }
+.chart .tick.label.goal { fill: var(--m, var(--hue)); stroke: var(--card); }
+.chart .bar { fill: var(--m); transition: opacity .12s; transform-box: fill-box; transform-origin: bottom; animation: grow .32s var(--ease) both; }
+.chart .bar.caution { fill: var(--carbs); } .chart .bar.over { fill: var(--over); }
+.chart .bar.partial { stroke: var(--m); stroke-width: 1; }
+.chart .hatch { fill: var(--m); }
+.chart .bar.partial { fill-opacity: .3; }
+.chart .hatched { pointer-events: none; }
+.chart.scrub .hatched { opacity: .4; }
+.chart.scrub .bar.on + .hatched { opacity: 1; }
+@keyframes grow { from { transform: scaleY(0); } }
+.chart .roll { fill: none; stroke: var(--text); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; opacity: .85; }
+.chart .ghosts { display: none; }
+.compare .chart .ghosts { display: inline; }
+.chart .ghost { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2; }
+.chart .cross { stroke: var(--text); stroke-width: 1; opacity: 0; pointer-events: none; }
+.chart.scrub .cross { opacity: .5; }
+.chart.scrub .bar:not(.on) { opacity: .4; }
+.chart .line { fill: none; stroke: var(--m, var(--hue)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line.trend { stroke: var(--accent); }
+.chart .end.trend { fill: var(--accent); }
+.chart .line.kcal, .chart .end.kcal { --m: var(--kcal); } .chart .line.burn, .chart .end.burn { --m: var(--burn); }
+.chart .end { fill: var(--m, var(--hue)); stroke: var(--card); stroke-width: 2; }
+.chart .reading { fill: var(--text); opacity: .55; }
+.chart.weight .ref.goal { stroke: var(--accent); } .chart.weight .tick.label.goal { fill: var(--accent); }
+.chart .hit { pointer-events: none; }
+.chart .hit.on { r: 4.5px; fill: var(--hue); stroke: var(--card); stroke-width: 2; }
+.chart.weight .hit.on { fill: var(--text); }
+details.table { margin-top: .5rem; }
+details.table > summary { cursor: pointer; font-size: .8rem; color: var(--muted); list-style: none; display: inline-block; padding: .3rem 0; }
+details.table > summary::-webkit-details-marker { display: none; }
+details.table table { width: 100%; border-collapse: collapse; font-size: .85rem; font-variant-numeric: tabular-nums; margin-top: .25rem; }
+details.table th { text-align: left; font-weight: 600; color: var(--muted); font-size: .75rem; padding: .3rem 0; }
+details.table td { padding: .35rem 0; border-top: 1px solid var(--line); }
+details.table td + td, details.table th + th { text-align: right; }
+.js details.table:not([open]) { opacity: .9; }
+@media (prefers-reduced-motion: reduce) { .chart .bar { animation: none; } }
+
+/* Sparklines and the training heat strip */
+.spark { display: block; width: 100%; height: auto; margin-top: .6rem; overflow: visible; }
+.spark path { fill: none; stroke: var(--m, var(--hue)); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark circle { fill: var(--m, var(--hue)); }
+.spark rect { fill: var(--m, var(--hue)); opacity: .85; }
+.spark.kcal, .spark .kcal { --m: var(--kcal); } .spark.steps { --m: var(--steps); }
+.spark .burn { --m: var(--burn); } .spark.weight { --m: var(--accent); }
+.heat { display: block; width: 100%; max-width: 22rem; height: auto; margin: .25rem 0 .25rem; }
+.heat rect { fill: var(--track); }
+.heat .lv1 { fill: color-mix(in srgb, var(--train) 35%, var(--track)); }
+.heat .lv2 { fill: color-mix(in srgb, var(--train) 60%, var(--track)); }
+.heat .lv3 { fill: color-mix(in srgb, var(--train) 80%, var(--track)); }
+.heat .lv4 { fill: var(--train); }
+
+/* Progress overview: a card per area, each opening its screen */
+.overview { display: grid; gap: .75rem; margin-bottom: 1rem; }
+.ov-card {
+  display: block; text-decoration: none; color: var(--text); padding: 1rem;
+  border-radius: var(--r-lg);
+  background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--tone, var(--accent)) 14%, transparent), transparent 60%), var(--card);
+  transition: transform .12s var(--ease);
+}
+.ov-card:active { transform: scale(.985); }
+.ov-card .spark { --m: var(--tone, var(--accent)); }
+.ov-head { display: flex; align-items: center; gap: .6rem; font-weight: 650; }
+.ov-head .grow { flex: 1; }
+.ov-head .fresh { font-size: .72rem; font-weight: 400; color: var(--faint); }
+.ov-head .chev { width: 1.1rem; height: 1.1rem; color: var(--faint); }
+.ov-value { margin-top: .6rem; }
+.ov-value .val {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; font-weight: 700; font-size: 1.9rem;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.ov-value .unit { color: var(--muted); font-size: .9rem; }
+.ov-card .sub { font-size: .82rem; color: var(--muted); margin-top: .2rem; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; }
+.ov-card .heat { margin-top: .7rem; max-width: 15rem; }
+@media (min-width: 40rem) { .overview, .tiles { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 40rem) { .tiles:has(> .tile:nth-child(4)) { grid-template-columns: repeat(4, 1fr); } }
+
+/* Lists on Progress: days and personal bests as grouped rows */
+.group .days li + li { border-top: 1px solid var(--line); }
+.group .days a.item { padding: .8rem 1rem .55rem; }
+.group .days a.bd { padding: 0 1rem .5rem; margin-top: -.35rem; min-height: 1.75rem; font-size: .8rem; text-decoration: none; }
+.group .days .item em { font-style: normal; color: var(--faint); font-size: .8rem; }
+.splitbar.slim { height: 4px; border-radius: 2px; margin-top: .4rem; max-width: 12rem; }
+.group > .body.small, .group > p.body { padding: .5rem 1rem 1rem; margin: 0; }
+.badge.pr { color: var(--train); border-color: var(--train); font-weight: 650; font-size: .65rem; vertical-align: .1em; }
+.segment.metrics { margin-top: -.25rem; }
+.facts-list { list-style: none; margin: 0; padding: 0 1rem; }
+.facts-list li { padding: .7rem 0; }
+.facts-list li + li { border-top: 1px solid var(--line); }
+.weigh-ins > .hint { margin: 0 .25rem .5rem; }

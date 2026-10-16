@@ -44,7 +44,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from chomp import __version__, db, health_export, hevy, logic, serving_fill, store, users
+from chomp import __version__, charts, db, health_export, hevy, logic, serving_fill, store, users
 from chomp import label as label_reader
 from chomp.auth import ChompAuthProvider
 from chomp.barcode import lookup as barcode_lookup
@@ -76,6 +76,7 @@ ACTIVITY_PAGE = f"{PROGRESS}/activity"  # was /app/activity
 TRAINING_PAGE = f"{PROGRESS}/training"  # was /app/workouts
 YOU = f"{PREFIX}/you"
 INTEGRATIONS = f"{YOU}/integrations"
+BODY_GOALS = f"{YOU}/body-goals"  # goal weight and step goal (#105)
 ACTIONS = f"{PREFIX}/actions"  # the + sheet
 WEIGHT = f"{PREFIX}/weight"  # posts: add a weigh-in, delete one
 WEIGHT_SOURCES = {"health": "Apple Health", "chat": "Claude", "app": "Added here"}
@@ -179,6 +180,7 @@ UNITS = {
 }
 LONG_NAME = 40  # names longer than this may be cut to two lines; the full name shows on tap
 NBSP = "\u00a0"  # keeps a number on the same line as its unit
+MINUS = "\u2212"  # a real minus sign, for text set by the script (no HTML entities there)
 MACROS = (("protein_g", "p", "P"), ("carbs_g", "c", "C"), ("fat_g", "f", "F"))
 # Where a New food result's saved food came from, when another source found it (#97)
 PROVENANCE = {
@@ -377,127 +379,67 @@ def meter(percent: float | None, kind: str, *, warn_over: bool = False, tone: st
     )
 
 
-def bar_chart(
-    points: list[tuple[date, float | None]],
-    target: float | None,
-    kind: str,
-    title: str,
-    *,
-    link: bool = True,
-    values: bool = False,
-    target_label: str = "target",
-    unit: str = "day",
-) -> str:
-    """Inline SVG bars, one per day (with link, a link to that day's meals); an optional
-    dashed target line, named target_label. With values, a week's bars show their numbers.
-    With unit "week" or "month" each point is a group's daily average (logic.bucket_days),
-    dated by its first day."""
-    w, h, top, bottom = 320, 150, 14, 18
-    plot = h - top - bottom
-    values = [v for _, v in points if v]
-    peak = max([*values, target or 0, 1.0])
-    slot = w / len(points)
-    bar = max(slot * 0.7, 1.0)
+def delta_chip(pct: float | None, words: str, good: str = "") -> str:
+    """ "▲ 12% vs prev 30D" (#105). good says which way is good ("up" or "down") so the
+    chip turns green or amber; without it (weight, volume) the chip stays neutral."""
+    if pct is None:
+        return ""
+    if abs(pct) < 0.5:
+        return f'<span class="delta">no change <span>vs {e(words)}</span></span>'
+    up = pct > 0
+    tone = "" if not good else (" good" if up == (good == "up") else " bad")
+    arrow = "▲" if up else "▼"
+    return (
+        f'<span class="delta{tone}"><span aria-hidden="true">{arrow}</span>'
+        f'<span class="sr">{"up" if up else "down"}</span> {abs(pct):.0f}%'
+        f" <span>vs {e(words)}</span></span>"
+    )
 
-    def y(v: float) -> float:
-        return top + plot - plot * v / peak
 
-    parts = [
-        f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{e(title)}">',
-        f'<line class="axis" x1="0" x2="{w}" y1="{top + plot}" y2="{top + plot}"/>',
-    ]
-    step = 1 if len(points) <= 7 else math.ceil(len(points) / 6)
-    for i, (d, v) in enumerate(points):
-        x = i * slot + (slot - bar) / 2
-        if v:
-            if unit == "week":
-                label = f"Week of {d.strftime('%b')} {d.day}: {num(v)} a day"
-            elif unit == "month":
-                label = f"{d.strftime('%B')} {d.year}: {num(v)} a day"
-            else:
-                label = f"{d.strftime('%a %b')} {d.day}: {num(v)}"
-            rect = (
-                f'<rect class="bar {kind}" x="{x:.1f}" y="{y(v):.1f}" width="{bar:.1f}"'
-                f' height="{top + plot - y(v):.1f}" rx="{min(bar / 4, 3):.1f}">'
-                f"<title>{e(label)}</title></rect>"
-            )
-            day_link = link and unit == "day"
-            parts.append(
-                f'<a href="{PREFIX}?date={d.isoformat()}">{rect}</a>' if day_link else rect
-            )
-            if values and len(points) <= 7:
-                parts.append(
-                    f'<text class="tick value" x="{x + bar / 2:.1f}" y="{y(v) - 3:.1f}"'
-                    f' text-anchor="middle">{num(v)}</text>'
-                )
-        last = i == len(points) - 1
-        if (len(points) - 1 - i) % step == 0 or last:
-            if unit == "month":
-                text = str(d.year) if d.month == 1 or i == 0 else d.strftime("%b")
-            elif len(points) <= 7 and unit == "day":
-                text = d.strftime("%a")[0]
-            else:
-                text = f"{d.month}/{d.day}"
-            # the last label hugs the right edge so it isn't clipped
-            x_label, anchor = (w, "end") if last else (i * slot + slot / 2, "middle")
-            parts.append(
-                f'<text class="tick" x="{x_label:.1f}" y="{h - 4}"'
-                f' text-anchor="{anchor}">{e(text)}</text>'
-            )
-    if target:
-        parts.append(
-            f'<line class="target" x1="0" x2="{w}" y1="{y(target):.1f}" y2="{y(target):.1f}"/>'
-            f'<text class="tick label" x="{w - 2}" y="{y(target) - 3:.1f}" text-anchor="end">'
-            f"{e(target_label)} {num(target)}</text>"
+def tile(value: str, label: str, sub: str = "", spark: str = "", tone: str = "") -> str:
+    """A stat tile: caption, value, then a delta or context line, optionally a sparkline."""
+    toned = f" tone-{tone}" if tone else ""
+    under = f'<div class="sub">{sub}</div>' if sub else ""
+    return (
+        f'<div class="tile{toned}"><div class="cap">{e(label)}</div>'
+        f'<div class="val">{value}</div>{under}{spark}</div>'
+    )
+
+
+def tiles(*items: str) -> str:
+    return f'<div class="tiles">{"".join(items)}</div>'
+
+
+def hero(value: str, unit: str, context: str, chips: str = "", extra: str = "") -> str:
+    """The screen's one big number on a glow of its hue, with what it is and how it moved."""
+    unit_html = f'<span class="unit">{e(unit)}</span>' if unit else ""
+    chip_row = f'<div class="chips-row">{chips}</div>' if chips else ""
+    return (
+        f'<section class="card summary hero-metric"><div class="display">{value}{unit_html}'
+        f'</div><p class="context">{context}</p>{chip_row}{extra}</section>'
+    )
+
+
+def prev_words(span: int) -> str:
+    """ "prev 30D" for a range's previous period."""
+    return "prev " + next(short for n, short, _ in RANGES if n == span)
+
+
+def split_bar(totals: Mapping[str, float | None]) -> str:
+    """A slim protein / carbs / fat bar: each one's share of the macro calories."""
+    split = logic.macro_split(totals)
+    if not split:
+        return ""
+    rects, x = [], 0.0
+    for key, _, _ in MACROS:
+        rects.append(
+            f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{split[key]:.1f}" height="10"/>'
         )
-    parts.append("</svg>")
-    return "".join(parts)
-
-
-def weight_chart(points: list[tuple[date, float]], first: date, last: date) -> str:
-    """Inline SVG line of each weighed day's weight in lb (#94) from first to last, with the
-    lowest and highest marked on the left. Days with no weigh-in are skipped, not zeroed."""
-    w, h, top, bottom, left = 320, 150, 12, 18, 34
-    plot_w, plot_h = w - left - 6, h - top - bottom
-    values = [v for _, v in points]
-    lo, hi = min(values), max(values)
-    pad = max((hi - lo) * 0.15, 1.0)
-    lo, hi = lo - pad, hi + pad
-    span = max((last - first).days, 1)
-
-    def x(d: date) -> float:
-        return left + plot_w * (d - first).days / span
-
-    def y(v: float) -> float:
-        return top + plot_h - plot_h * (v - lo) / (hi - lo)
-
-    title = f"Weight from {first.strftime('%b')} {first.day} to {last.strftime('%b')} {last.day}"
-    parts = [
-        f'<svg class="chart weight" viewBox="0 0 {w} {h}" role="img" aria-label="{e(title)}">',
-        f'<line class="axis" x1="{left}" x2="{w}" y1="{top + plot_h}" y2="{top + plot_h}"/>',
-    ]
-    for v in (min(values), max(values)):
-        parts.append(
-            f'<text class="tick" x="{left - 4}" y="{y(v) + 3:.1f}" text-anchor="end">'
-            f"{v:,.1f}</text>"
-        )
-    if len(points) > 1:
-        line = " ".join(f"{x(d):.1f},{y(v):.1f}" for d, v in points)
-        parts.append(f'<polyline class="line" points="{line}"/>')
-    for d, v in points:
-        parts.append(
-            f'<circle class="dot" cx="{x(d):.1f}" cy="{y(v):.1f}" r="2.5">'
-            f"<title>{e(d.strftime('%a %b'))} {d.day}: {v:,.1f} lb</title></circle>"
-        )
-    for d, anchor in ((first, "start"), (last, "end")):
-        # Over a year, the month and year say more than the day
-        label = f"{d.month}/{d.day}" if span <= 366 else f"{d.strftime('%b')} {d.year}"
-        parts.append(
-            f'<text class="tick" x="{x(d):.1f}" y="{h - 4}" text-anchor="{anchor}">'
-            f"{e(label)}</text>"
-        )
-    parts.append("</svg>")
-    return "".join(parts)
+        x += split[key]
+    return (
+        '<svg class="splitbar slim" viewBox="0 0 100 10" preserveAspectRatio="none"'
+        f' aria-hidden="true">{"".join(rects)}</svg>'
+    )
 
 
 def lb_text(kg: float) -> str:
@@ -665,66 +607,53 @@ ACTIVITY_LIST_MAX = 100
 SUMMARY_METRICS = {"steps", "active_kcal", "resting_kcal", "exercise_min", "distance_m"}
 
 
-def activity_bits(day: Mapping[str, float]) -> list[str]:
-    """A day's activity other than steps, as short phrases (HTML)."""
-    bits = []
-    if "active_kcal" in day:
-        bits.append(f"{num(day['active_kcal'])}{NBSP}kcal active")
-    if (burned := logic.burned_kcal(day)) is not None:
-        bits.append(f"{num(burned)}{NBSP}kcal burned")
-    if "exercise_min" in day:
-        bits.append(f"{num(day['exercise_min'])}{NBSP}min exercise")
-    if "distance_m" in day:
-        bits.append(f"{num(logic.miles(day['distance_m']), 1)}{NBSP}mi")
-    return bits
-
-
 def steps_text(day: Mapping[str, float]) -> str:
     return f"{num(day['steps'])}{NBSP}steps" if "steps" in day else "&ndash;"
 
 
-def activity_item(day: date, values: Mapping[str, float], today: date) -> str:
-    """One day in the Activity page's list: the date and steps, then the rest."""
-    bits = activity_bits(values)
-    rest = f'<div class="small muted">{" · ".join(bits)}</div>' if bits else ""
+@dataclass(frozen=True)
+class ActivityChart:
+    """One of Activity's metrics for its switcher (#105): what it's called, the stored metric,
+    its bar color, and how a value reads."""
+
+    label: str
+    metric: str
+    kind: str
+    unit: str
+    places: int = 0
+
+    def value(self, day: Mapping[str, float]) -> float | None:
+        v = day.get(self.metric)
+        if v is None:
+            return None
+        return logic.miles(v) if self.metric == "distance_m" else v
+
+    def text(self, v: float) -> str:
+        return f"{num(v, self.places)}{NBSP}{self.unit}"
+
+
+ACTIVITY_CHARTS = {
+    "steps": ActivityChart("Steps", "steps", "steps", "steps"),
+    "energy": ActivityChart("Energy", "active_kcal", "burn", "kcal"),
+    "exercise": ActivityChart("Exercise", "exercise_min", "exercise", "min"),
+    "distance": ActivityChart("Distance", "distance_m", "distance", "mi", 1),
+}
+
+
+def activity_row(day: date, values: Mapping[str, float], today: date, href: str) -> str:
+    """A day in Activity's list: the date and steps, and one line of energy and exercise. Tap
+    opens the day's numbers in a sheet."""
+    bits = []
+    if "active_kcal" in values:
+        bits.append(f"{num(values['active_kcal'])}{NBSP}kcal active")
+    if "exercise_min" in values:
+        bits.append(f"{num(values['exercise_min'])}{NBSP}min exercise")
+    sub = f"<small>{' · '.join(bits)}</small>" if bits else ""
     return (
-        f'<li><div class="row"><span>{e(day_title(day, today))}</span>'
-        f'<span class="kcal">{steps_text(values)}</span></div>{rest}</li>'
-    )
-
-
-def stat(value: str, label: str) -> str:
-    return f'<div><div class="big">{value}</div><div class="muted small">{label}</div></div>'
-
-
-def activity_summary(
-    values: Mapping[str, float], label: str, so_far: str = "", note: str = ""
-) -> str:
-    """The Activity page's top card (#105): steps as the big number, then active and resting
-    energy, exercise and miles, for one day or as daily averages over a range."""
-    stats = [
-        stat(num(values.get("active_kcal")), "kcal active"),
-        stat(num(values.get("resting_kcal")), "kcal resting"),
-        stat(num(values.get("exercise_min")), "min exercise"),
-        stat(
-            num(logic.miles(values["distance_m"]), 1) if "distance_m" in values else num(None),
-            "miles",
-        ),
-    ]
-    burned = logic.burned_kcal(values)
-    return (
-        '<section class="card summary">'
-        f'<div class="big weight">{num(values.get("steps"))}</div>'
-        f'<p class="muted small">{e(label)}</p>'
-        f'<div class="grid2">{"".join(stats)}</div>'
-        + (
-            f'<p class="small">{num(burned)}{NBSP}kcal burned{so_far}'
-            ' <span class="muted">(active + resting)</span></p>'
-            if burned is not None
-            else ""
-        )
-        + (f'<p class="small muted">{e(note)}</p>' if note else "")
-        + "</section>"
+        f'<li><a class="item" href="{e(href)}" data-sheet><span class="grow">'
+        f"{e(day_title(day, today))}{sub}</span>"
+        f'<span class="kcal">{steps_text(values)}</span>'
+        f"{icon('chevron-right', 'icon chev')}</a></li>"
     )
 
 
@@ -754,6 +683,7 @@ NAV = (
     ("you", "/you", "You", "circle-user"),
 )
 PROGRESS_AREAS = (
+    ("overview", PROGRESS, "Overview"),
     ("nutrition", NUTRITION_PAGE, "Nutrition"),
     ("weight", WEIGHT_PAGE, "Weight"),
     ("activity", ACTIVITY_PAGE, "Activity"),
@@ -4962,71 +4892,6 @@ def add_routes(
 
     # --- Workouts (#94) ---
 
-    @server.custom_route(TRAINING_PAGE, methods=["GET"])
-    async def workouts_view(request: Request) -> Response:
-        """Training (was Workouts): workouts imported from Hevy, newest first, over the
-        range. The import itself lives in You > Integrations (#105)."""
-        if not signed_in(request):
-            return to_login(request)
-        params = request.query_params
-        span = pick_range(params.get("days"), 30)
-        last = today()
-        with connect(request) as conn:
-            summary = store.workouts_summary(conn)
-            first = (
-                first_day(store.first_workout_at(conn), last)
-                if span == 0
-                else last - timedelta(days=span - 1)
-            )
-            lo, _ = logic.local_day_bounds(first, tz)
-            _, hi = logic.local_day_bounds(last, tz)
-            rows = store.workouts_between(conn, lo, hi)
-            sets = store.workout_sets(conn, (r["id"] for r in rows))
-
-        banner = ""
-        if params.get("removed"):
-            banner = toast("<span>Workout deleted.</span>", "status")
-        parts = [
-            page_head("Progress"),
-            progress_pills("training"),
-            range_control(TRAINING_PAGE, span),
-            banner,
-        ]
-        if summary["count"]:
-            parts.append(
-                fresh_tag(
-                    f"{INTEGRATIONS}#hevy",
-                    "dumbbell",
-                    "Hevy",
-                    # Hevy has no API, so this is as fresh as the last export brought in
-                    f"latest workout {short_date(logic.local_date(summary['latest'], tz), last)}",
-                )
-            )
-        if rows:
-            volume = sum(logic.workout_volume_kg(sets[r["id"]]) for r in rows)
-            parts.append(
-                '<section class="card summary"><div class="grid2">'
-                f'<div><div class="big">{len(rows)}</div><div class="muted small">'
-                f"workout{'' if len(rows) == 1 else 's'}</div></div>"
-                f'<div><div class="big">{num(logic.weight_out(volume)["lb"])}</div>'
-                '<div class="muted small">lb lifted</div></div></div></section>'
-            )
-            hint = (
-                '<p class="small muted js-only hint">Tap a workout to see its sets. Swipe'
-                " left to delete.</p>"
-            )
-            items = "".join(workout_item(r, sets[r["id"]], tz) for r in rows)
-            parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
-        elif summary["count"]:
-            parts.append('<section class="card empty"><p>No workouts in this period.</p></section>')
-        else:
-            parts.append(
-                '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
-                f'<a href="{INTEGRATIONS}#hevy">Import your Hevy export</a> to bring in your'
-                " history.</p></section>"
-            )
-        return progress_page(request, "Training", "".join(parts), "train")
-
     @server.custom_route(ACTIVITY + "/import", methods=["POST"])
     async def activity_import(request: Request) -> Response:
         """Apple Health's export.zip from the Activity page: past weigh-ins, and whole days
@@ -5137,93 +5002,6 @@ def add_routes(
 
     # --- Weight (#94) ---
 
-    @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
-    async def activity_view(request: Request) -> Response:
-        """Activity from Apple Health. Today (the default): today's steps and the rest, 0
-        until the phone sends some. A longer range: the daily averages over its full days, a
-        bar of steps per day (per week or month over long ranges), and each day's numbers."""
-        if not signed_in(request):
-            return to_login(request)
-        span = pick_range(request.query_params.get("days"), 1, with_today=True)
-        last = today()
-        with connect(request) as conn:
-            first = (
-                first_day(store.first_activity_at(conn), last)
-                if span == 0
-                else last - timedelta(days=span - 1)
-            )
-            lo, _ = logic.local_day_bounds(first, tz)
-            _, hi = logic.local_day_bounds(last, tz)
-            by_day = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
-            synced = store.last_activity_sync(conn)
-        parts = [
-            page_head("Progress"),
-            progress_pills("activity"),
-            range_control(ACTIVITY_PAGE, span, with_today=True),
-        ]
-        if synced is None:
-            parts.append(
-                '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
-                "Steps, energy, exercise minutes and distance arrive from Apple Health"
-                f' once your phone sends them. <a href="{INTEGRATIONS}#health">Set it up in'
-                " Integrations</a>.</p></section>"
-            )
-            return progress_page(request, "Activity", "".join(parts), "steps")
-
-        parts.append(
-            fresh_tag(
-                f"{INTEGRATIONS}#health", "heart-pulse", "Apple Health", sent_text(synced, last)
-            )
-        )
-        if span == 1:
-            # Today is today (Will, #105): nothing sent yet reads as 0, not as yesterday
-            values = dict.fromkeys(SUMMARY_METRICS, 0) | by_day.get(last, {})
-            parts.append(activity_summary(values, "steps today", " so far"))
-            return progress_page(request, "Activity", "".join(parts), "steps")
-
-        # A range: today is still going, so the averages are over its full days
-        days = logic.date_range(first, last)
-        done = {d: v for d, v in by_day.items() if d != last}
-        average = logic.activity_average(done)
-        count = f"{len(done)} full day{'' if len(done) == 1 else 's'} with data"
-        parts.append(
-            activity_summary(
-                average,
-                f"steps a day {range_words(span, first)}",
-                note=f"Daily averages over {count}." if done else "No full days with data yet.",
-            )
-        )
-        if any("steps" in v for v in by_day.values()):
-            unit = logic.chart_unit(len(days))
-            points = logic.bucket_days(((d, by_day.get(d, {}).get("steps")) for d in days), unit)
-            title = f"Steps per day {range_words(span, first)}"
-            # A week's bars carry their numbers; longer ranges get a dashed daily average
-            chart = bar_chart(
-                points,
-                None if len(points) <= 7 else average.get("steps"),
-                "steps",
-                title,
-                link=False,
-                values=True,
-                target_label="avg",
-                unit=unit,
-            )
-            note = "" if unit == "day" else f' <small class="muted">average by {unit}</small>'
-            parts.append(f'<section class="card"><h2>Steps{note}</h2>{chart}</section>')
-        if by_day:
-            # Years of an imported export would be thousands of rows: the latest 100 days
-            recent = list(reversed(by_day))[:ACTIVITY_LIST_MAX]
-            items = "".join(activity_item(d, by_day[d], last) for d in recent)
-            more = (
-                f'<p class="small muted">The latest {ACTIVITY_LIST_MAX} days with activity.</p>'
-                if len(by_day) > ACTIVITY_LIST_MAX
-                else ""
-            )
-            parts.append(f'<section class="card"><ul class="entries">{items}</ul>{more}</section>')
-        else:
-            parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
-        return progress_page(request, "Activity", "".join(parts), "steps")
-
     @server.custom_route(WEIGHT, methods=["GET", "POST"])
     async def weight_moved(request: Request) -> Response:
         """Weigh-ins are still added here; the page moved to Progress (#105)."""
@@ -5231,110 +5009,6 @@ def add_routes(
             return await weight_view(request)
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(WEIGHT_PAGE + query, status_code=301, headers=SECURITY_HEADERS)
-
-    @server.custom_route(WEIGHT_PAGE, methods=["GET", "POST"])
-    async def weight_view(request: Request) -> Response:
-        """Body weight in lb: the latest weigh-in and the change over the range, a line of
-        each weighed day, a form to add one, and every weigh-in (swipe left to delete)."""
-        if request.method == "POST":
-            if (no := refused(request, "Add weigh-ins")) is not None:
-                return no
-            form = await request.form()
-            back = str(form.get("days", "30"))
-            try:
-                when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
-            except ValueError as err:
-                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': str(err)})}")
-            try:
-                kg = logic.to_kg(float(str(form.get("lb", "")).strip()), "lb")
-            except ValueError:
-                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': 'weight'})}")
-            with connect(request) as conn:
-                row = store.add_weight(conn, when, kg, "app")
-            log.info("dashboard: added weigh-in %d", row["id"])
-            return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'added': row['id']})}")
-
-        if not signed_in(request):
-            return to_login(request)
-        params = request.query_params
-        span = pick_range(params.get("days"), 30)
-        last = today()
-        first = last - timedelta(days=max(span, 1) - 1)
-        lo, _ = logic.local_day_bounds(first, tz)
-        _, hi = logic.local_day_bounds(last, tz)
-        with connect(request) as conn:
-            rows = store.weights_between(conn, "0" if span == 0 else lo, hi)
-            latest = store.latest_weight(conn)
-        if span == 0 and rows:
-            first = min(logic.local_date(rows[0]["measured_at"], tz), last)
-        over = range_words(span, first)
-        by_day = {logic.local_date(r["measured_at"], tz): r["kg"] for r in rows}
-
-        banner = ""
-        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
-            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
-        elif int_param(params.get("added")) is not None:
-            banner = toast("<span>Weigh-in saved.</span>", "status")
-        elif params.get("removed"):
-            banner = toast("<span>Weigh-in deleted.</span>", "status")
-        parts = [
-            page_head("Progress"),
-            progress_pills("weight"),
-            range_control(WEIGHT_PAGE, span),
-            banner,
-        ]
-
-        if latest is not None:
-            local = logic.local_iso(latest["measured_at"], tz)
-            when = datetime.fromisoformat(local)
-            change = ""
-            if rows:
-                change = (
-                    f'<p class="small">{change_text(rows[-1]["kg"] - rows[0]["kg"])}'
-                    f' <span class="muted">{e(over)}</span></p>'
-                )
-            parts.append(
-                '<section class="card summary"><div class="big weight">'
-                f"{lb_text(latest['kg'])}</div>"
-                f'<p class="muted small">Latest, {e(when.strftime("%a %b"))} {when.day},'
-                f" {clock(local)}</p>{change}</section>"
-            )
-        if by_day:
-            points = [(d, logic.weight_out(kg)["lb"]) for d, kg in by_day.items()]
-            parts.append(f'<section class="card">{weight_chart(points, first, last)}</section>')
-
-        now = datetime.now(ZoneInfo(tz))
-        parts.append(
-            f'<form class="card stack" id="weigh-in" method="post" action="{WEIGHT}">'
-            "<h2>Add a weigh-in</h2>"
-            f'<input type="hidden" name="days" value="{span}">'
-            '<label>Weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
-            ' required placeholder="182.4"></label>'
-            f'<div class="pair"><label>Time<input type="time" name="time"'
-            f' value="{now.strftime("%H:%M")}" required></label>'
-            f'<label>Date<input type="date" name="date" value="{now.date().isoformat()}"'
-            f' max="{now.date().isoformat()}" required></label></div>'
-            '<button type="submit">Save</button></form>'
-        )
-
-        if rows:
-            hint = '<p class="small muted js-only hint">Swipe a weigh-in left to delete it.</p>'
-            items = "".join(weight_item(r, tz) for r in reversed(rows))
-            parts.append(
-                f'<section class="card"><h2>Weigh-ins</h2>{hint}<ul class="entries">{items}'
-                "</ul></section>"
-            )
-        elif latest is None:
-            parts.append(
-                '<section class="card empty"><p>No weigh-ins yet.</p><p class="muted small">'
-                "Your scale's readings arrive from Apple Health once your phone is set up, or"
-                " tell Claude “I weighed 182.4 this morning”.</p></section>"
-            )
-        else:
-            parts.append(
-                '<section class="card empty"><p>No weigh-ins in this period.</p></section>'
-            )
-        return progress_page(request, "Weight", "".join(parts), "weight")
 
     @server.custom_route(WEIGHT + "/{weight_id:int}/delete", methods=["POST"])
     async def weight_delete(request: Request) -> Response:
@@ -5347,11 +5021,6 @@ def add_routes(
                 return go(WEIGHT_PAGE)
         log.info("dashboard: deleted weigh-in %d", row["id"])
         return go(f"{WEIGHT_PAGE}?removed=1")
-
-    @server.custom_route(PROGRESS, methods=["GET"])
-    async def progress(request: Request) -> Response:
-        """Progress (#105) opens on Nutrition until its overview arrives."""
-        return go(NUTRITION_PAGE)
 
     def moved(old: str, new: str) -> None:
         """An old page's address (#105) sends a GET on to where it lives now, query and all."""
@@ -5380,80 +5049,1091 @@ def add_routes(
         """The local day of the first record (for All), never after `fallback`."""
         return min(logic.local_date(started, tz), fallback) if started else fallback
 
+    # --- Progress (#105): Overview, Nutrition, Weight, Activity, Training ---
+
+    def range_days(span: int, started: str | None) -> tuple[date, date]:
+        """A range's first and last day: the last `span` days through today, or for All
+        (0) from the first record's day."""
+        last = today()
+        first = first_day(started, last) if span == 0 else last - timedelta(days=span - 1)
+        return first, last
+
+    def bounds(first: date, last: date) -> tuple[str, str]:
+        lo, _ = logic.local_day_bounds(first, tz)
+        _, hi = logic.local_day_bounds(last, tz)
+        return lo, hi
+
+    def previous(span: int, first: date, last: date) -> tuple[date, date] | None:
+        """The period before the range, the same length; All has none."""
+        return None if span == 0 else logic.previous_period(first, last)
+
+    def mean(values) -> float | None:
+        values = [v for v in values if v is not None]
+        return sum(values) / len(values) if values else None
+
+    def as_lb(kg: float) -> float:
+        return kg / logic.KG_PER_LB
+
+    def lb_num(lb: float) -> str:
+        return f"{lb:,.1f}{NBSP}lb"
+
+    def progress_head(active: str, url: str, span: int, with_today: bool = False) -> list[str]:
+        return [
+            page_head("Progress"),
+            progress_pills(active),
+            range_control(url, span, with_today),
+        ]
+
+    @server.custom_route(PROGRESS, methods=["GET"])
+    async def progress(request: Request) -> Response:
+        """Progress overview (#105): one range for five cards, each with how it moved since
+        the period before and a way into its screen. Energy balance ties food to activity."""
+        if not signed_in(request):
+            return to_login(request)
+        span = pick_range(request.query_params.get("days"), 30)
+        last = today()
+        with connect(request) as conn:
+            started = [
+                store.first_meal_at(conn),
+                store.first_activity_at(conn),
+                store.first_workout_at(conn),
+                store.first_weight_at(conn),
+            ]
+            starts = [s for s in started if s]
+            first, last = range_days(span, min(starts) if starts else None)
+            prev = previous(span, first, last)
+            lo, hi = bounds(prev[0] if prev else first, last)
+            eaten = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
+            moved = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
+            strip = strip_days(first, last)
+            workouts = store.workouts_between(conn, min(lo, bounds(strip[0], last)[0]), hi)
+            sets = store.workout_sets(conn, (r["id"] for r in workouts))
+            weights = store.weights_between(
+                conn, "0" if span == 0 else bounds(first - timedelta(days=90), last)[0], hi
+            )
+            targets = store.get_targets(conn)
+            synced = store.last_activity_sync(conn)
+        days = logic.date_range(first, last)
+        done = [d for d in days if d != last]  # today is still going
+        prev_days = logic.date_range(*prev) if prev else []
+        words = prev_words(span) if prev else ""
+        parts = progress_head("overview", PROGRESS, span)
+        cards = []
+
+        # Energy balance: full days with both food logged and energy burned
+        both = [d for d in done if d in eaten and logic.burned_kcal(moved.get(d, {})) is not None]
+        if both:
+            ate = mean(eaten[d]["kcal"] for d in both) or 0.0
+            burned = mean(logic.burned_kcal(moved[d]) for d in both) or 0.0
+            net = ate - burned
+            spark = charts.sparkline(
+                [eaten[d]["kcal"] for d in both],
+                "kcal",
+                also=[logic.burned_kcal(moved[d]) for d in both],
+                also_kind="burn",
+            )
+            cards.append(
+                overview_card(
+                    NUTRITION_PAGE + f"?days={span}#balance",
+                    "flame",
+                    "burn",
+                    "Energy balance",
+                    f"{'&minus;' if net < 0 else '+'}{num(abs(net))}",
+                    "kcal a day",
+                    f'<span class="kcal-ate">{num(ate)} eaten</span> · '
+                    f'<span class="kcal-burn">{num(burned)} burned</span>'
+                    f" · {len(both)} day{'' if len(both) == 1 else 's'} with both",
+                    spark,
+                )
+            )
+
+        # Weight: the trend's level and how it moved over the range
+        if weights:
+            trend = logic.weight_trend(
+                (logic.local_date(r["measured_at"], tz), r["kg"]) for r in weights
+            )
+            change, rate = trend_change(trend, first)
+            in_range = [(d, v) for d, v in trend if d >= first]
+            spark = charts.sparkline([as_lb(v) for _, v in in_range], "weight")
+            sub = f"{change_text(change)} {e(range_words(span, first))}" if in_range else ""
+            if rate is not None and round(as_lb(rate), 1):
+                sign = "&minus;" if rate < 0 else "+"
+                sub += f" · {sign}{num(abs(as_lb(rate)), 1)}{NBSP}lb a week"
+            cards.append(
+                overview_card(
+                    f"{WEIGHT_PAGE}?days={span}",
+                    "scale",
+                    "protein",
+                    "Weight",
+                    f"{as_lb(trend[-1][1]):,.1f}",
+                    "lb trend",
+                    sub or "No weigh-ins in this period",
+                    spark,
+                )
+            )
+
+        # Activity: steps a day over full days, vs the period before
+        steps = [moved[d]["steps"] for d in done if "steps" in moved.get(d, {})]
+        if steps:
+            avg = sum(steps) / len(steps)
+            before = mean(moved.get(d, {}).get("steps") for d in prev_days)
+            extra = []
+            if (a := mean(moved.get(d, {}).get("active_kcal") for d in done)) is not None:
+                extra.append(f"{num(a)}{NBSP}kcal active")
+            if (x := mean(moved.get(d, {}).get("exercise_min") for d in done)) is not None:
+                extra.append(f"{num(x)}{NBSP}min exercise")
+            unit = logic.chart_unit(len(days))
+            spark = charts.sparkline(
+                [
+                    v
+                    for _, v in logic.bucket_days(
+                        ((d, moved.get(d, {}).get("steps")) for d in done), unit
+                    )
+                ],
+                "steps",
+                bars=True,
+            )
+            cards.append(
+                overview_card(
+                    f"{ACTIVITY_PAGE}?days={span}",
+                    "footprints",
+                    "steps",
+                    "Activity",
+                    num(avg),
+                    "steps a day",
+                    " · ".join(extra) + delta_chip(logic.change_percent(avg, before), words, "up"),
+                    spark,
+                    fresh=f"Apple Health · {sent_text(synced, last)}" if synced else "",
+                )
+            )
+
+        # Training: sessions a week and volume, vs the period before, and its days
+        mine = [r for r in workouts if logic.local_date(r["started_at"], tz) >= first]
+        if mine:
+            before = [
+                r
+                for r in workouts
+                if prev and prev[0] <= logic.local_date(r["started_at"], tz) <= prev[1]
+            ]
+            volume = sum(as_lb(logic.workout_volume_kg(sets[r["id"]])) for r in mine)
+            prior = sum(as_lb(logic.workout_volume_kg(sets[r["id"]])) for r in before)
+            weekly = len(mine) / max(len(days) / 7, 1)
+            by_day: dict[date, float] = {}
+            for r in workouts:
+                d = logic.local_date(r["started_at"], tz)
+                by_day[d] = by_day.get(d, 0) + max(logic.workout_volume_kg(sets[r["id"]]), 1)
+            heat = charts.heat_strip(by_day, strip, "train", "Training days")
+            cards.append(
+                overview_card(
+                    f"{TRAINING_PAGE}?days={span}",
+                    "dumbbell",
+                    "train",
+                    "Training",
+                    num(weekly, 1),
+                    "workouts a week",
+                    f"{num(volume)}{NBSP}lb lifted"
+                    + delta_chip(logic.change_percent(volume, prior if before else None), words),
+                    heat,
+                )
+            )
+
+        # Nutrition: calories and protein a day against the goals, days on target
+        logged = [d for d in done if d in eaten] or ([last] if last in eaten else [])
+        if logged:
+            kcal = mean(eaten[d]["kcal"] for d in logged) or 0.0
+            protein = mean(eaten[d]["protein_g"] for d in logged) or 0.0
+            on = sum(1 for d in logged if logic.near_goals(eaten[d], targets))
+            goal = f" of {num(targets['kcal'])}" if targets["kcal"] else ""
+            spark = charts.sparkline(
+                [(eaten.get(d) or {}).get("kcal") for d in done or days], "kcal", bars=True
+            )
+            cards.append(
+                overview_card(
+                    f"{NUTRITION_PAGE}?days={span}",
+                    "salad",
+                    "kcal",
+                    "Nutrition",
+                    num(kcal),
+                    f"kcal a day{goal}",
+                    f"{num(protein)}{NBSP}g protein · on target {on} of {len(logged)} days"
+                    f" · {len(logged)} of {len(done) or 1} days logged",
+                    spark,
+                )
+            )
+
+        if cards:
+            parts.append(f'<div class="overview">{"".join(cards)}</div>')
+        else:
+            parts.append(
+                '<section class="card empty"><p>Nothing to show yet.</p>'
+                '<p class="muted small">Log food, add a weigh-in, or connect Apple Health and'
+                f' Hevy in <a href="{INTEGRATIONS}">Integrations</a>, and your trends appear'
+                " here.</p></section>"
+            )
+        return progress_page(request, "Progress", "".join(parts))
+
+    def overview_card(
+        href: str,
+        glyph: str,
+        tone: str,
+        title: str,
+        value: str,
+        unit: str,
+        sub: str,
+        visual: str = "",
+        fresh: str = "",
+    ) -> str:
+        tag = f'<span class="fresh">{e(fresh)}</span>' if fresh else ""
+        return (
+            f'<a class="ov-card tone-{tone}" href="{e(href)}"><div class="ov-head">'
+            f'<span class="badge-icon tone-{tone}">{icon(glyph)}</span><span class="grow">'
+            f"{e(title)}</span>{tag}{icon('chevron-right', 'icon chev')}</div>"
+            f'<div class="ov-value"><span class="val">{value}</span> <span class="unit">'
+            f'{e(unit)}</span></div><div class="sub">{sub}</div>{visual}</a>'
+        )
+
+    def strip_days(first: date, last: date) -> list[date]:
+        """The training heat strip's days: at least 13 weeks, at most a year, to today."""
+        start = max(min(first, last - timedelta(days=13 * 7 - 1)), last - timedelta(days=370))
+        return logic.date_range(start, last)
+
+    def trend_change(trend: list[tuple[date, float]], first: date) -> tuple[float, float | None]:
+        """How the weight trend moved over a range starting on first: from its value going
+        into the range (the last before it, else the first in it) to its latest; and that
+        as a weekly rate."""
+        before = [p for p in trend if p[0] < first]
+        inside = [p for p in trend if p[0] >= first]
+        start = before[-1] if before else (inside[0] if inside else trend[-1])
+        end = inside[-1] if inside else trend[-1]
+        return end[1] - start[1], logic.weekly_rate([start, end])
+
     @server.custom_route(NUTRITION_PAGE, methods=["GET"])
     async def history(request: Request) -> Response:
-        """Nutrition over a range (was History): daily averages, calories and protein per
-        day (per week or month over long ranges), and each day logged."""
+        """Nutrition trends (was History): averages against the goals and the period before,
+        calories and protein per day (per week or month over long ranges) with goal lines
+        and a 7-day rolling average, energy balance when activity is here, and each day."""
         if not signed_in(request):
             return to_login(request)
         span = pick_range(request.query_params.get("days"), 7)
+        with connect(request) as conn:
+            first, last = range_days(span, store.first_meal_at(conn))
+            prev = previous(span, first, last)
+            lo, hi = bounds(prev[0] if prev else first, last)
+            everything = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
+            targets = store.get_targets(conn)
+            moved = logic.activity_by_day(store.activity_between(conn, *bounds(first, last)), tz)
+        by_day = {d: n for d, n in everything.items() if d >= first}
+        before = {d: n for d, n in everything.items() if d < first}
+        days = logic.date_range(first, last)
+        prev_days = logic.date_range(*prev) if prev else []
+        words = prev_words(span) if prev else ""
+        here = f"{NUTRITION_PAGE}?days={span}"
+        parts = progress_head("nutrition", NUTRITION_PAGE, span)
+        if not by_day:
+            parts.append(
+                '<section class="card empty"><p>Nothing logged in this period.</p>'
+                f'<p class="muted small"><a href="{PREFIX}/add">Log food</a> and your'
+                " averages and trends show here.</p></section>"
+            )
+            return progress_page(request, "Nutrition", "".join(parts))
+
+        # Averages over full days; today alone only when it's all there is
+        full = [d for d in days if d in by_day and d != last] or [last]
+        so_far = full == [last]
+
+        def avg(key: str, among, source) -> float | None:
+            return mean((source[d].get(key) or 0.0) for d in among if d in source)
+
+        kcal, protein = avg("kcal", full, by_day), avg("protein_g", full, by_day)
+        on = sum(1 for d in full if logic.near_goals(by_day[d], targets))
+
+        def goal_sub(key: str, unit: str) -> str:
+            goal = targets.get(key)
+            return f"of {num(goal)}{NBSP}{unit} goal" if goal else "no goal set"
+
+        parts.append(
+            tiles(
+                tile(
+                    f'<span class="kcal-ate">{num(kcal)}</span>',
+                    "Calories a day",
+                    goal_sub("kcal", "kcal")
+                    + delta_chip(logic.change_percent(kcal, avg("kcal", prev_days, before)), words),
+                    tone="kcal",
+                ),
+                tile(
+                    f'<span class="p">{num(protein)}{NBSP}g</span>',
+                    "Protein a day",
+                    goal_sub("protein_g", "g")
+                    + delta_chip(
+                        logic.change_percent(protein, avg("protein_g", prev_days, before)),
+                        words,
+                        "up",
+                    ),
+                    tone="protein",
+                ),
+                tile(
+                    f"{on}",
+                    "Days on target",
+                    f"of {len(full)} within 10% of every goal",
+                    tone="kcal",
+                ),
+                tile(
+                    f"{len(by_day)}",
+                    "Days logged",
+                    f"of {len(days)} days" + (" · today so far" if so_far else ""),
+                    tone="kcal",
+                ),
+            )
+        )
+        if len(by_day) < len(days) and span != 0:
+            parts.append(
+                f'<p class="muted small note">{len(by_day)} of {len(days)} days have entries;'
+                " days without any are gaps, not zeros.</p>"
+            )
+
+        unit = logic.chart_unit(len(days))
+        for key, kind, label, unit_word in (
+            ("kcal", "kcal", "Calories", "kcal"),
+            ("protein_g", "protein_g", "Protein", "g"),
+        ):
+            daily = [(d, (by_day.get(d) or {}).get(key)) for d in days]
+            points = logic.bucket_days(daily, unit)
+            ghost = None
+            if prev_days:
+                earlier = logic.bucket_days(
+                    [(d, (before.get(d) or {}).get(key)) for d in prev_days], unit
+                )
+                if len(earlier) == len(points):
+                    ghost = [v for _, v in earlier]
+            # Today is still going, so the rolling average stops at yesterday
+            rolling = (
+                [v for _, v in logic.rolling_average(daily[:-1])] + [None]
+                if unit == "day" and len(days) > 7
+                else None
+            )
+            goal = targets.get(key)
+            mean_v = kcal if key == "kcal" else protein
+
+            def tone(v: float, goal=goal, key=key) -> str:
+                if key != "kcal" or not goal or unit != "day":
+                    return ""
+                return "over" if v > goal + 100 else ("caution" if v > goal else "")
+
+            summary = (
+                f"Avg {num(mean_v)}{NBSP}{unit_word} a day"
+                + (f" · goal {num(goal)}" if goal else "")
+                + (" · 7-day average line" if rolling else "")
+            )
+            parts.append(
+                '<section class="card">'
+                + charts.bar_chart(
+                    points,
+                    kind=kind,
+                    title=f"{label} per {unit} {range_words(span, first)}",
+                    value_text=lambda v, w=unit_word: f"{num(v)}{NBSP}{w}",
+                    summary=summary,
+                    unit=unit,
+                    goal=goal,
+                    rolling=rolling,
+                    ghost=ghost,
+                    partial_last=True,
+                    tone=tone,
+                    href=day_url,
+                    heading=label + ("" if unit == "day" else f" <small>a day, by {unit}</small>"),
+                )
+                + "</section>"
+            )
+
+        # Energy balance: eaten against burned, on full days with both
+        both = [
+            (d, by_day[d]["kcal"] or 0.0, burned)
+            for d in days
+            if d != last and d in by_day and (burned := logic.burned_kcal(moved.get(d, {})))
+        ]
+        if both:
+            ate = mean(a for _, a, _ in both) or 0.0
+            out = mean(b for _, _, b in both) or 0.0
+            net = ate - out
+            stops = [
+                (
+                    d,
+                    charts.Stop(
+                        f"{d.strftime('%a %b')} {d.day}",
+                        f"{num(a)} eaten · {num(b)} burned",
+                        f"{MINUS if a < b else '+'}{num(abs(a - b))} net",
+                        href=day_url(d),
+                    ),
+                )
+                for d, a, b in both
+            ]
+            parts.append(
+                '<section class="card" id="balance">'
+                + charts.line_chart(
+                    first=both[0][0],
+                    last=both[-1][0],
+                    lines=[
+                        charts.Line("kcal", [(d, a) for d, a, _ in both]),
+                        charts.Line("burn", [(d, b) for d, _, b in both]),
+                    ],
+                    title="Calories eaten and burned per day",
+                    summary=(
+                        f'<span class="kcal-ate">{num(ate)} eaten</span> · '
+                        f'<span class="kcal-burn">{num(out)} burned</span> a day · '
+                        f"{'&minus;' if net < 0 else '+'}{num(abs(net))}{NBSP}kcal net"
+                    ),
+                    stops=stops,
+                    value_text=lambda v: f"{num(v)}{NBSP}kcal",
+                    zero=False,
+                    table_head=("Day", "Eaten", "Burned"),
+                    table=[(f"{d.strftime('%a %b')} {d.day}", num(a), num(b)) for d, a, b in both],
+                    heading="Energy balance",
+                    kind="balance",
+                )
+                + f'<p class="muted small">Over {len(both)} day{"" if len(both) == 1 else "s"}'
+                " with both food logged and active plus resting energy from Apple Health.</p>"
+                "</section>"
+            )
+
+        rows = []
+        for d in reversed(days):
+            n = by_day.get(d)
+            if n is None:
+                continue
+            shown = logic.round_for_display(n)
+            rows.append(
+                f'<li><a class="item" href="{day_url(d)}"><span class="grow">'
+                f"{e(day_title(d, last))}{' <em>so far</em>' if d == last else ''}"
+                f"<small>{macros_line(shown)}</small>{split_bar(shown)}</span>"
+                f'<span class="kcal">{num(shown["kcal"])}<small> kcal</small></span>'
+                f"{icon('chevron-right', 'icon chev')}</a>"
+                f'<a class="small bd" href="{e(breakdown_url(d, back=here))}">'
+                f"Breakdown&nbsp;&rsaquo;</a></li>"
+            )
+        parts.append(
+            f'<section class="group"><h2>Days</h2><ul class="days">{"".join(rows)}</ul></section>'
+        )
+        return progress_page(request, "Nutrition", "".join(parts))
+
+    @server.custom_route(WEIGHT_PAGE, methods=["GET", "POST"])
+    async def weight_view(request: Request) -> Response:
+        """Body weight in lb: the trend weight (smoothed over about 10 days) as the hero,
+        how it moved over the range and a week, every reading under the trend line with the
+        goal, lowest, highest and average against the period before, and each weigh-in by
+        month (swipe left to delete). Adding one posts here."""
+        if request.method == "POST":
+            if (no := refused(request, "Add weigh-ins")) is not None:
+                return no
+            form = await request.form()
+            back = str(form.get("days", "30"))
+            try:
+                when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
+            except ValueError as err:
+                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': str(err)})}")
+            try:
+                kg = logic.to_kg(float(str(form.get("lb", "")).strip()), "lb")
+            except ValueError:
+                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': 'weight'})}")
+            with connect(request) as conn:
+                row = store.add_weight(conn, when, kg, "app")
+            log.info("dashboard: added weigh-in %d", row["id"])
+            return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'added': row['id']})}")
+
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        span = pick_range(params.get("days"), 30)
         last = today()
         with connect(request) as conn:
-            first = (
-                first_day(store.first_meal_at(conn), last)
-                if span == 0
-                else last - timedelta(days=span - 1)
-            )
-            lo, _ = logic.local_day_bounds(first, tz)
-            _, hi = logic.local_day_bounds(last, tz)
-            by_day = logic.totals_by_day(store.entries_between(conn, lo, hi), tz)
-            targets = store.get_targets(conn)
-        days = logic.date_range(first, last)
-        totals = logic.sum_nutrients(by_day.values())
-        average = logic.round_for_display(logic.average(totals, len(by_day))) if by_day else None
+            latest = store.latest_weight(conn)
+            first, last = range_days(span, store.first_weight_at(conn))
+            prev = previous(span, first, last)
+            # The trend needs a run-up before the range, so it starts settled
+            warm = (prev[0] if prev else first) - timedelta(days=60)
+            lo, hi = bounds(warm, last)
+            every = store.weights_between(conn, "0" if span == 0 else lo, hi)
+            goals = store.get_body_goals(conn)
+        rows = [r for r in every if logic.local_date(r["measured_at"], tz) >= first]
+        earlier = (
+            [r for r in every if prev[0] <= logic.local_date(r["measured_at"], tz) <= prev[1]]
+            if prev
+            else []
+        )
+        readings = [(logic.local_date(r["measured_at"], tz), r["kg"]) for r in every]
+        trend = logic.weight_trend(readings)
+        if not trend and latest is not None:
+            trend = [(logic.local_date(latest["measured_at"], tz), latest["kg"])]
+        goal_lb = as_lb(goals["goal_weight_kg"]) if goals["goal_weight_kg"] else None
 
+        banner = ""
+        if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
+            banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        elif int_param(params.get("added")) is not None:
+            banner = toast("<span>Weigh-in saved.</span>", "status")
+        elif params.get("removed"):
+            banner = toast("<span>Weigh-in deleted.</span>", "status")
+        add = f'<a class="iconbtn" href="#weigh-in" aria-label="Add a weigh-in">{icon("plus")}</a>'
         parts = [
-            page_head("Progress"),
-            progress_pills("nutrition"),
-            range_control(NUTRITION_PAGE, span),
+            page_head("Progress", add),
+            progress_pills("weight"),
+            range_control(WEIGHT_PAGE, span),
+            banner,
         ]
-        if average is None:
+
+        if latest is not None and trend:
+            local = logic.local_iso(latest["measured_at"], tz)
+            when = datetime.fromisoformat(local)
+            chips = ""
+            if rows:
+                change, rate = trend_change(trend, first)
+                over = e(range_words(span, first))
+                chips = f'<span class="delta">{change_text(change)} {over}</span>'
+                if rate is not None and logic.weight_out(abs(rate))["lb"]:
+                    per = logic.weight_out(abs(rate))["lb"]
+                    sign = "&minus;" if rate < 0 else "+"
+                    chips += f'<span class="delta">{sign}{num(per, 1)}{NBSP}lb a week</span>'
+            to_goal = ""
+            if goal_lb is not None:
+                gap = as_lb(trend[-1][1]) - goal_lb
+                to_goal = (
+                    f'<p class="small muted">Goal {lb_num(goal_lb)} · '
+                    + ("reached" if abs(gap) < 0.1 else f"{num(abs(gap), 1)}{NBSP}lb to go")
+                    + "</p>"
+                )
             parts.append(
-                '<section class="card empty"><p>Nothing logged in this period.</p></section>'
+                hero(
+                    f"{as_lb(trend[-1][1]):,.1f}",
+                    "lb",
+                    f"Trend weight · latest {lb_text(latest['kg'])}, {e(when.strftime('%a %b'))}"
+                    f" {when.day}, {clock(local)}",
+                    chips,
+                    to_goal,
+                )
+            )
+
+        if rows:
+            daily: dict[date, list[float]] = {}
+            for r in rows:
+                daily.setdefault(logic.local_date(r["measured_at"], tz), []).append(r["kg"])
+            dots = [(d, as_lb(sum(v) / len(v))) for d, v in daily.items()]
+            smooth = dict(trend)
+            shown_trend = [(d, as_lb(v)) for d, v in trend if d >= dots[0][0]]
+            stops = [
+                (
+                    d,
+                    charts.Stop(
+                        f"{d.strftime('%a %b')} {d.day}",
+                        lb_num(v),
+                        f"trend {lb_num(as_lb(smooth[d]))}",
+                    ),
+                )
+                for d, v in dots
+            ]
+            parts.append(
+                '<section class="card">'
+                + charts.line_chart(
+                    first=dots[0][0],
+                    last=max(last, dots[-1][0]),
+                    lines=[charts.Line("trend", shown_trend)],
+                    dots=dots,
+                    title=f"Weight {range_words(span, first)}: each weigh-in and the trend",
+                    summary=(
+                        f"{len(dots)} weigh-in day{'' if len(dots) == 1 else 's'}"
+                        " · dots are readings, the line is the trend"
+                    ),
+                    stops=stops,
+                    value_text=lb_num,
+                    goal=goal_lb,
+                    table_head=("Day", "Weight", "Trend"),
+                    table=[(s.title, s.value, s.note.removeprefix("trend ")) for _, s in stops],
+                    kind="weight",
+                    heading="Weight",
+                )
+                + "</section>"
+            )
+            values = [as_lb(r["kg"]) for r in rows]
+            average = sum(values) / len(values)
+            prior = mean(as_lb(r["kg"]) for r in earlier)
+            parts.append(
+                tiles(
+                    tile(lb_num(min(values)), "Lowest", tone="protein"),
+                    tile(lb_num(max(values)), "Highest", tone="protein"),
+                    tile(lb_num(average), "Average", tone="protein"),
+                    tile(
+                        change_text((average - prior) * logic.KG_PER_LB)
+                        if prior is not None
+                        else "&ndash;",
+                        "Vs " + (prev_words(span) if prev else "before"),
+                        "average to average" if prior is not None else "nothing to compare",
+                        tone="protein",
+                    ),
+                )
+            )
+
+        if rows:
+            months: dict[tuple[int, int], list] = {}
+            for r in reversed(rows):
+                d = logic.local_date(r["measured_at"], tz)
+                months.setdefault((d.year, d.month), []).append(r)
+            hint = '<p class="small muted js-only hint">Swipe a weigh-in left to delete it.</p>'
+            groups = "".join(
+                f'<section class="card"><h2>{date(y, m, 1).strftime("%B %Y")}'
+                f' <small class="muted">{len(rs)} weigh-in{"" if len(rs) == 1 else "s"}'
+                f'</small></h2><ul class="entries">'
+                + "".join(weight_item(r, tz) for r in rs)
+                + "</ul></section>"
+                for (y, m), rs in months.items()
+            )
+            parts.append(f'<div class="weigh-ins">{hint}{groups}</div>')
+        elif latest is None:
+            parts.append(
+                '<section class="card empty"><p>No weigh-ins yet.</p><p class="muted small">'
+                "Your scale's readings arrive from Apple Health once your phone is set up, or"
+                " tell Claude “I weighed 182.4 this morning”.</p></section>"
             )
         else:
-            stats = "".join(
-                f'<div><div class="big {k}">{num(average[k], logic.DISPLAY_PLACES[k])}</div>'
-                f'<div class="muted small">{NUTRIENT_LABELS[k]}'
-                f"{' kcal' if k == 'kcal' else ' g'}</div></div>"
-                for k in logic.CORE
+            parts.append(
+                '<section class="card empty"><p>No weigh-ins in this period.</p></section>'
+            )
+
+        now = datetime.now(ZoneInfo(tz))
+        hint_lb = f"{logic.weight_out(latest['kg'])['lb']:.1f}" if latest else "182.4"
+        parts.append(
+            f'<form class="card stack" id="weigh-in" method="post" action="{WEIGHT}">'
+            "<h2>Add a weigh-in</h2>"
+            f'<input type="hidden" name="days" value="{span}">'
+            '<label>Weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
+            f' required placeholder="{e(hint_lb)}"></label>'
+            f'<div class="pair"><label>Time<input type="time" name="time"'
+            f' value="{now.strftime("%H:%M")}" required></label>'
+            f'<label>Date<input type="date" name="date" value="{now.date().isoformat()}"'
+            f' max="{now.date().isoformat()}" required></label></div>'
+            '<button type="submit">Save</button></form>'
+        )
+        return progress_page(request, "Weight", "".join(parts), "weight")
+
+    @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
+    async def activity_view(request: Request) -> Response:
+        """Activity from Apple Health. Today (the default): today's numbers, 0 until the
+        phone sends some. A longer range: one metric at a time (steps, energy, exercise,
+        distance) as the hero against the period before, its bars with the average, the
+        step goal and the previous period, and each day (tap for all its numbers)."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        span = pick_range(params.get("days"), 1, with_today=True)
+        pick = params.get("metric", "steps")
+        chart = ACTIVITY_CHARTS.get(pick) or ACTIVITY_CHARTS["steps"]
+        pick = next(k for k, v in ACTIVITY_CHARTS.items() if v is chart)
+        with connect(request) as conn:
+            first, last = range_days(span, store.first_activity_at(conn))
+            prev = previous(span, first, last)
+            lo, hi = bounds(prev[0] if prev else first, last)
+            everything = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
+            synced = store.last_activity_sync(conn)
+            goals = store.get_body_goals(conn)
+        by_day = {d: v for d, v in everything.items() if d >= first}
+        parts = progress_head("activity", ACTIVITY_PAGE, span, with_today=True)
+        if synced is None:
+            parts.append(
+                '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
+                "Steps, energy, exercise minutes and distance arrive from Apple Health"
+                f' once your phone sends them. <a href="{INTEGRATIONS}#health">Set it up in'
+                " Integrations</a>.</p></section>"
+            )
+            return progress_page(request, "Activity", "".join(parts), "steps")
+        parts.append(
+            fresh_tag(
+                f"{INTEGRATIONS}#health", "heart-pulse", "Apple Health", sent_text(synced, last)
+            )
+        )
+
+        if span == 1:
+            # Today is today (Will, #105): nothing sent yet reads as 0, not as yesterday
+            values = dict.fromkeys(SUMMARY_METRICS, 0) | by_day.get(last, {})
+            step_goal = goals["step_goal"]
+            goal_line = (
+                f"{num(values['steps'] / step_goal * 100)}% of your {num(step_goal)} step goal"
+                if step_goal
+                else "steps today so far"
             )
             parts.append(
-                f'<section class="card summary"><h2>Daily average</h2><div class="grid4">{stats}'
-                f'</div><p class="muted small">Over the {len(by_day)} of {len(days)} days with'
-                " entries.</p></section>"
+                hero(
+                    num(values["steps"]),
+                    "steps",
+                    e(goal_line),
+                    extra=(meter(values["steps"] / step_goal * 100, "steps") if step_goal else ""),
+                )
+            )
+            parts.append(activity_tiles(values, " so far"))
+            return progress_page(request, "Activity", "".join(parts), "steps")
+
+        # A range: today is still going, so the averages are over its full days
+        days = logic.date_range(first, last)
+        done = {d: v for d, v in by_day.items() if d != last}
+        prev_days = logic.date_range(*prev) if prev else []
+        words = prev_words(span) if prev else ""
+        switch = "".join(
+            f'<a href="{ACTIVITY_PAGE}?{urlencode({"days": span, "metric": key})}"'
+            f"{' aria-current=page' if key == pick else ''}>{c.label}</a>"
+            for key, c in ACTIVITY_CHARTS.items()
+        )
+        parts.append(f'<nav class="segment metrics" aria-label="Metric">{switch}</nav>')
+
+        values = {d: chart.value(v) for d, v in done.items()}
+        values = {d: v for d, v in values.items() if v is not None}
+        if values:
+            avg = sum(values.values()) / len(values)
+            before = mean(chart.value(everything.get(d, {})) for d in prev_days)
+            best_day = max(values, key=lambda d: values[d])
+            daily_word = {
+                "steps": "steps a day",
+                "energy": "active kcal a day",
+                "exercise": "min of exercise a day",
+                "distance": "miles a day",
+            }[pick]
+            parts.append(
+                hero(
+                    num(avg, chart.places),
+                    "",
+                    f"{e(daily_word)} {e(range_words(span, first))}",
+                    delta_chip(logic.change_percent(avg, before), words, "up"),
+                )
+            )
+            parts.append(
+                tiles(
+                    tile(
+                        chart.text(values[best_day]),
+                        "Best day",
+                        e(short_date(best_day, last).capitalize()),
+                        tone=chart.kind,
+                    ),
+                    tile(
+                        f"{len(values)}",
+                        "Days with data",
+                        f"of {len(days) - 1} full days",
+                        tone=chart.kind,
+                    ),
+                )
             )
             unit = logic.chart_unit(len(days))
-            for key in ("kcal", "protein_g"):
-                points = logic.bucket_days(
-                    ((d, (by_day.get(d) or {}).get(key)) for d in days), unit
+            daily = [(d, chart.value(by_day.get(d, {}))) for d in days]
+            points = logic.bucket_days(daily, unit)
+            ghost = None
+            if prev_days:
+                earlier = logic.bucket_days(
+                    [(d, chart.value(everything.get(d, {}))) for d in prev_days], unit
                 )
-                title = f"{NUTRIENT_LABELS[key]} per day"
-                note = "" if unit == "day" else f' <small class="muted">average by {unit}</small>'
-                parts.append(
-                    f'<section class="card"><h2>{title}{note}</h2>'
-                    f"{bar_chart(points, targets.get(key), key, title, unit=unit)}</section>"
+                if len(earlier) == len(points):
+                    ghost = [v for _, v in earlier]
+            goal = goals["step_goal"] if pick == "steps" else None
+            parts.append(
+                '<section class="card">'
+                + charts.bar_chart(
+                    points,
+                    kind=chart.kind,
+                    title=f"{chart.label} per {unit} {range_words(span, first)}",
+                    value_text=chart.text,
+                    summary=f"Avg {chart.text(avg)} a day"
+                    + delta_chip(logic.change_percent(avg, before), words, "up"),
+                    unit=unit,
+                    goal=goal,
+                    goal_label="goal",
+                    average=avg,
+                    ghost=ghost,
+                    partial_last=True,
+                    ref_text=lambda v: num(v, chart.places),
+                    heading=chart.label
+                    + ("" if unit == "day" else f" <small>a day, by {unit}</small>"),
                 )
-            rows = []
-            here = f"{NUTRITION_PAGE}?days={span}"
-            for d in reversed(days):
-                n = by_day.get(d)
-                if n is None:
-                    continue
-                shown = logic.round_for_display(n)
-                rows.append(
-                    f'<li><a class="row" href="{PREFIX}?date={d.isoformat()}">'
-                    f"<span>{e(day_title(d, last))}</span>"
-                    f'<span><span class="kcal">{num(shown["kcal"])}</span>'
-                    f' <span class="small muted">{macros_line(shown)}</span></span></a>'
-                    f'<a class="small bd" href="{e(breakdown_url(d, back=here))}">'
-                    f"Breakdown&nbsp;&rsaquo;</a></li>"
+                + "</section>"
+            )
+        else:
+            parts.append(
+                f'<section class="card empty"><p>No {e(chart.label.lower())} in this period.'
+                "</p></section>"
+            )
+        if done:
+            parts.append(
+                '<section class="group"><h2>Averages</h2><div class="body">'
+                + activity_tiles(logic.activity_average(done))
+                + "</div></section>"
+            )
+        if by_day:
+            # Years of an imported export would be thousands of rows: the latest 100 days
+            recent = list(reversed(by_day))[:ACTIVITY_LIST_MAX]
+            items = "".join(
+                activity_row(
+                    d, by_day[d], last, f"{ACTIVITY_PAGE}/day?{urlencode({'date': d.isoformat()})}"
+                )
+                for d in recent
+            )
+            more = (
+                f'<p class="small muted">The latest {ACTIVITY_LIST_MAX} days with activity.</p>'
+                if len(by_day) > ACTIVITY_LIST_MAX
+                else ""
+            )
+            parts.append(
+                f'<section class="group"><h2>Days</h2><ul class="days">{items}</ul>{more}</section>'
+            )
+        else:
+            parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
+        return progress_page(request, "Activity", "".join(parts), "steps")
+
+    def activity_tiles(values: Mapping[str, float], so_far: str = "") -> str:
+        """Active and resting energy, exercise and miles, and their sum burned."""
+        burned = logic.burned_kcal(values)
+        miles = num(logic.miles(values["distance_m"]), 1) if "distance_m" in values else num(None)
+        return tiles(
+            tile(num(values.get("active_kcal")), "Active kcal", tone="burn"),
+            tile(num(values.get("resting_kcal")), "Resting kcal", tone="burn"),
+            tile(num(values.get("exercise_min")), "Exercise min", tone="exercise"),
+            tile(miles, "Miles", tone="steps"),
+        ) + (
+            f'<p class="small">{num(burned)}{NBSP}kcal burned{so_far}'
+            ' <span class="muted">(active + resting)</span></p>'
+            if burned is not None
+            else ""
+        )
+
+    @server.custom_route(ACTIVITY_PAGE + "/day", methods=["GET"])
+    async def activity_day(request: Request) -> Response:
+        """One day's activity, all its numbers: a sheet over Activity (?part=1), else a page."""
+        if not signed_in(request):
+            return to_login(request)
+        try:
+            day = parse_day(request.query_params.get("date"))
+        except ValueError:
+            return go(ACTIVITY_PAGE)
+        with connect(request) as conn:
+            values = logic.activity_by_day(store.activity_between(conn, *bounds(day, day)), tz)
+        found = values.get(day, {})
+        last = today()
+        rows = [
+            ("Steps", num(found.get("steps"))),
+            ("Active energy", f"{num(found.get('active_kcal'))}{NBSP}kcal"),
+            ("Resting energy", f"{num(found.get('resting_kcal'))}{NBSP}kcal"),
+            ("Burned", f"{num(logic.burned_kcal(found))}{NBSP}kcal"),
+            ("Exercise", f"{num(found.get('exercise_min'))}{NBSP}min"),
+            (
+                "Distance",
+                f"{num(logic.miles(found['distance_m']), 1)}{NBSP}mi"
+                if "distance_m" in found
+                else "&ndash;",
+            ),
+        ]
+        if "flights" in found:
+            rows.append(("Flights climbed", num(found["flights"])))
+        listing = "".join(
+            f'<li class="row"><span>{label}</span><span class="kcal">{value}</span></li>'
+            for label, value in rows
+        )
+        title = day_title(day, last) + (" so far" if day == last else "")
+        sheet = (
+            f'<h2 id="day-title">{e(title)}</h2><div class="group"><ul class="facts-list">'
+            f"{listing}</ul></div>"
+            f'<p class="small"><a href="{day_url(day)}">Food that day &rsaquo;</a></p>'
+        )
+        if request.query_params.get("part"):
+            return HTMLResponse(sheet, headers=SECURITY_HEADERS)
+        return progress_page(
+            request,
+            "Activity",
+            f'<p><a href="{ACTIVITY_PAGE}">&lsaquo; Activity</a></p>'
+            f'<section class="sheet-page">{sheet}</section>',
+            "steps",
+        )
+
+    @server.custom_route(TRAINING_PAGE, methods=["GET"])
+    async def workouts_view(request: Request) -> Response:
+        """Training (was Workouts): workouts, volume, length and sessions a week against the
+        period before; weekly volume with the previous period as ghosts; a heat strip of
+        training days; personal bests by estimated one-rep max; and the workouts by week.
+        The Hevy import lives in You > Integrations (#105)."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        span = pick_range(params.get("days"), 30)
+        with connect(request) as conn:
+            summary = store.workouts_summary(conn)
+            first, last = range_days(span, store.first_workout_at(conn))
+            everything = store.workouts_between(conn, "0", bounds(last, last)[1])
+            sets = store.workout_sets(conn, (r["id"] for r in everything))
+        prev = previous(span, first, last)
+
+        def day_of(r) -> date:
+            return logic.local_date(r["started_at"], tz)
+
+        rows = [r for r in everything if first <= day_of(r) <= last]
+        earlier = [r for r in everything if prev and prev[0] <= day_of(r) <= prev[1]]
+        words = prev_words(span) if prev else ""
+
+        banner = ""
+        if params.get("removed"):
+            banner = toast("<span>Workout deleted.</span>", "status")
+        parts = [*progress_head("training", TRAINING_PAGE, span), banner]
+        if summary["count"]:
+            parts.append(
+                fresh_tag(
+                    f"{INTEGRATIONS}#hevy",
+                    "dumbbell",
+                    "Hevy",
+                    # Hevy has no API, so this is as fresh as the last export brought in
+                    f"latest workout {short_date(logic.local_date(summary['latest'], tz), last)}",
+                )
+            )
+        if not summary["count"]:
+            parts.append(
+                '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
+                f'<a href="{INTEGRATIONS}#hevy">Import your Hevy export</a> to bring in your'
+                " history.</p></section>"
+            )
+            return progress_page(request, "Training", "".join(parts), "train")
+
+        def volume(rs) -> float:
+            return sum(as_lb(logic.workout_volume_kg(sets[r["id"]])) for r in rs)
+
+        def minutes(rs) -> float | None:
+            spans = [
+                (logic.parse_utc(r["ended_at"]) - logic.parse_utc(r["started_at"])).total_seconds()
+                / 60
+                for r in rs
+                if r["ended_at"]
+            ]
+            return sum(spans) / len(spans) if spans else None
+
+        days = logic.date_range(first, last)
+        weeks = max(len(days) / 7, 1)
+        prior = bool(prev)
+        parts.append(
+            tiles(
+                tile(
+                    f"{len(rows)}",
+                    "Workouts",
+                    delta_chip(
+                        logic.change_percent(len(rows), len(earlier) if prior else None),
+                        words,
+                        "up",
+                    ),
+                    tone="train",
+                ),
+                tile(
+                    f"{num(volume(rows))}{NBSP}lb",
+                    "Volume",
+                    delta_chip(
+                        logic.change_percent(volume(rows), volume(earlier) if prior else None),
+                        words,
+                    ),
+                    tone="train",
+                ),
+                tile(
+                    f"{num(minutes(rows))}{NBSP}min",
+                    "Average length",
+                    delta_chip(logic.change_percent(minutes(rows), minutes(earlier)), words),
+                    tone="train",
+                ),
+                tile(
+                    num(len(rows) / weeks, 1),
+                    "A week",
+                    "sessions" + (f" · {num(len(earlier) / weeks, 1)} before" if prior else ""),
+                    tone="train",
+                ),
+            )
+        )
+
+        if rows:
+            unit = "week" if len(days) <= 400 else "month"
+            per_day: dict[date, float] = {}
+            for r in everything:
+                per_day[day_of(r)] = per_day.get(day_of(r), 0.0) + as_lb(
+                    logic.workout_volume_kg(sets[r["id"]])
+                )
+            points = logic.bucket_days(((d, per_day.get(d)) for d in days), unit, "sum")
+            ghost = None
+            if prev:
+                back = logic.bucket_days(
+                    ((d, per_day.get(d)) for d in logic.date_range(*prev)), unit, "sum"
+                )
+                if len(back) == len(points):
+                    ghost = [v for _, v in back]
+            parts.append(
+                '<section class="card">'
+                + charts.bar_chart(
+                    points,
+                    kind="train",
+                    title=f"Volume per {unit} {range_words(span, first)}",
+                    value_text=lambda v: f"{num(v)}{NBSP}lb",
+                    summary=f"{num(volume(rows))}{NBSP}lb lifted {e(range_words(span, first))}",
+                    unit=unit,
+                    per_day=False,
+                    ghost=ghost,
+                    partial_last=True,
+                    heading=f"Volume <small>by {unit}</small>",
+                )
+                + "</section>"
+            )
+        strip = strip_days(first, last)
+        trained = {d: v or 1.0 for d, v in per_day.items()} if rows else {}
+        in_strip = sum(1 for d in strip if d in trained)
+        parts.append(
+            '<section class="card"><div class="chart-head"><h2>Training days</h2></div>'
+            f'<p class="inspect">{in_strip} of the last {len(strip)} days · darker is more'
+            " volume</p>"
+            + charts.heat_strip(trained, strip, "train", f"Training days, last {len(strip)} days")
+            + "</section>"
+        )
+
+        bests = logic.exercise_bests(
+            (day_of(r), r["id"], sets[r["id"]]) for r in reversed(everything)
+        )
+        if bests:
+            items = []
+            for b in bests[:8]:
+                new = b.day >= first and b.beat_kg is not None
+                badge = '<span class="badge pr">PR</span> ' if new else ""
+                items.append(
+                    f'<a class="item" href="{WORKOUTS}/{b.workout_id}"><span class="grow">'
+                    f"{badge}{e(b.exercise)}<small>{lb_num(as_lb(b.weight_kg))} &times;"
+                    f" {b.reps} · {e(short_date(b.day, last))}</small></span>"
+                    f'<span class="kcal">{num(as_lb(b.e1rm_kg))}<small> lb 1RM</small></span>'
+                    f"{icon('chevron-right', 'icon chev')}</a>"
                 )
             parts.append(
-                f'<section class="card"><h2>Days</h2><ul class="days">{"".join(rows)}'
-                "</ul></section>"
+                '<section class="group"><h2>Personal bests</h2>'
+                + "".join(items)
+                + '<p class="muted small body">Best set by estimated one-rep max (weight'
+                " &times; (1 + reps / 30)), newest first. PR marks a record set in this"
+                " period.</p></section>"
             )
-        return progress_page(request, "Nutrition", "".join(parts))
+
+        if rows:
+            this_week = last - timedelta(days=last.weekday())
+            by_week: dict[date, list] = {}
+            for r in rows:
+                d = day_of(r)
+                by_week.setdefault(d - timedelta(days=d.weekday()), []).append(r)
+            hint = (
+                '<p class="small muted js-only hint">Tap a workout to see its sets. Swipe'
+                " left to delete.</p>"
+            )
+            groups = []
+            for monday, rs in by_week.items():
+                if monday == this_week:
+                    name = "This week"
+                elif monday == this_week - timedelta(days=7):
+                    name = "Last week"
+                else:
+                    name = f"Week of {monday.strftime('%b')} {monday.day}"
+                groups.append(
+                    f'<section class="card"><h2>{name} <small class="muted">{len(rs)}'
+                    f" workout{'' if len(rs) == 1 else 's'} · {num(volume(rs))}{NBSP}lb"
+                    '</small></h2><ul class="entries">'
+                    + "".join(workout_item(r, sets[r["id"]], tz) for r in rs)
+                    + "</ul></section>"
+                )
+            parts.append(hint + "".join(groups))
+        else:
+            parts.append('<section class="card empty"><p>No workouts in this period.</p></section>')
+        return progress_page(request, "Training", "".join(parts), "train")
 
     # --- You (#105): goals, integrations, appearance, account ---
 
@@ -5469,9 +6149,18 @@ def add_routes(
         last = today()
         with connect(request) as conn:
             targets = store.get_targets(conn)
+            body = store.get_body_goals(conn)
             synced = store.last_activity_sync(conn)
             workouts = store.workouts_summary(conn)
             name = users.name_of(conn, store.user_of(conn)) if provider is not None else None
+        body_goal = " · ".join(
+            bit
+            for bit in (
+                f"Goal {lb_text(body['goal_weight_kg'])}" if body["goal_weight_kg"] else "",
+                f"{num(body['step_goal'])} steps a day" if body["step_goal"] else "",
+            )
+            if bit
+        )
         if targets["kcal"]:
             goal = f"{num(targets['kcal'])} kcal" + "".join(
                 f" · {letter} {num(targets[k])} g" for k, _, letter in MACROS if targets[k]
@@ -5507,8 +6196,10 @@ def add_routes(
             else '<div class="body"><p class="muted small">Local mode: this dashboard needs no'
             " sign-in.</p></div>"
         )
+        saved = request.query_params.get("saved") == "body"
         body = (
             page_head("You")
+            + (toast("<span>Weight and step goals saved.</span>", "status") if saved else "")
             + '<section class="group"><h2>Goals</h2>'
             + item(
                 f"{PREFIX}/targets?{urlencode({'back': YOU})}",
@@ -5516,6 +6207,13 @@ def add_routes(
                 "kcal",
                 "Daily goals",
                 e(goal),
+            )
+            + item(
+                BODY_GOALS,
+                "scale",
+                "steps",
+                "Weight and steps",
+                e(body_goal or "Optional: a goal weight and a step goal"),
             )
             + "</section>"
             + '<section class="group"><h2>Integrations</h2>'
@@ -5528,6 +6226,69 @@ def add_routes(
             + f'<p class="muted small center">Chomp {e(__version__)}</p>'
         )
         return you_page(request, "You", body)
+
+    @server.custom_route(BODY_GOALS, methods=["GET", "POST"])
+    async def body_goals(request: Request) -> Response:
+        """Goal weight and daily step goal (#105), both optional: the dashed lines on Weight
+        and Activity. A blank box clears that goal."""
+        error = ""
+        if request.method == "POST":
+            if (no := refused(request, "Change goals")) is not None:
+                return no
+            form = await request.form()
+            typed = {k: str(form.get(k, "")).replace(",", "").strip()[:12] for k in ("lb", "steps")}
+            values: dict[str, float | None] = {}
+            try:
+                values["goal_weight_kg"] = (
+                    logic.to_kg(float(typed["lb"]), "lb") if typed["lb"] else None
+                )
+            except ValueError:
+                error = "Goal weight must be a number of pounds, like 170."
+            try:
+                steps = float(typed["steps"]) if typed["steps"] else None
+                if steps is not None and not 0 < steps <= 200_000:
+                    raise ValueError(steps)
+                values["step_goal"] = steps
+            except ValueError:
+                error = error or "Step goal must be a number of steps from 1 to 200,000."
+            if not error:
+                with connect(request) as conn:
+                    store.set_body_goals(conn, values)
+                log.info("dashboard: updated body goals")
+                return go(f"{YOU}?saved=body")
+        else:
+            if not signed_in(request):
+                return to_login(request)
+            with connect(request) as conn:
+                goals = store.get_body_goals(conn)
+            typed = {
+                "lb": f"{logic.weight_out(goals['goal_weight_kg'])['lb']:.1f}"
+                if goals["goal_weight_kg"]
+                else "",
+                "steps": f"{goals['step_goal']:.0f}" if goals["step_goal"] else "",
+            }
+        problem = f'<p class="error" role="alert">{e(error)}</p>' if error else ""
+        body = (
+            f'<p><a href="{YOU}">&lsaquo; You</a></p>'
+            + page_head("Weight and steps")
+            + f'<form class="card stack" method="post" action="{BODY_GOALS}">{problem}'
+            '<label>Goal weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
+            f' placeholder="170" value="{e(typed["lb"])}"></label>'
+            '<label>Daily step goal<input name="steps" inputmode="numeric" autocomplete="off"'
+            f' placeholder="10000" value="{e(typed["steps"])}"></label>'
+            '<p class="muted small">Both are optional: the goal weight is a dashed line on'
+            " Weight, the step goal one on Activity. Leave a box empty for no goal.</p>"
+            '<button type="submit">Save</button></form>'
+        )
+        return render(
+            "Weight and steps",
+            body,
+            "you",
+            signed_in=provider is not None,
+            user=account(request),
+            status=400 if error else 200,
+            hue="you",
+        )
 
     @server.custom_route(INTEGRATIONS, methods=["GET"])
     async def integrations(request: Request) -> Response:

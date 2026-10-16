@@ -48,9 +48,11 @@ def test_log_sheet_and_its_page(http):
     assert 'href="/app/add?date=2026-10-01"' in day
 
 
-def test_progress_opens_nutrition_and_old_addresses_move(http):
+def test_progress_opens_its_overview_and_old_addresses_move(http):
     sign_in(http)
-    assert http.get("/app/progress").headers["location"] == "/app/progress/nutrition"
+    page = http.get("/app/progress").text
+    assert 'href="/app/progress" aria-current=page>Overview<' in page
+    assert "Nothing to show yet." in page and 'aria-label="Time range"' in page
     for old, new in (
         ("/app/history?days=30", "/app/progress/nutrition?days=30"),
         ("/app/activity?days=7", "/app/progress/activity?days=7"),
@@ -121,3 +123,76 @@ def test_saved_meal_from_a_past_day_logs_to_that_day(http, conn):
     assert 'name="date" value="2026-10-01"' in page and "Today after this" not in page
     page = http.get(f"/app/saved-meals/{template_id}", params={"date": "bad"}).text
     assert "Today after this" in page  # a bad date falls back to today
+
+
+def test_progress_overview_cards(http, conn):
+    from datetime import UTC, datetime, timedelta
+
+    from chomp import logic, store
+
+    def ago(n: int) -> str:
+        return logic.format_utc(datetime.now(UTC) - timedelta(days=n))
+
+    store.add_weight(conn, ago(20), logic.to_kg(184, "lb"), "app")
+    store.add_weight(conn, ago(2), logic.to_kg(182, "lb"), "app")
+    store.add_activity(
+        conn,
+        [
+            (
+                "steps",
+                "day",
+                logic.local_day_bounds(
+                    logic.local_date(ago(n), "America/New_York"), "America/New_York"
+                )[0],
+                8000 + n,
+            )
+            for n in (1, 2, 3)
+        ],
+    )
+    sign_in(http)
+    page = http.get("/app/progress").text.replace("\xa0", " ")
+    assert 'class="ov-card tone-protein" href="/app/progress/weight?days=30"' in page
+    assert "lb trend" in page and "over 30 days" in page
+    assert 'href="/app/progress/activity?days=30"' in page and "steps a day" in page
+    assert "Energy balance" not in page  # no food logged to weigh against
+    assert "Nothing to show yet." not in page
+    assert 'href="/app/progress?days=7"' in page
+
+
+def test_weight_and_step_goals_on_you(http, conn):
+    from chomp import store
+
+    store.set_targets(conn, {"kcal": 2200})
+    sign_in(http)
+    page = http.get("/app/you").text
+    assert 'href="/app/you/body-goals"' in page and "Optional: a goal weight" in page
+    assert 'name="lb"' in http.get("/app/you/body-goals").text
+    origin = test_web.ORIGIN
+    r = http.post("/app/you/body-goals", data={"lb": "170", "steps": "9,000"}, headers=origin)
+    assert r.headers["location"] == "/app/you?saved=body"
+    goals = store.get_body_goals(conn)
+    assert round(goals["goal_weight_kg"], 2) == 77.11 and goals["step_goal"] == 9000
+    assert store.get_targets(conn)["kcal"] == 2200  # the macro goals stay put
+    page = http.get("/app/you?saved=body").text.replace("\xa0", " ")
+    assert "Weight and step goals saved." in page and "Goal 170.0 lb · 9,000 steps a day" in page
+    r = http.post("/app/you/body-goals", data={"lb": "abc", "steps": ""}, headers=origin)
+    assert r.status_code == 400 and "Goal weight must be a number" in r.text
+    r = http.post("/app/you/body-goals", data={"lb": "", "steps": "0"}, headers=origin)
+    assert r.status_code == 400 and "Step goal must be" in r.text
+    http.post("/app/you/body-goals", data={"lb": "", "steps": ""}, headers=origin)
+    assert store.get_body_goals(conn) == {"goal_weight_kg": None, "step_goal": None}
+    assert http.post("/app/you/body-goals", data={"lb": "170"}).status_code == 403
+
+
+def test_all_time_overview_starts_at_the_first_weigh_in(http, conn):
+    from datetime import UTC, datetime, timedelta
+
+    from chomp import logic, store
+
+    old = logic.format_utc(datetime.now(UTC) - timedelta(days=400))
+    store.add_weight(conn, old, logic.to_kg(190, "lb"), "app")
+    store.add_weight(conn, logic.format_utc(datetime.now(UTC)), logic.to_kg(180, "lb"), "app")
+    sign_in(http)
+    page = http.get("/app/progress?days=0").text.replace("\xa0", " ")
+    first = logic.local_date(old, "America/New_York")
+    assert f"since {first.strftime('%b')} {first.year}" in page and "&minus;" in page

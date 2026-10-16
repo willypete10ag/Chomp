@@ -38,7 +38,7 @@ for when not published). It is saved unconfirmed unless I approve the numbers;
 
 ### Dashboard
 `/app` (`chomp/web.py`) is a server-rendered web dashboard on the same app as `/mcp`. Its shell
-(#105): four tabs, Today, Progress (`/app/progress/{nutrition,weight,activity,training}`, pills
+(#105): four tabs, Today, Progress (`/app/progress` and `/app/progress/{nutrition,weight,activity,training}`, pills
 between them and one range control, 7D/30D/60D/1Y/All via `?days=` with 0 for all time, the
 bar charts grouped by week past 60 days and by month past 400, `logic.chart_unit`), Foods and
 You (`/app/you`: goals, integrations at `/app/you/integrations` with the Apple Health and Hevy
@@ -47,7 +47,22 @@ and applied before paint by `static/theme.js`, and Sign out), plus a raised Log 
 the middle that opens `/app/actions` as a bottom sheet (`?part=1` is the sheet's fragment; it
 is a page without the script). Past 64rem the tabs become a left sidebar. The old
 `/app/history`, `/app/activity`, `/app/workouts` and GET `/app/weight` 301 to their Progress
-pages. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
+pages.
+Charts (#105, `chomp/charts.py`) are server-drawn SVG with no chart library: bars (a missing day
+is a gap, today hatched as "so far"; a dashed goal, a dotted average, a 7-day rolling average
+line, and the previous period as outlined ghost bars behind a Compare chip), lines (the weight
+trend over its readings, energy eaten against burned), sparklines and a training heat strip.
+Each sits in a figure with an inspector line above it and a "Show as table" fold, and carries
+its points as JSON in `data-points`; `app.js` scrubs them (press and drag, arrow keys), pins a
+point on release with a link to its day, and keeps the scroll position across range changes.
+Trends come from `logic.py`: `weight_trend` (an exponential average over about 10 days that
+steps further after a gap), `weekly_rate`, `previous_period` and `change_percent` for "vs prev
+30D" delta chips (green or amber only where up is plainly good; weight and volume stay
+neutral), `rolling_average`, `bucket_days(how="sum")` for weekly volume, and `exercise_bests`
+(best set per exercise by Epley estimated one-rep max, up to 12 reps; a record has to beat, not
+tie). Optional body goals (migration 0017, `store.get_body_goals`, set at `/app/you/body-goals`)
+draw the goal weight on Weight and the step goal on Activity; they aren't macro targets, so the
+tools don't report them. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
 Screens: Today
 (any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
 day's title opens as a sheet, with a dot on logged days and a star on days within 10% of every
@@ -58,18 +73,30 @@ time; tapping the calories or a macro opens that day's Breakdown at `/app/breakd
 protein/carbs/fat calorie split, calories by meal, the top 3 foods per macro, and the full
 nutrition facts, where tapping a nutrient lists the foods that gave the most; a food with no
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
-out), Nutrition (averages and inline-SVG charts; each day links to its Breakdown),
-Weight (#94, `/app/progress/weight`: the latest weigh-in in lb, the change over the range, an inline-SVG line of each weighed day's last weigh-in, an Add a weigh-in
-form (lb, time, date), and every weigh-in in the range with where it came from, swiped left to
-delete after asking; a minimal page, expected to move in a wider health redesign),
-Training (#94, `/app/progress/training`: workouts imported from Hevy over the range with their
-count and pounds lifted, the latest workout's date, and each workout's title, date, length, exercises and
-volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
+out), the Progress overview (`/app/progress`, 30D by default: energy balance on full days with
+both food and burned energy, the weight trend and its weekly rate, steps a day against the
+period before, workouts a week with a heat strip, and calories and protein against the goals;
+each card opens its screen), Nutrition (tiles for calories and protein a day against the goals
+and the period before, days on target and days logged, averaged over full days; calories and
+protein charts with goal lines, the rolling average and Compare; energy balance when activity
+is here; each day with a slim macro bar links to that day and its Breakdown),
+Weight (#94, `/app/progress/weight`: the trend weight in lb as the hero with the latest reading,
+the change over the range and a week, the distance to the goal weight; each day's reading as a
+dot under the trend line; lowest, highest, average and the average against the period before;
+the weigh-ins by month with where they came from, swiped left to delete after asking; and an
+Add a weigh-in form (lb, time, date), which the + in the header jumps to),
+Training (#94, `/app/progress/training`: workouts, volume, average length and sessions a week
+against the period before, volume by week (by month past 400 days) with ghosts, a heat strip of
+at least 13 weeks, personal bests newest first with a PR mark on records set in the range, and
+the range's workouts grouped by week with their count and volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
 F and D, and RPE; swipe left deletes after asking),
 Activity (#94, `/app/progress/activity`, whose range control starts with Today (`?days=1`, the default): today's steps (0 until the phone sends some), active and resting energy,
 exercise minutes and miles (flights are stored but not shown), calories burned so far when resting energy is known, and when the phone
-last sent; on a longer range the same tiles show daily averages over its full days, then an inline-SVG bar of steps per day over the range (the week's bars show
-their counts, longer ranges a dashed daily-average line); and each day's numbers, newest first (the latest 100); the Hevy and Health import forms turn into a spinner with a seconds
+last sent, and the share of the step goal; on a longer range a switcher picks Steps, Energy (active kcal), Exercise or Distance:
+that metric's daily average over the full days against the period before, its best day and
+days with data, its bars with the average, the step goal and Compare, then every metric's
+averages; and each day, newest first (the latest 100), whose row opens all its numbers in a
+sheet (`/app/progress/activity/day?date=`, `?part=1` for the sheet); the Hevy and Health import forms turn into a spinner with a seconds
 count while they upload)
 and Foods (one search over saved
 meals and used foods, most logged first, with a per 100 g / per serving menu and Sort by
