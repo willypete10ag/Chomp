@@ -32,7 +32,7 @@ HEAD = b"""<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def record(kind, value, start, unit="count", source="Will's iPhone"):
+def record(kind, value, start, unit="count", source="Alex's iPhone"):
     return (
         f' <Record type="HKQuantityTypeIdentifier{kind}" sourceName="{source}" unit="{unit}"'
         f' creationDate="{start}" startDate="{start}" endDate="{start}" value="{value}">\n'
@@ -51,7 +51,7 @@ XML = export_xml(
     # The same walk counted by the iPhone and the Watch: the day keeps the larger
     record("StepCount", "4000", "2026-10-12 08:00:00 -0400"),
     record("StepCount", "3000", "2026-10-12 18:00:00 -0400"),
-    record("StepCount", "7500", "2026-10-12 08:00:00 -0400", source="Will's Apple Watch"),
+    record("StepCount", "7500", "2026-10-12 08:00:00 -0400", source="Alex's Apple Watch"),
     # Late evening in New York is the next day in UTC, but stays on its local day
     record("StepCount", "400", "2026-10-12 23:30:00 -0400"),
     record("ActiveEnergyBurned", "412.5", "2026-10-12 19:00:00 -0400", "Cal"),

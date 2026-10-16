@@ -44,7 +44,8 @@ Dockerfile         # slim, non-root (uid 10001)
 docker-compose.yml # chomp + nightly backup + cloudflared
 .env.example       # FDC_API_KEY, PUBLIC_URL + auth secrets, TUNNEL_TOKEN, backups, DB_PATH, PHOTOS_DIR, TZ
 .gitignore         # .env, *.db*, .venv/, __pycache__/
-README.md
+README.md          # visitor-facing overview; keep it short
+docs/              # user guides: setup, people, apple-health, hevy, backups, development, features
 ```
 
 ## Rules
@@ -55,10 +56,10 @@ README.md
 - Secrets only via env. Nothing sensitive in logs.
 
 ## Git and progress tracking
-- Repo: private GitHub repo `Chomp`. Open issues are the source of truth for what's next (milestones M0–M4 are done; `later` marks parked ideas).
+- Repo: public GitHub repo `Chomp` (MIT). Open issues are the source of truth for what's next (milestones M0–M4 are done; `later` marks parked ideas).
 - At the start of a session, list the open issues and confirm which one we're working on.
 - Branch per issue, and every change goes through a PR to `main` (never stacked on another PR's branch). Commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, with the issue number (`feat: add search_food (#4)`). Close issues via `Closes #N`.
-- Update ARCHITECTURE.md or SCHEMA.sql in the same commit as the change that makes them stale.
+- Update ARCHITECTURE.md, SCHEMA.sql or the guide in docs/ in the same commit as the change that makes them stale.
 - Changes to locked decisions (stack, source chain, hosting, auth) get a `decision` issue first.
 - Never commit `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `.venv/`. Check `git status` before committing.
 

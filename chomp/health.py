@@ -72,7 +72,7 @@ ACTIVITY_METRICS = {
     "flights_climbed": "flights",
     "flights": "flights",
 }
-# A Shortcut's flat fields (README, step 9): the day's totals so far for "date", and the
+# A Shortcut's flat fields (docs/apple-health.md): the day's totals so far for "date", and the
 # latest weigh-in taken at "weight_date"
 FLAT_ACTIVITY = {
     "steps": ("steps", None),

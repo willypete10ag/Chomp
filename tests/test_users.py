@@ -179,10 +179,10 @@ def test_cli_adds_lists_and_renames_users(settings, conn, monkeypatch, capsys):
     monkeypatch.setattr("chomp.config.Settings.from_env", lambda: settings)
     monkeypatch.setattr("sys.stdin", io.StringIO(HER_PASSWORD + "\n"))
     assert cli.main(["user", "add", "Sam"]) == 0
-    assert cli.main(["user", "rename", "owner", "Will"]) == 0
+    assert cli.main(["user", "rename", "owner", "Alex"]) == 0
     assert cli.main(["user", "list"]) == 0
     out = capsys.readouterr().out
-    assert "Will: 0 meals (owner" in out and "Sam: 0 meals" in out
+    assert "Alex: 0 meals (owner" in out and "Sam: 0 meals" in out
     assert cli.main(["user", "rename", "nobody", "x"]) == 1
 
 

@@ -18,7 +18,7 @@ shows only their log. The cookie holds a random token; only its SHA-256 hash is 
 (web_sessions). POSTs must come from the dashboard's own origin. In local-only mode the
 dashboard needs no sign-in, like /mcp, and shows the owner's log.
 
-Cloudflare Access may sit in front of /app (README, "Dashboard"), but never in front of /mcp
+Cloudflare Access may sit in front of /app (docs/setup.md, step 7), but never in front of /mcp
 or the OAuth routes: Claude's servers can't complete a browser login.
 """
 
@@ -1960,7 +1960,7 @@ PROBLEMS = {
     "health": "That file isn't Apple Health's export. In Health: tap your picture > Export All"
     " Health Data, then pick export.zip.",
     "health_big": "That export is over 95 MB, too big to send through the browser. Import it"
-    " on the server instead (README, step 9).",
+    " on the server instead (docs/apple-health.md).",
 }
 PHOTO_TOASTS = {"saved": "Photo saved.", "removed": "Photo removed."}
 
@@ -3441,7 +3441,7 @@ def add_routes(
     async def breakdown(request: Request) -> Response:
         """A day's nutrients: the macro split, calories by meal, the foods that gave the most
         of each, and the full nutrition facts. A food with no value for a nutrient counts as
-        none of it (Will's call, #63); a nutrient no food that day reports isn't shown."""
+        none of it (decided on #63); a nutrient no food that day reports isn't shown."""
         if not signed_in(request):
             return to_login(request)
         now = today()
@@ -7160,7 +7160,7 @@ def add_routes(
         )
 
         if span == 1:
-            # Today is today (Will, #105): nothing sent yet reads as 0, not as yesterday
+            # Today is today (#105): nothing sent yet reads as 0, not as yesterday
             values = dict.fromkeys(SUMMARY_METRICS, 0) | by_day.get(last, {})
             step_goal = goals["step_goal"]
             goal_line = (
@@ -8037,7 +8037,7 @@ def add_routes(
             )
         else:
             get_it = (
-                "<li>Build the Send to Chomp Shortcut (README, step 9) and paste the token"
+                "<li>Build the Send to Chomp Shortcut (docs/apple-health.md) and paste the token"
                 " in its header.</li>"
             )
         return (
@@ -8064,8 +8064,9 @@ def add_routes(
             '<details><summary class="small muted">Share your Shortcut</summary>'
             f'<form class="stack" method="post" action="{INTEGRATIONS}/shortcut-link">'
             '<p class="small muted">Share your Send to Chomp Shortcut with its token as an'
-            ' Import Question (README, "Share the Shortcut") and paste its iCloud link here.'
-            " Connect iPhone then offers it to everyone. Leave it empty to remove it.</p>"
+            ' Import Question (docs/apple-health.md, "Share the Shortcut") and paste its iCloud'
+            " link here. Connect iPhone then offers it to everyone. Leave it empty to remove"
+            " it.</p>"
             f'<input name="url" type="url" inputmode="url" autocomplete="off" value="{e(link)}"'
             ' placeholder="https://www.icloud.com/shortcuts/..." aria-label="Shortcut link">'
             '<button type="submit">Save link</button></form></details>'
@@ -8167,7 +8168,7 @@ def add_routes(
             f"Your phone last sent data {sent_text(synced, last)}."
             if synced
             else "Your phone hasn't sent anything yet. The Send to Chomp shortcut sends weigh-ins"
-            " and each day's activity (README, step 9)."
+            " and each day's activity (docs/apple-health.md)."
         )
         hevy_status = (
             f"{workouts['count']} workouts in Chomp, the latest on"
@@ -8219,7 +8220,7 @@ def add_routes(
             parts.append(
                 f'<section class="card" id="claude"><h2>{icon("sparkles")} Claude</h2>'
                 '<p class="small muted">Add this address as a custom connector in Claude'
-                " (README, step 6) to log and look things up from a chat.</p>"
+                " (docs/setup.md, step 6) to log and look things up from a chat.</p>"
                 f'<input readonly value="{e(settings.public_url.rstrip("/"))}/mcp"'
                 ' aria-label="Connector address"></section>'
             )
@@ -8237,7 +8238,7 @@ def add_routes(
             parts.append(
                 f'<section class="card" id="chatgpt"><h2>{icon("bot")} ChatGPT</h2>'
                 '<p class="small muted">Add Chomp as a custom MCP server in ChatGPT'
-                ' (README, "Add the ChatGPT connector") to log and look things up from a'
+                ' (docs/setup.md, "Add the ChatGPT connector") to log and look things up from a'
                 " chat.</p>"
                 f'<input readonly value="{e(settings.public_url.rstrip("/"))}/mcp"'
                 ' aria-label="ChatGPT connector address">'

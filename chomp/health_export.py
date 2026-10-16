@@ -2,7 +2,7 @@
 Health app: your picture > Export All Health Data gives export.zip, with
 apple_health_export/export.xml inside: one <Record> per sample,
 
-    <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Will's Apple Watch"
+    <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Alex's Apple Watch"
             unit="count" startDate="2026-10-13 07:02:11 -0400" ... value="412"/>
 
 Weigh-ins are kept as they are. Activity samples are added up into local days, per source:
