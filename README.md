@@ -227,20 +227,33 @@ and the connector would stop working.
 
 Each person gets their own meal log, targets, portions and saved meals; the food list is
 shared. You are the owner (everything logged before this existed is yours) and keep signing
-in with `AUTH_PASSWORD`. Add someone else on the server, then type their password twice:
+in with `AUTH_PASSWORD`.
+
+On the dashboard, go to **You › People**, type their name and tap **Add person**. Chomp shows
+an invite link with a **Copy** button: send it to them. It works once, for 7 days; opening it
+lets them pick their own password (12+ characters) and signs them in, so you never see it. If
+the link gets lost or they forget their password, open them on People and tap **New invite
+link** or **Reset password** (their old password works until the new link is used). People is
+also where you rename someone or remove them with their whole log (rename yourself with
+`chomp user rename owner Will` on the server). If Cloudflare Access
+covers `/app` (step 7), add their email to its policy first, or the link stops at Access.
+
+The same from the server, if you prefer:
 
 ```bash
 cd ~/chomp
-docker compose exec chomp chomp user add Sam
+docker compose exec chomp chomp user add Sam              # asks for their password
 docker compose exec chomp chomp user rename owner Will   # optional: your name on the dashboard
 docker compose exec chomp chomp user list
 ```
 
-Their password (12+ characters) must differ from everyone else's: Chomp tells people apart by
-password alone, so the sign-in pages stay a single box. Then, in **their own** Claude account,
+Their password must differ from everyone else's: Chomp tells people apart by password alone,
+so the sign-in pages stay a single box. Then, in **their own** Claude account,
 they add the connector exactly as in step 6 (same URL, same `OAUTH_CLIENT_ID` and
 `OAUTH_CLIENT_SECRET`) and type **their** password on the "Connect Claude to Chomp" page. The
-dashboard is the same address; their password opens their log. To change someone's password
+dashboard is the same address; their password opens their log. Then, signed in as
+themselves, they connect their iPhone (step 9) and Hevy (step 10) on **You › Integrations**,
+and can bring in their Health history there too. To change someone's password from the server
 (it signs them out everywhere): `docker compose exec chomp chomp user password Sam`. The
 `BEARER_TOKEN` header, if you use it, is always the owner's.
 
@@ -252,8 +265,18 @@ If they use ChatGPT, their connector gets its own callback URL, which must be ad
 Apple Health has no web API, so an iPhone Shortcut reads it and posts to
 `https://chomp.<your-domain>/ingest/health`: your latest weigh-in (a scale like VeSync writes
 it to Health) and today's steps, active and resting energy, exercise minutes and walking +
-running distance. First make each person's token on the server; it is
-shown once, and running it again replaces the old one:
+running distance.
+
+**The quick way: Connect iPhone.** Once someone has shared the Shortcut (see "Share the
+Shortcut" below), each person signs in, goes to **You › Integrations › Apple Health** and taps
+**Connect iPhone**. Chomp shows their token once with a **Copy** button and a link to the
+Shortcut: they add it, paste the token when it asks, run it once to allow Health access, and
+set up the automation (the last paragraph of this step; iPhone doesn't share automations).
+**Replace token** there makes a new one for a new phone, and the old one stops working.
+
+**Building it by hand.** The first time, someone builds the Shortcut. Make the token with
+**Connect iPhone** as above, or on the server; it is shown once, and making it again replaces
+the old one:
 
 ```bash
 docker compose exec chomp chomp user ingest-token Will
@@ -324,6 +347,21 @@ iPhone keeps Health data locked while the phone is locked, so a time-of-day auto
 fail at night; one that runs when you open an app always finds it unlocked. Each run sends
 today's totals so far and replaces what it sent before, so running it often is harmless.
 
+**Share the Shortcut** (once, so nobody else builds it by hand). Shortcuts can leave a value
+out of a shared copy and ask for it when someone adds it (an Import Question), so your token
+stays yours:
+
+1. In your Send to Chomp, add a **Text** action at the very top and paste your token into it.
+2. In **Get Contents of URL**, change the `Authorization` header's *Text* to `Bearer ` (one
+   space) followed by the Text action's output (*Select Variable*, then tap *Text*). Run it
+   once to check it still sends.
+3. Tap the Shortcut's name at the top › **Details** (the ⓘ on older iPhones) › **Setup** ›
+   **Add Question**, pick the Text action's text, and type the question `Paste your Chomp
+   token (You › Integrations › Connect iPhone)`.
+4. Back in the Shortcuts list, press and hold Send to Chomp › **Share** › **Copy iCloud Link**.
+5. On the dashboard, as the owner: **You › Integrations › Apple Health › Share your
+   Shortcut**, paste the link and tap **Save link**. Connect iPhone now offers it to everyone.
+
 **Instead, with Health Auto Export** (an App Store app; its automations are a paid upgrade):
 add a REST API automation with the URL above, JSON format, a header `Authorization` =
 `Bearer <token>`, and the metrics you want. For activity, turn on *Summarize Data*, set *Time
@@ -351,8 +389,14 @@ phone can't sign in to it). Ask Claude "what do I weigh?" or "how many steps tod
 ### 10. Sync workouts from Hevy
 
 With Hevy Pro, Chomp pulls your workouts from Hevy's API by itself, edits and deletes included.
-Make a key at [hevy.com/settings?developer](https://hevy.com/settings?developer), put it in
-`.env` on the server, and restart:
+Each person makes their own key at
+[hevy.com/settings?developer](https://hevy.com/settings?developer), then pastes it on
+**You › Integrations › Hevy** and taps **Save and sync**. Chomp checks it with Hevy (a key
+Hevy refuses isn't kept), and the first sync starts right away. **Remove your Hevy key** stops
+syncing; workouts already in Chomp stay.
+
+The owner's key can instead live in `.env` on the server (restart after changing it). A key
+pasted on Integrations wins over it:
 
 ```bash
 HEVY_API_KEY=your-key       # never commit it
@@ -362,9 +406,10 @@ HEVY_API_KEY=your-key       # never commit it
 
 The first sync (shortly after the server starts) pulls every workout and takes over ones you
 imported from CSV before, matched by start time, so nothing is doubled. After that Chomp asks
-Hevy for what changed every 15 minutes. **You › Integrations › Hevy** shows when it last
-checked and whether that worked, with a **Sync now** button. On the server,
-`docker compose exec chomp chomp sync-hevy` runs a sync (`--full` pulls everything again).
+Hevy for what changed every 15 minutes, for everyone with a key. **You › Integrations › Hevy**
+shows when it last checked and whether that worked, with a **Sync now** button. On the server,
+`docker compose exec chomp chomp sync-hevy` runs a sync for everyone (`--user Sam` for one
+person, `--full` pulls everything again).
 Workouts show under **Progress › Training**.
 
 Without Pro, import Hevy's CSV instead. In Hevy: Profile › Settings › Export & Import Data ›

@@ -1,8 +1,10 @@
 """The people who keep a log in Chomp (#46).
 
 User 1 is the owner: everything logged before users existed is theirs, and they sign in with
-AUTH_PASSWORD from the environment. Everyone else is added with `chomp user add` and gets
-their own password, stored as a salted scrypt hash. A password alone says who is signing in,
+AUTH_PASSWORD from the environment. Everyone else is added by the owner, on the dashboard's
+People page (#109) or with `chomp user add`, and has their own password, stored as a salted
+scrypt hash. From the dashboard the owner never sees it: adding someone makes a one-time
+invite link, and opening it lets them pick their password. A password alone says who is signing in,
 so no two users may share one; the consent and dashboard sign-in pages stay a single box.
 """
 
@@ -12,12 +14,16 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+import time
 
+from chomp import store
 from chomp.db import transaction
 
 OWNER_ID = 1
 MIN_PASSWORD_LEN = 12
 NAME_MAX = 40
+INVITE_TTL_S = 7 * 86400
+INVITE_PREFIX = "chomp_invite_"
 # scrypt cost: ~16 MiB and a few tens of ms per check, fine for a handful of users
 _N, _R, _P = 2**14, 8, 1
 
@@ -81,12 +87,18 @@ def name_of(conn: sqlite3.Connection, user_id: int) -> str | None:
 
 
 def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every user with how many meals they have logged."""
+    """Every user with how many meals they have logged, whether they have a password yet,
+    and when their open invite (if any) expires."""
     return conn.execute(
-        "SELECT u.id, u.name, u.created_at,"
-        " (SELECT count(*) FROM meals m WHERE m.user_id = u.id) AS meals"
+        "SELECT u.id, u.name, u.created_at, u.password_hash IS NOT NULL AS has_password,"
+        " (SELECT count(*) FROM meals m WHERE m.user_id = u.id) AS meals,"
+        " (SELECT expires_at FROM user_invites i WHERE i.user_id = u.id) AS invite_expires"
         " FROM users u ORDER BY u.id"
     ).fetchall()
+
+
+def get(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    return next((r for r in list_users(conn) if r["id"] == user_id), None)
 
 
 def get_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
@@ -151,3 +163,95 @@ def rename(conn: sqlite3.Connection, user_id: int, name: str) -> None:
         if clash:
             raise UserError(f"there is already a user named {name!r}")
         conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+
+
+def add_person(conn: sqlite3.Connection, name: str) -> int:
+    """Add someone with no password yet (#109); an invite link lets them pick one."""
+    name = _clean_name(name)
+    with transaction(conn):
+        if conn.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone():
+            raise UserError(f"there is already a user named {name!r}")
+        return conn.execute("INSERT INTO users (name) VALUES (?)", (name,)).lastrowid
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def new_invite(conn: sqlite3.Connection, user_id: int, now: float | None = None) -> str:
+    """A one-time invite token for someone (not the owner), replacing any earlier one. Their
+    current password, if any, keeps working until the link is used."""
+    if user_id == OWNER_ID:
+        raise UserError("the owner's password is AUTH_PASSWORD in .env; change it there")
+    token = INVITE_PREFIX + secrets.token_urlsafe(32)
+    expires = int(now if now is not None else time.time()) + INVITE_TTL_S
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO user_invites (user_id, token_hash, expires_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET token_hash = excluded.token_hash,"
+            " expires_at = excluded.expires_at, created_at = datetime('now')",
+            (user_id, _token_hash(token), expires),
+        )
+    return token
+
+
+def invite_user(conn: sqlite3.Connection, token: str, now: float | None = None) -> int | None:
+    """Whose invite this is, or None when it is unknown, used or expired."""
+    if not token.startswith(INVITE_PREFIX):
+        return None
+    row = conn.execute(
+        "SELECT user_id FROM user_invites WHERE token_hash = ? AND expires_at > ?",
+        (_token_hash(token), int(now if now is not None else time.time())),
+    ).fetchone()
+    return row["user_id"] if row else None
+
+
+def accept_invite(conn: sqlite3.Connection, token: str, password: str, owner_password: str) -> int:
+    """Set the invited person's password and use up the link. Returns their id."""
+    with transaction(conn):
+        user_id = invite_user(conn, token)
+        if user_id is None:
+            raise UserError("this invite link has expired or was already used")
+        set_password(conn, user_id, password, owner_password)
+        conn.execute("DELETE FROM user_invites WHERE user_id = ?", (user_id,))
+    return user_id
+
+
+def remove_user(conn: sqlite3.Connection, user_id: int) -> None:
+    """Delete someone and their whole log (#109). Foods stay, being shared; their recipes'
+    food rows are deleted like any food (gone from everyone's saved meals and portions)."""
+    if user_id == OWNER_ID:
+        raise UserError("the owner can't be removed")
+    with transaction(conn):
+        recipe_foods = [
+            r["food_id"]
+            for r in conn.execute(
+                "SELECT food_id FROM recipes WHERE user_id = ? AND food_id IS NOT NULL",
+                (user_id,),
+            )
+        ]
+        conn.execute("DELETE FROM recipes WHERE user_id = ?", (user_id,))
+        for food_id in recipe_foods:
+            # As deleting the recipe would: out of everyone's saved meals and portions
+            store.delete_food(conn, food_id)
+        # These predate ON DELETE CASCADE on user_id (0006); the rest cascade from users
+        for table in ("meals", "meal_templates", "targets"):
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    with transaction(conn):
+        if value:
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        else:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))

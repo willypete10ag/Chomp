@@ -51,6 +51,7 @@ from chomp import (
     charts,
     db,
     export,
+    health,
     health_export,
     hevy,
     hevy_sync,
@@ -93,6 +94,11 @@ YOU = f"{PREFIX}/you"
 INTEGRATIONS = f"{YOU}/integrations"
 GOALS_PAGE = f"{PREFIX}/targets"  # the daily nutrition goals
 BODY_GOALS = f"{YOU}/body-goals"  # goal weight and step goal (#105)
+PEOPLE = f"{YOU}/people"  # the owner adds and removes people (#109)
+INVITE = f"{PREFIX}/invite"  # an invite link: pick your password (#109)
+SHORTCUT_LINK = "health_shortcut_url"  # app_settings key: the shared Send to Chomp Shortcut
+SHORTCUT_LINK_RE = re.compile(r"https://www\.icloud\.com/shortcuts/[0-9a-f]{32}/?")
+HEVY_KEY_RE = re.compile(r"[A-Za-z0-9_-]{8,100}")
 ACTIONS = f"{PREFIX}/actions"  # the + sheet
 SHORTCUTS = f"{PREFIX}/shortcuts"
 # Keys app.js answers (#105), shown on the shortcuts sheet
@@ -1945,6 +1951,12 @@ PROBLEMS = {
     " Import Data > Export Workouts.",
     "hevy_big": "That file is too big for a Hevy export (20 MB at most).",
     "hevy_sync": "Syncing with Hevy didn't work. The Hevy card says why.",
+    "hevy_key": "Hevy didn't accept that key, so it wasn't saved. Copy it again from"
+    " hevy.com/settings?developer (it needs Hevy Pro).",
+    "hevy_key_bad": "That doesn't look like a Hevy API key. Copy it from"
+    " hevy.com/settings?developer.",
+    "shortcut_link": "That isn't a Shortcut's iCloud link. In Shortcuts, press and hold the"
+    " Shortcut, then Share > Copy iCloud Link; it starts with https://www.icloud.com/shortcuts/.",
     "health": "That file isn't Apple Health's export. In Health: tap your picture > Export All"
     " Health Data, then pick export.zip.",
     "health_big": "That export is over 95 MB, too big to send through the browser. Import it"
@@ -2803,14 +2815,28 @@ def add_routes(
     def go(url: str) -> RedirectResponse:
         return RedirectResponse(url, status_code=303, headers=SECURITY_HEADERS)
 
+    def start_session(url: str, user_id: int) -> RedirectResponse:
+        """Sign someone in on this browser and go to url."""
+        response = go(url)
+        response.set_cookie(
+            COOKIE,
+            sessions.create(user_id),
+            max_age=SESSION_TTL_S,
+            path=PREFIX,
+            secure=secure,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    def is_owner(request: Request) -> bool:
+        """The owner may add and remove people (#109). Local-only mode has no sign-in, so
+        no one else could use the dashboard there."""
+        return provider is not None and user_of(request) == users.OWNER_ID
+
     def hevy_syncs(conn, request: Request) -> bool:
-        """Whether Hevy's API sync (#113) is on and brings in this person's workouts."""
-        if not settings.hevy_api_key:
-            return False
-        try:
-            return hevy_sync.user_id(conn, settings) == user_of(request)
-        except users.UserError:
-            return False
+        """Whether this person has a Hevy key to sync with (#113, #109)."""
+        return bool(hevy_sync.key_for(conn, settings, user_of(request)))
 
     def day_url(day: date) -> str:
         return f"{PREFIX}?date={day.isoformat()}"
@@ -2971,17 +2997,7 @@ def add_routes(
                 return login_page(next_url, locked, 429)
             return login_page(next_url, "Wrong password.", 401)
         log.info("dashboard: user %d signed in", user_id)
-        response = RedirectResponse(next_url, status_code=303, headers=SECURITY_HEADERS)
-        response.set_cookie(
-            COOKIE,
-            sessions.create(user_id),
-            max_age=SESSION_TTL_S,
-            path=PREFIX,
-            secure=secure,
-            httponly=True,
-            samesite="lax",
-        )
-        return response
+        return start_session(next_url, user_id)
 
     @server.custom_route(f"{PREFIX}/logout", methods=["POST"])
     async def logout(request: Request) -> Response:
@@ -6191,7 +6207,7 @@ def add_routes(
         with connect(request) as conn:
             if not hevy_syncs(conn, request):
                 return go(f"{INTEGRATIONS}#hevy")
-        result = await anyio.to_thread.run_sync(hevy_sync.run, settings)
+        result = await anyio.to_thread.run_sync(hevy_sync.run, settings, user_of(request))
         if result.error:
             return go(f"{INTEGRATIONS}?problem=hevy_sync#hevy")
         done = f"{result.added}-{result.updated}-{result.deleted}"
@@ -7589,7 +7605,12 @@ def add_routes(
         account_rows = (
             f'<div class="item"><span class="badge-icon tone-muted">{icon("circle-user")}</span>'
             f'<span class="grow">{e(name or "Signed in")}</span></div>'
-            f'<form method="post" action="{PREFIX}/logout"><button class="item danger"'
+            + (
+                item(PEOPLE, "users", "train", "People", "Add someone and send them an invite link")
+                if is_owner(request)
+                else ""
+            )
+            + f'<form method="post" action="{PREFIX}/logout"><button class="item danger"'
             f' type="submit"><span class="badge-icon tone-muted">{icon("log-out")}</span>'
             '<span class="grow">Sign out</span></button></form>'
             if provider is not None
@@ -7753,19 +7774,344 @@ def add_routes(
             hue="you",
         )
 
-    @server.custom_route(INTEGRATIONS, methods=["GET"])
-    async def integrations(request: Request) -> Response:
-        """Where data comes in from (#105): Apple Health (the phone's sends and the export
-        import), Hevy's CSV, and the Claude and ChatGPT connectors. Imports land back here."""
+    # --- People (#109): the owner adds someone and gives them an invite link ---
+
+    def owner_refused(request: Request, post: bool = False) -> Response | None:
+        """People is the owner's: anyone else gets Not found, as if it weren't there."""
         if not signed_in(request):
             return to_login(request)
+        if not is_owner(request):
+            return message("Not found", "There's no such page.", 404, signed_in=True)
+        if post and not same_origin(request):
+            return message("Not allowed", "Change people from the dashboard.", 403)
+        return None
+
+    def invite_until(expires: int) -> str:
+        day = datetime.fromtimestamp(expires, ZoneInfo(tz)).date()
+        return short_date(day, today())
+
+    def person_status(row) -> str:
+        now = time.time()
+        if row["id"] == users.OWNER_ID:
+            return "Owner · signs in with AUTH_PASSWORD"
+        expires = row["invite_expires"]
+        open_invite = expires is not None and expires > now
+        if row["has_password"]:
+            meals = f"{num(row['meals'])} meal{'' if row['meals'] == 1 else 's'} logged"
+            if open_invite:
+                return f"{meals} · password reset link open until {invite_until(expires)}"
+            return meals
+        if open_invite:
+            return f"Invited · link open until {invite_until(expires)}"
+        return "Invite expired · make a new link"
+
+    def people_page(request: Request, error: str = "", typed: str = "") -> Response:
+        with connect(request) as conn:
+            rows = users.list_users(conn)
+        listed = "".join(
+            item(f"{PEOPLE}/{r['id']}", "circle-user", "train", r["name"], e(person_status(r)))
+            if r["id"] != users.OWNER_ID
+            else (
+                f'<div class="item"><span class="badge-icon tone-muted">{icon("circle-user")}'
+                f'</span><span class="grow">{e(r["name"])}<small>{e(person_status(r))}</small>'
+                "</span></div>"
+            )
+            for r in rows
+        )
+        problem = f'<p class="error" role="alert">{e(error)}</p>' if error else ""
+        body = (
+            back_head(YOU, "You", "People")
+            + f'<section class="group">{listed}</section>'
+            + f'<form class="card stack" method="post" action="{PEOPLE}">'
+            f"<h2>{icon('users')} Add a person</h2>{problem}"
+            f'<label>Name<input name="name" maxlength="{users.NAME_MAX}" required'
+            f' autocomplete="off" value="{e(typed)}"></label>'
+            '<p class="small muted">They get their own log, goals, weight, activity and'
+            " workouts; foods are shared. You get a link to send them, where they pick their"
+            " own password.</p>"
+            '<button type="submit">Add person</button></form>'
+        )
+        return render(
+            "People",
+            body,
+            "you",
+            signed_in=True,
+            user=account(request),
+            status=400 if error else 200,
+            hue="you",
+        )
+
+    def person_page(
+        request: Request, user_id: int, link: str = "", error: str = "", status: int = 200
+    ) -> Response:
+        with connect(request) as conn:
+            row = users.get(conn, user_id)
+        if row is None or user_id == users.OWNER_ID:
+            return message("Not found", "There's no such person.", 404, signed_in=True)
+        name = row["name"]
+        url = f"{PEOPLE}/{user_id}"
+        shown = ""
+        if link:
+            shown = (
+                f'<section class="card stack" id="invite"><h2>Link for {e(name)}</h2>'
+                f'<input readonly id="invite-link" value="{e(link)}" aria-label="Invite link">'
+                '<button type="button" class="js-only" data-copy="invite-link">Copy</button>'
+                f'<p class="small muted">Send it to {e(name)}. It works once, for'
+                f" {users.INVITE_TTL_S // 86400} days: opening it lets them pick their password"
+                " and signs them in. It shows only now; make a new one if it gets lost.</p>"
+                "</section>"
+            )
+        if row["has_password"]:
+            again = (
+                '<p class="small muted">Forgot their password? A reset link lets them pick a'
+                " new one; the current one keeps working until the link is used.</p>"
+                '<button type="submit">Reset password</button>'
+            )
+        else:
+            again = (
+                '<p class="small muted">A new link replaces any earlier one.</p>'
+                '<button type="submit">New invite link</button>'
+            )
+        problem = f'<p class="error" role="alert">{e(error)}</p>' if error else ""
+        body = (
+            back_head(PEOPLE, "People", name, sub=e(person_status(row)))
+            + shown
+            + problem
+            + f'<form class="card stack" method="post" action="{url}/invite">{again}</form>'
+            + f'<form class="card stack" method="post" action="{url}/rename">'
+            f'<label>Name<input name="name" maxlength="{users.NAME_MAX}" required'
+            f' autocomplete="off" value="{e(name)}"></label>'
+            '<button type="submit">Rename</button></form>'
+            + f'<form class="card stack" method="post" action="{url}/remove">'
+            f"<h2>Remove {e(name)}</h2>"
+            '<p class="small muted">Deletes them and their whole log: meals, saved meals,'
+            " recipes, goals, weigh-ins, activity and workouts. Foods stay. This can't be"
+            f" undone. Type <b>{e(name)}</b> to confirm.</p>"
+            '<input name="confirm" autocomplete="off" required aria-label="Name to confirm">'
+            '<button type="submit" class="danger">Remove</button></form>'
+        )
+        return render(
+            name, body, "you", signed_in=True, user=account(request), status=status, hue="you"
+        )
+
+    def invite_link(token: str) -> str:
+        return f"{settings.public_url}{INVITE}/{token}"
+
+    @server.custom_route(PEOPLE, methods=["GET", "POST"])
+    async def people(request: Request) -> Response:
+        """Everyone with a log here, and Add a person (#109)."""
+        if (no := owner_refused(request, request.method == "POST")) is not None:
+            return no
+        if request.method == "GET":
+            return people_page(request)
+        form = await request.form()
+        typed = str(form.get("name", ""))[:100]
+        try:
+            with connect(request) as conn:
+                user_id = users.add_person(conn, typed)
+                token = users.new_invite(conn, user_id)
+        except users.UserError as err:
+            return people_page(request, capitalized(str(err)) + ".", typed)
+        log.info("dashboard: added user %d", user_id)
+        return person_page(request, user_id, invite_link(token))
+
+    @server.custom_route(PEOPLE + "/{user_id:int}", methods=["GET"])
+    async def person(request: Request) -> Response:
+        if (no := owner_refused(request)) is not None:
+            return no
+        return person_page(request, request.path_params["user_id"])
+
+    @server.custom_route(PEOPLE + "/{user_id:int}/{action:str}", methods=["POST"])
+    async def person_action(request: Request) -> Response:
+        """A new invite (or password reset) link, a new name, or removing someone."""
+        if (no := owner_refused(request, post=True)) is not None:
+            return no
+        user_id = request.path_params["user_id"]
+        action = request.path_params["action"]
+        with connect(request) as conn:
+            row = users.get(conn, user_id)
+        if row is None or user_id == users.OWNER_ID or action not in ("invite", "rename", "remove"):
+            return message("Not found", "There's no such person.", 404, signed_in=True)
+        form = await request.form()
+        try:
+            with connect(request) as conn:
+                if action == "invite":
+                    token = users.new_invite(conn, user_id)
+                    log.info("dashboard: new invite link for user %d", user_id)
+                    return person_page(request, user_id, invite_link(token))
+                if action == "rename":
+                    users.rename(conn, user_id, str(form.get("name", ""))[:100])
+                    return go(f"{PEOPLE}/{user_id}")
+                typed = " ".join(str(form.get("confirm", "")).split())
+                if typed.casefold() != row["name"].casefold():
+                    raise users.UserError(f"type {row['name']} to remove them")
+                users.remove_user(conn, user_id)
+                log.info("dashboard: removed user %d", user_id)
+                return go(PEOPLE)
+        except users.UserError as err:
+            return person_page(request, user_id, error=capitalized(str(err)) + ".", status=400)
+
+    INVITE_FORM = (
+        '<div class="login"><img src="{p}/static/icon-192.png" alt="" width="72" height="72">'
+        "<h1>Welcome, {name}</h1>{error}"
+        '<form method="post" action="{action}">'
+        '<input type="text" name="username" value="{name}" autocomplete="username" hidden>'
+        '<label>Pick a password<input type="password" name="password" autofocus required'
+        ' minlength="{min}" autocomplete="new-password"></label>'
+        '<label>Same password again<input type="password" name="again" required'
+        ' autocomplete="new-password"></label>'
+        '<button type="submit">Save and sign in</button></form>'
+        '<p class="muted">At least {min} characters. It signs you in here, and you type it when'
+        " you connect Claude to Chomp. Keep it in a password manager.</p></div>"
+    )
+
+    @server.custom_route(INVITE + "/{token:str}", methods=["GET", "POST"])
+    async def invite(request: Request) -> Response:
+        """An invite link (#109): the person picks their own password and is signed in. The
+        link works once."""
+        if provider is None:
+            return go(PREFIX)
+        token = request.path_params["token"]
+        with closing(db.connect(settings.db_path)) as conn:
+            user_id = users.invite_user(conn, token)
+            name = users.name_of(conn, user_id) if user_id is not None else None
+        if user_id is None or name is None:
+            return message(
+                "Link expired",
+                "This invite link has expired or was already used. Ask for a new one.",
+                410,
+            )
+
+        def page(error: str = "", status: int = 200) -> Response:
+            body = INVITE_FORM.format(
+                p=PREFIX,
+                name=e(name),
+                action=e(f"{INVITE}/{token}"),
+                min=users.MIN_PASSWORD_LEN,
+                error=f'<p class="error">{e(error)}</p>' if error else "",
+            )
+            return render("Pick a password", body, status=status)
+
+        if request.method == "GET":
+            return page()
+        if not same_origin(request):
+            return page("Pick your password from this page.", 403)
+        form = await request.form()
+        password = str(form.get("password", ""))
+        if password != str(form.get("again", "")):
+            return page("The two passwords didn't match.", 400)
+        try:
+            with closing(db.connect(settings.db_path)) as conn:
+                user_id = users.accept_invite(conn, token, password, settings.auth_password)
+        except users.UserError as err:
+            return page(capitalized(str(err)) + ".", 400)
+        log.info("dashboard: user %d set their password from an invite", user_id)
+        return start_session(PREFIX, user_id)
+
+    @server.custom_route(INTEGRATIONS, methods=["GET"])
+    async def integrations(request: Request) -> Response:
+        if not signed_in(request):
+            return to_login(request)
+        return integrations_page(request)
+
+    def connect_iphone(token: str, has_token: bool, link: str) -> str:
+        """Connect iPhone (#109): make the phone's ingest token here and copy it into the
+        shared Send to Chomp Shortcut, which asks for it when it is added."""
+        if not token:
+            if has_token:
+                return (
+                    f'<form class="stack" method="post" action="{INTEGRATIONS}/ingest-token">'
+                    '<p class="small muted">Your phone has a token. A new one is for a new'
+                    " phone or a lost token: the old one stops working.</p>"
+                    '<button type="submit">Replace token</button></form>'
+                )
+            return (
+                f'<form class="stack" method="post" action="{INTEGRATIONS}/ingest-token">'
+                '<button type="submit">Connect iPhone</button></form>'
+            )
+        if link:
+            get_it = (
+                f'<li>On your iPhone, open <a href="{e(link)}" rel="noreferrer">the Send to'
+                " Chomp Shortcut</a> and tap <b>Add Shortcut</b>. When it asks for your"
+                " token, paste it.</li>"
+            )
+        else:
+            get_it = (
+                "<li>Build the Send to Chomp Shortcut (README, step 9) and paste the token"
+                " in its header.</li>"
+            )
+        return (
+            '<div class="stack" id="phone-token">'
+            '<p class="small"><b>Your phone\'s token.</b> It shows only now; Chomp keeps'
+            " no copy. It can only add your weight and activity.</p>"
+            f'<input readonly id="ingest-token" value="{e(token)}" aria-label="Ingest token">'
+            '<button type="button" class="js-only" data-copy="ingest-token">Copy</button>'
+            '<ol class="small">'
+            "<li>Copy the token (on your iPhone, or paste it over from a Mac).</li>"
+            f"{get_it}"
+            "<li>Run it once with &#9654; and allow it to read Health and to send to Chomp"
+            " (<b>Always Allow</b>).</li>"
+            "<li>Make it run by itself: Shortcuts &rsaquo; <b>Automation</b> &rsaquo; + &rsaquo;"
+            " <b>App</b> &rsaquo; an app you open a few times a day (Messages, Hevy) &rsaquo;"
+            " <b>Is Opened</b> &rsaquo; <b>Run Immediately</b> &rsaquo; Send to Chomp. iPhone"
+            " doesn't share automations, so this step is always by hand.</li>"
+            "</ol></div>"
+        )
+
+    def shortcut_link_form(link: str) -> str:
+        """The owner's place for the shared Shortcut's iCloud link (#109)."""
+        return (
+            '<details><summary class="small muted">Share your Shortcut</summary>'
+            f'<form class="stack" method="post" action="{INTEGRATIONS}/shortcut-link">'
+            '<p class="small muted">Share your Send to Chomp Shortcut with its token as an'
+            ' Import Question (README, "Share the Shortcut") and paste its iCloud link here.'
+            " Connect iPhone then offers it to everyone. Leave it empty to remove it.</p>"
+            f'<input name="url" type="url" inputmode="url" autocomplete="off" value="{e(link)}"'
+            ' placeholder="https://www.icloud.com/shortcuts/..." aria-label="Shortcut link">'
+            '<button type="submit">Save link</button></form></details>'
+        )
+
+    def hevy_key_form(own_key: bool, server_key: bool) -> str:
+        """Your own Hevy API key (#109): paste it and Chomp syncs your workouts."""
+        if own_key:
+            return (
+                f'<form method="post" action="{INTEGRATIONS}/hevy-key"'
+                ' data-confirm="Stop syncing with Hevy? Your workouts stay in Chomp.">'
+                '<input type="hidden" name="remove" value="1">'
+                '<button type="submit" class="danger">Remove your Hevy key</button></form>'
+            )
+        form = (
+            f'<form class="stack" method="post" action="{INTEGRATIONS}/hevy-key"'
+            ' data-busy="Checking the key with Hevy">'
+            '<p class="small muted">With Hevy Pro, Chomp can pull your workouts by itself. In'
+            " Hevy on the web, open hevy.com/settings?developer, make an API key and paste it"
+            " here.</p>"
+            '<input name="key" type="password" autocomplete="off" required'
+            ' aria-label="Hevy API key" placeholder="Hevy API key">'
+            '<button type="submit">Save and sync</button></form>'
+        )
+        if server_key:
+            return (
+                '<details><summary class="small muted">Use a different Hevy key</summary>'
+                f"{form}</details>"
+            )
+        return form
+
+    def integrations_page(request: Request, token: str = "") -> Response:
+        """Where data comes in from (#105): Apple Health (the phone's sends, Connect iPhone and
+        the export import), Hevy (your API key, or its CSV), and the Claude and ChatGPT
+        connectors. Imports land back here; `token` is a phone token made just now."""
         params = request.query_params
         last = today()
+        user_id = user_of(request)
         with connect(request) as conn:
             synced = store.last_activity_sync(conn)
             workouts = store.workouts_summary(conn)
             syncing = hevy_syncs(conn, request)
             sync_state = store.hevy_sync_state(conn) if syncing else None
+            own_key = bool(hevy_sync.saved_key(conn, user_id))
+            has_token = health.token_info(conn, user_id) is not None
+            link = users.get_setting(conn, SHORTCUT_LINK)
         banner = ""
         if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
             banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
@@ -7840,19 +8186,32 @@ def add_routes(
                 )
                 if sync_state["last_error"]:
                     sync_text += f" That sync failed: {sync_state['last_error']}"
+            whose = (
+                "Syncing with your Hevy API key."
+                if own_key
+                else "Syncing with the server's Hevy key (HEVY_API_KEY)."
+            )
             hevy_body = (
-                f'<p class="small">{e(sync_text)}</p><p class="small">{e(hevy_status)}</p>'
-                f"{hevy_sync_form()}"
+                f'<p class="small">{e(whose)} {e(sync_text)}</p>'
+                f'<p class="small">{e(hevy_status)}</p>'
+                f"{hevy_sync_form()}{hevy_key_form(own_key, not own_key)}"
                 '<details><summary class="small muted">Import a CSV export instead</summary>'
                 f"{hevy_import()}</details>"
             )
         else:
-            hevy_body = f'<p class="small">{e(hevy_status)}</p>{hevy_import()}'
+            hevy_body = (
+                f'<p class="small">{e(hevy_status)}</p>{hevy_key_form(False, False)}'
+                '<details><summary class="small muted">No Hevy Pro? Import a CSV export'
+                f"</summary>{hevy_import()}</details>"
+            )
         parts = [
             back_head(YOU, "You", "Integrations"),
             banner,
             f'<section class="card" id="health"><h2>{icon("heart-pulse")} Apple Health</h2>'
-            f'<p class="small">{e(health_status)}</p>{health_import()}</section>',
+            f'<p class="small">{e(health_status)}</p>{connect_iphone(token, has_token, link)}'
+            + (shortcut_link_form(link) if user_id == users.OWNER_ID else "")
+            + '<details><summary class="small muted">Import your history (export.zip)'
+            f"</summary>{health_import()}</details></section>",
             f'<section class="card" id="hevy"><h2>{icon("dumbbell")} Hevy</h2>'
             f"{hevy_body}</section>",
         ]
@@ -7899,6 +8258,61 @@ def add_routes(
                 + "</section>"
             )
         return you_page(request, "Integrations", "".join(parts))
+
+    @server.custom_route(INTEGRATIONS + "/ingest-token", methods=["POST"])
+    async def ingest_token(request: Request) -> Response:
+        """Connect iPhone (#109): a new token for the signed-in person's phone, shown once on
+        Integrations. Any older token stops working."""
+        if (no := refused(request, "Connect a phone")) is not None:
+            return no
+        with connect(request) as conn:
+            token = health.new_token(conn, user_of(request))
+        log.info("dashboard: user %d made a phone token", user_of(request))
+        return integrations_page(request, token)
+
+    @server.custom_route(INTEGRATIONS + "/shortcut-link", methods=["POST"])
+    async def shortcut_link(request: Request) -> Response:
+        """The owner saves (or clears) the shared Send to Chomp Shortcut's iCloud link."""
+        if (no := refused(request, "Change the Shortcut link")) is not None:
+            return no
+        if user_of(request) != users.OWNER_ID:
+            return message("Not allowed", "Only the owner can change this.", 403)
+        form = await request.form()
+        url = str(form.get("url", "")).strip()
+        if url and not SHORTCUT_LINK_RE.fullmatch(url):
+            return go(f"{INTEGRATIONS}?problem=shortcut_link#health")
+        with connect(request) as conn:
+            users.set_setting(conn, SHORTCUT_LINK, url)
+        return go(f"{INTEGRATIONS}#health")
+
+    @server.custom_route(INTEGRATIONS + "/hevy-key", methods=["POST"])
+    async def hevy_key(request: Request) -> Response:
+        """Save your Hevy API key and sync with it now, or remove it (#109). A key Hevy
+        refuses isn't kept."""
+        if (no := refused(request, "Change your Hevy key")) is not None:
+            return no
+        form = await request.form()
+        user_id = user_of(request)
+        if form.get("remove"):
+            with connect(request) as conn:
+                hevy_sync.remove_key(conn, user_id)
+            log.info("dashboard: user %d removed their Hevy key", user_id)
+            return go(f"{INTEGRATIONS}#hevy")
+        key = str(form.get("key", "")).strip()
+        if not HEVY_KEY_RE.fullmatch(key):
+            return go(f"{INTEGRATIONS}?problem=hevy_key_bad#hevy")
+        with connect(request) as conn:
+            hevy_sync.save_key(conn, user_id, key)
+        result = await anyio.to_thread.run_sync(hevy_sync.run, settings, user_id)
+        if result.key_refused:
+            with connect(request) as conn:
+                hevy_sync.remove_key(conn, user_id)
+            return go(f"{INTEGRATIONS}?problem=hevy_key#hevy")
+        log.info("dashboard: user %d saved a Hevy key", user_id)
+        if result.error:
+            return go(f"{INTEGRATIONS}?problem=hevy_sync#hevy")
+        done = f"{result.added}-{result.updated}-{result.deleted}"
+        return go(f"{INTEGRATIONS}?hevysync={done}#hevy")
 
     @server.custom_route(ACTIONS, methods=["GET"])
     async def actions(request: Request) -> Response:

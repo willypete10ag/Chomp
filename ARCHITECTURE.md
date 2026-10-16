@@ -242,8 +242,13 @@ Each person has their own log (#46, migration 0006): `meals` (and so entries), `
 `portions`, `meal_templates`, `recipes`, `undo_actions`, `web_sessions` and `oauth_tokens` carry a
 `user_id`; `foods` are shared, so anyone's saved or label foods turn up in everyone's search
 (use counts are per person). User 1 is the owner, holds everything logged before users
-existed, and signs in with `AUTH_PASSWORD`. Others are added with `chomp user add NAME` and
-have a scrypt-hashed password in `users`. A password alone identifies the person (no two
+existed, and signs in with `AUTH_PASSWORD`. Others are added by the owner on You › People
+(#109) or with `chomp user add NAME`, and have a scrypt-hashed password in `users`. People
+adds a name only and shows a one-time invite link (`/app/invite/<token>`, 7 days, the token
+SHA-256 hashed in `user_invites`, migration 0020); opening it sets the person's password and
+signs them in, so the owner never sees it. Reset password is a new link; the old password
+works until it is used. Removing someone deletes their whole log (foods stay; their recipes'
+food rows are deleted like any food, leaving others' saved meals). A password alone identifies the person (no two
 users may share one; the server won't start if `AUTH_PASSWORD` matches another user's), so the consent page and dashboard sign-in stay a single password box;
 the sign-in's user becomes the OAuth token's subject or the dashboard session's user.
 `store.py` reads the user from the connection (`db.connect(path, user_id)`) and treats
@@ -301,11 +306,13 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   any food, by servings. The row follows the recipe and its ingredients (re-summed when an
   ingredient is corrected); it can't be edited, renamed or deleted as a food, only through
   the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
-- Hevy API sync (#113, migration 0019, `chomp/hevy_sync.py`, `chomp/sources/hevy.py`): with
-  `HEVY_API_KEY` set (Hevy Pro), the server runs a sync in a background thread every
-  `HEVY_SYNC_MINUTES` (default 15) for `HEVY_USER` (default the owner); Sync now on You ›
-  Integrations (`POST /app/workouts/sync`) and `chomp sync-hevy [--full]` run one on demand,
-  one at a time. The first run lists every workout (`GET /v1/workouts`, 10 a page); later runs
+- Hevy API sync (#113, migration 0019, `chomp/hevy_sync.py`, `chomp/sources/hevy.py`): each
+  person syncs with their own key (Hevy Pro), pasted on You › Integrations and kept in
+  `hevy_keys` (#109, migration 0020; checked by a sync before it is kept). `HEVY_API_KEY` in
+  `.env` is the key of `HEVY_USER` (default the owner) unless they paste one. A background
+  thread syncs everyone with a key every `HEVY_SYNC_MINUTES` (default 15), one after another;
+  Sync now (`POST /app/workouts/sync`) and `chomp sync-hevy [--full] [--user NAME]` run on
+  demand, one at a time. A new key resets that person's cursor (it may be another account). The first run lists every workout (`GET /v1/workouts`, 10 a page); later runs
   read `GET /v1/workouts/events?since=` (updated and deleted events, the last per workout
   wins). Workouts carry Hevy's id in `workouts.hevy_id`; a workout without one (CSV) that
   started in the same minute is adopted. `hevy_sync` holds the cursor and the last run's
@@ -394,8 +401,11 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, `/ingest/health` (phones), and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
 - Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. Food photos are served only to signed-in people. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
-- Health ingest tokens (decided on #101): one per person, made with `chomp user ingest-token NAME`
-  (shown once, replaces the old one; `--revoke` removes it), stored as SHA-256 hashes in
+- Health ingest tokens (decided on #101): one per person, made with Connect iPhone on You ›
+  Integrations (#109) or `chomp user ingest-token NAME` (shown once, replaces the old one;
+  `--revoke` removes it). Connect iPhone links the shared Send to Chomp Shortcut, whose iCloud
+  link the owner saves there (`app_settings.health_shortcut_url`); its token is an Import
+  Question, so each person pastes their own when adding it. Tokens are stored as SHA-256 hashes in
   `ingest_tokens` (migration 0013). Sent as `Authorization: Bearer` or `X-Chomp-Token`, never
   in the URL. An ingest token only adds its person's health readings at `/ingest/health`; it is
   refused on `/mcp` and everywhere else, and connector tokens are refused at `/ingest`. Bodies
