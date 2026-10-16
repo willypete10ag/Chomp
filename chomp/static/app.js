@@ -644,6 +644,7 @@
     }
     if (li.dataset.log) {
       item("Log it", function () {
+        close();
         openSheet(li.dataset.log, body.querySelector(".food-link"));
       });
     }
@@ -1081,15 +1082,36 @@
   if (location.hash === "#scan" && document.querySelector("[data-chooser]")) {
     location.replace(location.pathname + "?how=scan");
   }
-  // Cancel at the top of a full-screen flow goes back where it was opened from
+  // Cancel at the top of a full-screen flow goes back where it was opened from, even
+  // after steps inside the flow (a search, a lookup) have added pages of their own
+  function inFlow(href) {
+    try {
+      var u = new URL(href);
+      return u.origin === location.origin && u.pathname.indexOf("/foods/new") !== -1;
+    } catch (err) {
+      return false;
+    }
+  }
+  function flowStart(value) {
+    try {
+      if (value === undefined) return sessionStorage.getItem("flowFrom");
+      sessionStorage.setItem("flowFrom", value);
+    } catch (err) {
+      return null;
+    }
+  }
+  if (document.querySelector("a[data-back]") && !inFlow(document.referrer)) {
+    var opener = document.referrer;
+    flowStart(opener && new URL(opener).origin === location.origin ? opener : "");
+  }
   document.addEventListener("click", function (event) {
     var link = event.target.closest && event.target.closest("a[data-back]");
     if (!link || event.defaultPrevented) return;
     var from = document.referrer;
-    if (from && new URL(from).origin === location.origin && history.length > 1) {
-      event.preventDefault();
-      history.back();
-    }
+    if (!from || new URL(from).origin !== location.origin) return;
+    event.preventDefault();
+    if (!inFlow(from) && history.length > 1) history.back();
+    else location.href = (inFlow(location.href) && flowStart()) || link.href;
   });
 
   // Imports (#94): a big upload can take a while, so the form turns into a spinner with a
