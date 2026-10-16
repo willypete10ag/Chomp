@@ -164,6 +164,24 @@ def test_client_pages_through_and_treats_404_as_empty(fake):
     )
 
 
+def test_client_reads_replies_that_differ_from_the_spec():
+    replies = iter(
+        [
+            {"page": 1, "page_count": 0},  # an empty events feed, as the live server sends it
+            {"page": 1, "page_count": 1, "events": None},
+            {"page": 1, "page_count": 1, "workout_events": [{"type": "deleted", "id": "w1"}]},
+            {"page": 1, "page_count": 1, "a": [], "b": []},
+        ]
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=next(replies)))
+    with HevyClient("test-key", httpx.Client(transport=transport), backoff_s=0) as client:
+        assert list(client.events("2026-10-16T00:00:00Z")) == []
+        assert list(client.events("2026-10-16T00:00:00Z")) == []
+        assert list(client.events("2026-10-16T00:00:00Z")) == [{"type": "deleted", "id": "w1"}]
+        with pytest.raises(SourceError, match="keys: a, b, page, page_count"):
+            list(client.events("2026-10-16T00:00:00Z"))
+
+
 def test_client_errors(fake):
     fake.status = 401
     with fake.client() as client, pytest.raises(HevyKeyError, match="HEVY_API_KEY"):
