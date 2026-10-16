@@ -13,8 +13,9 @@ chomp/
   users.py         # users and their scrypt passwords (`chomp user add`)
   health.py        # /ingest/health: phone posts Apple Health data (weight, activity) with an ingest token
   health_export.py # Apple Health's export.zip reader (past weigh-ins and daily activity)
-  hevy.py          # Hevy workout CSV export parser (workouts are imported, Hevy has no free API)
-  cli.py           # `chomp` command: serve, backup, restore, export, user (+ ingest-token), import-hevy, import-health
+  hevy.py          # Hevy workouts: CSV export parser and the API's workout objects
+  hevy_sync.py     # Hevy API sync (#113): first full pull, then the events feed; background thread
+  cli.py           # `chomp` command: serve, backup, restore, export, user (+ ingest-token), import-hevy, sync-hevy, import-health
   backup.py        # nightly SQLite backup with retention, restore
   export.py        # CSV/JSON export
   config.py        # settings from env
@@ -23,6 +24,7 @@ chomp/
   sources/
     http.py        # shared retries/backoff and TTL response cache
     fdc.py         # USDA FoodData Central client
+    hevy.py        # Hevy API client (Pro; workouts and workout events, paged)
     off.py         # Open Food Facts client
     gtin.py        # UPC/EAN normalization
     rank.py        # search hit ranking, weak-match trimming and grouping (FDC and OFF)

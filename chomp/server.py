@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from chomp import __version__, auth, db, logic, serving_fill, store, text, users, web
+from chomp import __version__, auth, db, hevy_sync, logic, serving_fill, store, text, users, web
 from chomp.barcode import lookup as barcode_lookup
 from chomp.config import Settings
 from chomp.health import add_routes as add_health_routes
@@ -1601,14 +1601,14 @@ def build_server(
             ),
         ] = None,
     ) -> WorkoutHistory:
-        """The user's strength workouts (imported from Hevy) over a date range, newest first:
+        """The user's strength workouts (from Hevy) over a date range, newest first:
         title, time, duration, volume, and each exercise's sets (weight in lb and kg, reps,
         set type, RPE).
 
         Use for "what did I do at the gym this week?", "what did I bench last time?" (pass
-        exercise and a wide range), or progress on a lift. Workouts arrive when the user
-        imports their Hevy export on the dashboard's Workouts page; if none are there, say
-        so rather than guessing.
+        exercise and a wide range), or progress on a lift. Workouts sync from Hevy on their
+        own every few minutes after the user finishes one (or come from a CSV import on
+        the dashboard); if one isn't there yet, say so rather than guessing.
         """
         with tool_errors(), connect() as conn:
             last = logic.parse_local_date(end, tz)
@@ -1780,6 +1780,7 @@ def main() -> None:
     if not settings.fdc_api_key:
         log.warning("FDC_API_KEY is not set; search_food will only find saved foods")
     server = build_server(settings)
+    hevy_sync.start_background(settings)
     if settings.public_url:
         log.info("auth on: OAuth sign-in%s", " plus bearer token" if settings.bearer_token else "")
     else:

@@ -6,6 +6,8 @@
     chomp export --format csv|json [--user NAME] [--start D] [--end D] [-o FILE]
     chomp import-hevy FILE [--user NAME]
                                import a Hevy workout CSV export (repeats are skipped)
+    chomp sync-hevy [--full]   pull new, edited and deleted workouts from Hevy's API now
+                               (HEVY_API_KEY; --full pulls every workout again)
     chomp import-health FILE [--user NAME]
                                import past weight and activity from Apple Health's
                                export.zip (days the phone already sent are kept)
@@ -30,7 +32,19 @@ from contextlib import closing
 from datetime import date, time
 from pathlib import Path
 
-from chomp import auth, backup, db, export, health, health_export, hevy, logic, store, users
+from chomp import (
+    auth,
+    backup,
+    db,
+    export,
+    health,
+    health_export,
+    hevy,
+    hevy_sync,
+    logic,
+    store,
+    users,
+)
 from chomp.config import Settings
 
 
@@ -77,6 +91,8 @@ def parser(settings: Settings) -> argparse.ArgumentParser:
     h = sub.add_parser("import-hevy", help="import a Hevy workout CSV export")
     h.add_argument("file", help="the CSV from Hevy's Export Workouts, or - for standard input")
     h.add_argument("--user", help="whose workouts these are (default: the owner)")
+    hs = sub.add_parser("sync-hevy", help="pull workouts from Hevy's API now")
+    hs.add_argument("--full", action="store_true", help="pull every workout again")
 
     hh = sub.add_parser("import-health", help="import Apple Health's export.zip")
     hh.add_argument(
@@ -249,6 +265,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             for problem in parsed.problems:
                 print(f"  {problem}")
+        elif args.command == "sync-hevy":
+            if not settings.hevy_api_key:
+                log.error("HEVY_API_KEY is not set (see .env.example)")
+                return 1
+            with closing(
+                db.open_db(settings.db_path, settings.schema_path, settings.migrations_dir)
+            ):
+                pass  # apply migrations before syncing
+            result = hevy_sync.run(settings, full=args.full)
+            print(result.summary())
+            return 1 if result.error else 0
         elif args.command == "import-health":
             import_health(args, settings)
         elif args.command == "user":

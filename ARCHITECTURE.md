@@ -301,12 +301,24 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   any food, by servings. The row follows the recipe and its ingredients (re-summed when an
   ingredient is corrected); it can't be edited, renamed or deleted as a food, only through
   the recipe. Deleting a recipe deletes its food row; logged entries keep their snapshots.
-- Workouts (#94, migration 0014, `chomp/hevy.py`): Hevy has no API without Pro, so workouts
-  come from its CSV export (one row per set; `weight_lbs`/`distance_miles` or the metric
+- Hevy API sync (#113, migration 0019, `chomp/hevy_sync.py`, `chomp/sources/hevy.py`): with
+  `HEVY_API_KEY` set (Hevy Pro), the server runs a sync in a background thread every
+  `HEVY_SYNC_MINUTES` (default 15) for `HEVY_USER` (default the owner); Sync now on You ›
+  Integrations (`POST /app/workouts/sync`) and `chomp sync-hevy [--full]` run one on demand,
+  one at a time. The first run lists every workout (`GET /v1/workouts`, 10 a page); later runs
+  read `GET /v1/workouts/events?since=` (updated and deleted events, the last per workout
+  wins). Workouts carry Hevy's id in `workouts.hevy_id`; a workout without one (CSV) that
+  started in the same minute is adopted. `hevy_sync` holds the cursor and the last run's
+  result; the cursor moves only after a run without errors, to 10 minutes before that run
+  started, so events are re-read rather than missed. A workout Hevy sends that can't be saved
+  is logged and fails the run, so the cursor stays put and the next run asks for it again. The CSV import below stays as the fallback and leaves synced
+  workouts alone.
+- Workouts (#94, migration 0014, `chomp/hevy.py`): without the API, workouts
+  come from Hevy's CSV export (one row per set; `weight_lbs`/`distance_miles` or the metric
   columns; local times like `13 Oct 2026, 18:56`), uploaded on You › Integrations or with
   `chomp import-hevy FILE [--user NAME]`. Each user's `workouts` (UTC `started_at`, title,
   description) hold `workout_sets` in order (exercise, notes, superset, set index, type, kg,
-  reps, metres, seconds, RPE). A workout is identified by its start time, so re-importing a
+  reps, metres, seconds, RPE). A workout is identified by its start minute, so re-importing a
   newer export adds new workouts, replaces changed ones and skips the rest. A workout with
   a bad row is left out whole (and counted), so it never replaces a complete saved copy. Volume (`logic.workout_volume_kg`) is weight × reps over working sets.
 - Body weight (#94, migration 0013): each user's `weights` (UTC `measured_at`, `kg`, `source`:
