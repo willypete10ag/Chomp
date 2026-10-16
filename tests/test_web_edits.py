@@ -483,7 +483,8 @@ def test_rename_food(http, conn, logged):
     eggs, _, _ = logged
     sign_in(http)
     assert f'data-food="/app/foods/{eggs}" data-name="Egg, whole"' in http.get("/app/foods").text
-    assert "Rename…" in http.get(f"/app/foods/{eggs}").text
+    menu = http.get(f"/app/foods/{eggs}/menu", params={"part": "1"}).text
+    assert '<h2 id="food-menu-title">Egg, whole</h2>' in menu and "Save name" in menu
     r = http.post(
         f"/app/foods/{eggs}/rename", data={"name": "  Eggs  ", "back": "/app/foods"}, headers=ORIGIN
     )
@@ -516,7 +517,7 @@ def test_portions_in_food_details_add_edit_delete(http, conn, logged):
     sign_in(http)
     here = f"/app/foods/{eggs}?back=%2Fapp%2Ffoods"
     page = http.get(here).text
-    assert "Your portions" in page and "+ Add portion" in page and "None yet" in page
+    assert "Your portions" in page and "Add a portion" in page and "None yet" in page
     assert f'name="back" value="{here}"' in page
     back = {"back": here}
     r = http.post(

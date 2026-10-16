@@ -140,17 +140,25 @@ def test_read_photo_refuses_non_images():
 # --- Barcode ---------------------------------------------------------------------------------
 
 
-def test_new_food_page_offers_all_three_ways(app):
+def test_new_food_chooser_offers_four_ways_full_screen(app):
     r = app.get("/app/foods/new")
-    assert r.status_code == 200
+    assert r.status_code == 200 and "data-chooser" in r.text
+    for how in ("scan", "label", "search", "type"):
+        assert f'href="/app/foods/new?how={how}"' in r.text
+    # Full screen (#105): Cancel and the title on top, no tab bar
+    assert 'class="flowbar"' in r.text and 'class="tabs"' not in r.text
+    assert 'href="/app/foods" data-back>Cancel<' in r.text
+    r = app.get("/app/foods/new?how=scan")
     assert "data-scan-start" in r.text and 'name="barcode"' in r.text
+    assert "<h1>Scan a barcode</h1>" in r.text and 'class="tabs"' not in r.text
+    r = app.get("/app/foods/new?how=label")
     assert 'action="/app/foods/label"' in r.text and "how=type" in r.text
     assert "/app/static/zxing.min.js?v=" in r.text and "/app/static/scan.js?v=" in r.text
     assert "mediastream:" in r.headers["content-security-policy"]
     for name in ("zxing.min.js", "scan.js"):
         js = app.get(f"/app/static/{name}")
         assert js.status_code == 200 and js.headers["content-type"].startswith("text/javascript")
-    assert "Add a new food" in app.get("/app/foods").text
+    assert 'href="/app/foods/new" aria-label="New food"' in app.get("/app/foods").text
 
 
 def test_typed_barcode_found_on_off_and_saved_as_confirmed(app, conn, chain):  # noqa: F811
@@ -278,13 +286,14 @@ def test_confirm_a_food_by_hand_and_take_it_back(app, conn):
     swipe = f'class="swipe-action confirm js-only" method="post" action="/app/foods/{row["id"]}/'
     assert swipe + 'confirm"' in page
     assert 'aria-label="Confirm Mom&#x27;s chili">Confirm</button>' in page
-    assert ">Confirm</button>" in app.get(f"/app/foods/{row['id']}").text
+    assert ">Confirm it</button>" in app.get(f"/app/foods/{row['id']}").text
+    assert "checked its numbers" in app.get(f"/app/foods/{row['id']}/menu").text
     r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "1", "back": "/app/foods"})
     assert r.status_code == 303 and store.get_food(conn, row["id"])["verified"]
     page = app.get(r.headers["location"]).text
     assert "Marked Mom&#x27;s chili as confirmed." in page
     assert 'class="swipe unconfirmed"' not in page and "swipe-action confirm" not in page
-    assert "Mark unconfirmed" in app.get(f"/app/foods/{row['id']}").text
+    assert "Mark unconfirmed" in app.get(f"/app/foods/{row['id']}/menu").text
     r = app.post(f"/app/foods/{row['id']}/confirm", data={"confirmed": "0", "back": "/app/foods"})
     assert not store.get_food(conn, row["id"])["verified"]
     assert "as unconfirmed." in app.get(r.headers["location"]).text
@@ -388,25 +397,31 @@ def test_foods_sort_by_and_per_serving(app, conn):
     assert names("kcal", desc=False) == ["Oat milk", "Oat bran", "Oat cookie"]
 
     page = app.get("/app/foods").text
-    assert 'data-fold="foods"' in page and " open>" in page
-    assert 'data-fold="meals"' not in page  # saved meals are on the Meals side (#60)
-    assert 'class="sortbar"' in page and 'value="most" selected>Most logged<' in page
-    assert "Unconfirmed first" in page and "aria-current=page>Recent<" not in page  # no chips
-    assert "most logged first" not in page and 'class="badge">100 g<' not in page
-
-    page = app.get("/app/foods?sort=protein&per=serving").text
-    assert 'value="protein" selected>Protein<' in page and 'value="serving" selected' in page
-    assert page.index("Oat milk") < page.index("Oat cookie")
+    # The sort button (#105): sorted by, which way and per what, opening the sort sheet
+    assert 'class="chip sortbtn" href="/app/foods/sort?' in page and "data-sheet" in page
+    assert "Most logged &darr;" in page and "/serving" in page  # per serving by default
     assert 'class="badge">100 g<' in page  # Oat bran has no serving size
-    assert "115 <small>kcal" in page  # 240 ml of oat milk
-    assert "highest first" in page and "dir=up" in page
+    sheet = app.get("/app/foods/sort?part=1").text
+    assert '<h2 id="sort-title">Sort foods</h2>' in sheet and "Unconfirmed first" in sheet
+    current = 'aria-current="true"><span class="grow">'
+    assert current + "Most logged" in sheet and current + "Most logged first" in sheet
+    assert current + "Per serving" in sheet
+    assert 'href="/app/foods?sort=protein&amp;dir=down&amp;per=serving"' in sheet
+    assert "<main>" in app.get("/app/foods/sort").text  # a page of its own without the script
+
+    page = app.get("/app/foods?sort=protein&per=100g").text
+    assert "Protein &darr;" in page and "/100 g" in page
+    assert page.index("Oat bran") < page.index("Oat cookie")
+    assert 'class="badge">100 g<' not in page
+    assert "Sorted by Protein, highest first" in page
 
     page = app.get("/app/foods").text  # remembered on this device
-    assert 'value="protein" selected' in page and 'value="serving" selected' in page
+    assert "Protein &darr;" in page and "/100 g" in page
     page = app.get("/app/foods?sort=protein&dir=up&per=serving&q=oat").text
     assert page.index("Oat cookie") < page.index("Oat milk") and "lowest first" in page
-    page = app.get("/app/foods?sort=recent").text  # a new sort: high to low, per 100 g
-    assert "last Sat, Oct 3" in page and 'value="100g" selected' in page
+    assert "115 <small>kcal" in page  # 240 ml of oat milk
+    page = app.get("/app/foods?sort=recent").text  # a new sort: high to low, per serving
+    assert "last Sat, Oct 3" in page and "/serving" in page
     assert "Oat milk" in app.get("/app/foods?sort=bogus").text  # unknown sort: most logged
 
 
@@ -438,8 +453,8 @@ def test_delete_food_hides_it_for_everyone_and_keeps_history(app, conn, chain): 
 
     page = app.get("/app/foods").text
     assert f'action="/app/foods/{oats}/delete"' in page and 'class="swipe-action js-only"' in page
-    assert "press and hold it for more" in page
-    assert "Yes, delete Rolled oats" in app.get(f"/app/foods/{oats}").text
+    assert f'href="/app/foods/{oats}/menu?back=%2Fapp%2Ffoods" data-sheet' in page
+    assert "Yes, delete Rolled oats" in app.get(f"/app/foods/{oats}/menu").text
     r = app.post(f"/app/foods/{oats}/delete", data={"back": "/app/foods?q=oat"})
     assert r.status_code == 303
     assert r.headers["location"] == "/app/foods?q=oat&removed=Rolled+oats&meals=2"

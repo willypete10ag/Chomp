@@ -67,7 +67,8 @@ def test_moving_a_weigh_in_leaves_the_old_time_deleted(conn):
 
 def test_last_amounts_and_latest_workout(conn, logged):
     eggs, whites, _ = logged
-    store.log_meal(conn, [(eggs, 120, True)], hours_ago(0.5), None)
+    # now, not earlier: just after local midnight the fixture's breakfast is logged now too
+    store.log_meal(conn, [(eggs, 120, True)], hours_ago(0), None)
     last = store.last_amounts(conn, [eggs, whites, 999])
     assert last == {eggs: (120, True), whites: (300, False)}
     assert store.latest_workout(conn, "9999") is None

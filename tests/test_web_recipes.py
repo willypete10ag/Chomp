@@ -37,7 +37,15 @@ def test_recipe_page_and_logging_it_in_servings(http, conn):
     sign_in(http)
     page = http.get(f"/app/recipes/{recipe.id}").text
     assert "Brown the beef" in page and "Ground beef" in page
-    assert f'name="food_id" value="{recipe.food_id}"' in page
+    assert 'value="whole"' in page and "Whole recipe" in page  # per serving / whole recipe
+    assert f'href="/app/recipes/{recipe.id}/menu" data-sheet' in page
+    log = f"/app/foods/{recipe.food_id}/log?back=%2Fapp%2Frecipes%2F{recipe.id}"
+    assert f'href="{log}" data-sheet' in page
+    sheet = http.get(log, params={"part": "1"}).text
+    assert f'name="food_id" value="{recipe.food_id}"' in sheet and "Log Chili" in sheet
+    assert 'name="by" value="servings" checked' in sheet
+    menu = http.get(f"/app/recipes/{recipe.id}/menu").text
+    assert f'href="/app/recipes/{recipe.id}/edit"' in menu and "Yes, delete Chili" in menu
     r = http.post(
         "/app/log",
         data={

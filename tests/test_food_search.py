@@ -64,10 +64,10 @@ async def test_fdc_search_includes_survey_foods(upstream, fdc, egg_whites):
     assert types == {GENERIC["dataType"], BRANDED["dataType"]}
 
 
-def test_new_food_page_has_search_card_first(app):
-    text = app.get("/app/foods/new").text
-    assert "Search for a food" in text
-    assert text.index("Search for a food") < text.index("Scan a barcode")
+def test_new_food_search_flow(app):
+    text = app.get("/app/foods/new?how=search").text
+    assert "Search for a food" in text and "<h1>Search databases</h1>" in text
+    assert text.index("Search for a food") < text.index("Other ways to add it")
     assert "USDA FoodData Central and Open Food Facts" in text
 
 

@@ -1240,16 +1240,21 @@ def hhmm(local_iso: str) -> str:
     return datetime.fromisoformat(local_iso).strftime("%H:%M")
 
 
-def thumb(src: str, name: str) -> str:
-    """A food's photo as a small square (#74), or its first letter on a tile without one."""
+def initial(name: str) -> str:
+    return next((c for c in name if c.isalnum()), "·").upper()
+
+
+def thumb(src: str, name: str, tone: str = "") -> str:
+    """A food's photo as a small square (#74), or its first letter on a tile without one,
+    tinted with `tone` (saved meals, recipes)."""
     if src:
         return f'<img class="thumb" src="{e(src)}" alt="" loading="lazy" decoding="async">'
-    letter = next((c for c in name if c.isalnum()), "·").upper()
-    return f'<span class="thumb none" aria-hidden="true">{e(letter)}</span>'
+    toned = f" tone-{tone}" if tone else ""
+    return f'<span class="thumb none{toned}" aria-hidden="true">{e(initial(name))}</span>'
 
 
-def with_thumb(src: str, name: str, inner: str) -> str:
-    return f'<div class="with-thumb">{thumb(src, name)}<div class="grow">{inner}</div></div>'
+def with_thumb(src: str, name: str, inner: str, tone: str = "") -> str:
+    return f'<div class="with-thumb">{thumb(src, name, tone)}<div class="grow">{inner}</div></div>'
 
 
 def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
@@ -1368,7 +1373,8 @@ FOODS_COOKIE = "chomp_foods"
 
 def foods_order(params: Mapping[str, str], cookie: str) -> tuple[str, bool, bool]:
     """The Foods list's (sort, high to low, per serving): from the page's query when it
-    sets any of them, else as last chosen on this device (`cookie`, "sort.dir.per")."""
+    sets any of them, else as last chosen on this device (`cookie`, "sort.dir.per"),
+    else most logged, per serving."""
     if not any(k in params for k in ("sort", "dir", "per")):
         sort, _, rest = cookie.partition(".")
         direction, _, per = rest.partition(".")
@@ -1376,42 +1382,51 @@ def foods_order(params: Mapping[str, str], cookie: str) -> tuple[str, bool, bool
     sort = params.get("sort", "most")
     if sort not in FOOD_SORTS:
         sort = "most"
-    return sort, params.get("dir") != "up", params.get("per") == "serving"
+    # Per serving unless per 100 g was picked (#105): a serving is what gets eaten
+    return sort, params.get("dir") != "up", params.get("per") != "100g"
 
 
-def sort_bar(q: str, sort: str, desc: bool, per_serving: bool) -> str:
-    """The row under "Your foods" (#91): per 100 g / per serving on the left, Sort by and an
-    arrow that flips high to low on the right. Changing either menu sends it (the script); a
-    new sort starts high to low."""
+# How each Foods sort reads high to low, then low to high (#105)
+SORT_ORDERS = {
+    "most": ("Most logged first", "Least logged first"),
+    "recent": ("Latest first", "Earliest first"),
+    "new": ("Newest first", "Oldest first"),
+    "unconfirmed": ("Unconfirmed first", "Confirmed first"),
+}
 
-    def hidden(**fields: str) -> str:
-        return "".join(
-            f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in fields.items() if v
-        )
 
-    def options(choices: dict[str, str], current: str) -> str:
-        return "".join(
-            f'<option value="{k}"{" selected" if k == current else ""}>{label}</option>'
-            for k, label in choices.items()
-        )
+def foods_list_url(q: str, sort: str, desc: bool, per_serving: bool) -> str:
+    query = {"q": q} if q else {}
+    query |= {"sort": sort, "dir": "down" if desc else "up"}
+    query["per"] = "serving" if per_serving else "100g"
+    return f"{PREFIX}/foods?{urlencode(query)}"
 
-    per = "serving" if per_serving else "100g"
-    direction = "" if desc else "up"
-    flip = {k: v for k, v in (("q", q), ("sort", sort), ("per", per)) if v}
-    flip["dir"] = "down" if not desc else "up"
-    arrow = "↓" if desc else "↑"
-    told = "highest first" if desc else "lowest first"
-    go = '<button class="no-js" type="submit">Go</button>'
+
+def sort_button(q: str, sort: str, desc: bool, per_serving: bool) -> str:
+    """The sort button over the Foods list (#105): what it's sorted by and how values
+    show; it opens the sort sheet."""
+    query = {"q": q} if q else {}
+    query |= {"sort": sort, "dir": "down" if desc else "up"}
+    query["per"] = "serving" if per_serving else "100g"
+    arrow = "&darr;" if desc else "&uarr;"
+    told = (SORT_ORDERS.get(sort) or ("Highest first", "Lowest first"))[0 if desc else 1]
+    per = "per serving" if per_serving else "per 100 g"
     return (
-        '<div class="sortbar">'
-        f'<form method="get" action="{PREFIX}/foods">{hidden(q=q, sort=sort, dir=direction)}'
-        f'<select name="per" aria-label="Show values" data-autosubmit>'
-        f"{options({'100g': 'per 100 g', 'serving': 'per serving'}, per)}</select>{go}</form>"
-        f'<form method="get" action="{PREFIX}/foods">{hidden(q=q, per=per)}'
-        '<label>Sort by <select name="sort" data-autosubmit>'
-        f"{options(FOOD_SORTS, sort)}</select></label>{go}"
-        f'<a class="arrow" href="{PREFIX}/foods?{e(urlencode(flip))}" role="button"'
-        f' aria-label="Sorted {told}; tap to flip">{arrow}</a></form></div>'
+        f'<a class="chip sortbtn" href="{PREFIX}/foods/sort?{e(urlencode(query))}" data-sheet'
+        f' aria-label="Sorted by {FOOD_SORTS[sort]}, {told.lower()}, {per}. Change">'
+        f"{icon('arrow-up-down')}<span>{FOOD_SORTS[sort]} {arrow}</span>"
+        f'<span class="muted">· {"/serving" if per_serving else "/100 g"}</span></a>'
+    )
+
+
+def choice(href: str, label: str, on: bool, sub: str = "") -> str:
+    """A row in an option sheet: the picked one carries a check."""
+    note = f"<small>{sub}</small>" if sub else ""
+    mark = icon("check", "icon check") if on else ""
+    current = ' aria-current="true"' if on else ""
+    return (
+        f'<a class="item choice" href="{e(href)}"{current}><span class="grow">{label}{note}'
+        f"</span>{mark}</a>"
     )
 
 
@@ -1463,26 +1478,37 @@ def portion_item(food_id: int, p, back: str) -> str:
 
 
 def portions_block(row, portions, back: str) -> str:
-    """The person's portions of a food, and a form to add one."""
+    """The person's portions of a food as a list group (#105), and a row to add one."""
     lis = "".join(portion_item(row["id"], p, back) for p in portions)
     listed = f'<ul class="entries portions">{lis}</ul>' if lis else ""
-    none = "" if lis else '<p class="muted">None yet. Claude learns them as you log.</p>'
+    none = "" if lis else '<p class="body muted small">None yet. Claude learns them as you log.</p>'
     return (
-        f'<div class="portions-block"><p><b>Your portions</b></p>{listed}{none}'
-        '<details class="sub add-portion"><summary>+ Add portion</summary>'
-        f'<form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/portions">'
+        f'<section class="group" id="portions"><h3 class="group-cap">Your portions</h3>{listed}'
+        f'{none}<details class="opt add-portion"><summary class="item"><span class="badge-icon'
+        f' tone-kcal">{icon("plus")}</span><span class="grow">Add a portion<small>Like a'
+        f" slice, a scoop or a handful</small></span>{icon('chevron-right', 'icon chev')}"
+        f'</summary><form class="stack" method="post" action="{PREFIX}/foods/{row["id"]}/portions">'
         f'<input type="hidden" name="back" value="{e(back)}">'
         f'<label>Name<input name="name" placeholder="handful, slice, scoop" required'
         f' maxlength="{PORTION_NAME_MAX}"></label>'
         f'<label>Grams in one<input name="grams" type="number" inputmode="decimal"'
         f' step="any" min="0.1" max="{MAX_GRAMS}" required></label>'
-        '<button type="submit">Add portion</button></form></details></div>'
+        '<button type="submit">Add portion</button></form></details></section>'
     )
 
 
 def food_url(food_id: int, back: str) -> str:
     """A food's details page (#72), with the list to go back to."""
     return f"{PREFIX}/foods/{food_id}?{urlencode({'back': back})}"
+
+
+def more_link(url: str, name: str) -> str:
+    """A row's … (#105): every gesture on it has this visible way in. It opens the row's
+    menu as a sheet, or its page without the script."""
+    return (
+        f'<a class="more" href="{e(url)}" data-sheet aria-label="More for {e(name)}">'
+        f"{icon('ellipsis')}</a>"
+    )
 
 
 def food_item(
@@ -1493,12 +1519,13 @@ def food_item(
     photo: str = "",
     per_serving: bool = False,
 ) -> str:
-    """A saved food: name (two lines at most), kcal and macros per 100 g, or per serving
-    (`per_serving`; a food with no serving size keeps per 100 g, tagged). A tap opens its
-    details page (#72). With the script, press and hold it for a menu (Edit, Rename,
-    Confirm, Log it, Delete), swipe it left to delete it, and swipe an unconfirmed one right
-    to confirm it. `last_logged` says when it was last logged; `log_url` logs it; `photo`
-    is its picture's URL, if it has one."""
+    """A saved food: photo, name (two lines at most), brand, kcal and a macro line per serving
+    (`per_serving`; a food with no serving size keeps per 100 g, tagged) or per 100 g, and
+    an amber edge while unconfirmed. A tap opens its page (#72); its … opens its menu
+    (#105). With the script, press and hold it for the same menu over the blurred page,
+    swipe it left to delete it, and swipe an unconfirmed one right to confirm it.
+    `last_logged` says when it was last logged; `log_url` logs it; `photo` is its
+    picture's URL, if it has one."""
     n = store.nutrients_of(row)
     if per_serving and row["serving_g"]:
         n = logic.scale(n, row["serving_g"])
@@ -1510,11 +1537,8 @@ def food_item(
         meta.append(e(row["brand"]))
     if last_logged:
         meta.append(f"last {e(last_logged)}")
-    meta.append(
-        '<span class="badge ok">Confirmed</span>'
-        if row["verified"]
-        else '<span class="badge unsure">Unconfirmed</span>'
-    )
+    if not row["verified"]:
+        meta.append('<span class="unsure-text">Unconfirmed</span>')
     base = f"{PREFIX}/foods/{row['id']}"
     keep = f'<input type="hidden" name="back" value="{e(back)}">'
     delete = (
@@ -1529,82 +1553,161 @@ def food_item(
         f'{keep}<input type="hidden" name="confirmed" value="1">'
         f'<button type="submit" aria-label="Confirm {e(row["name"])}">Confirm</button></form>'
     )
+    menu = f"{base}/menu?{urlencode({'back': back})}"
     return (
         f'<li id="food-{row["id"]}" class="swipe{"" if row["verified"] else " unconfirmed"}"'
         f' data-food="{base}" data-name="{e(row["name"])}" data-back="{e(back)}"'
         f' data-log="{e(log_url)}" data-confirmed="{int(bool(row["verified"]))}"'
         f' data-photo="{int(bool(photo))}">'
-        f'{confirm}{delete}<div class="swipe-body" data-swipe>'
+        f'{confirm}{delete}<div class="swipe-body lrow" data-swipe>'
         f'<a class="food-link" href="{e(food_url(row["id"], back))}" draggable="false">'
         + with_thumb(
             photo,
             row["name"],
             f'<div class="row"><span class="name clamp">{e(row["name"])}</span>'
             f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-            f'<div class="row small muted"><span>{" · ".join(meta)}</span>'
+            f'<div class="row small muted"><span class="meta">{" · ".join(meta)}</span>'
             f"<span>{macros_line(n)}</span></div>",
         )
-        + "</a></div></li>"
+        + f"</a>{more_link(menu, row['name'])}</div></li>"
+    )
+
+
+def photo_form(food_id: int, back: str, text: str, cls: str) -> str:
+    """Pick a photo for a food (#74): choosing one sends it (the script); without the
+    script a Save photo button does."""
+    return (
+        f'<form class="photo-form" method="post" action="{PREFIX}/foods/{food_id}/photo"'
+        f' enctype="multipart/form-data"><input type="hidden" name="back" value="{e(back)}">'
+        f'<label class="{cls}"><span>{text}</span><input type="file" name="photo"'
+        ' accept="image/*" required data-autosubmit></label>'
+        '<button class="no-js" type="submit">Save photo</button></form>'
     )
 
 
 def photo_block(food_id: int, name: str, src: str, back: str) -> str:
-    """The top of a food's page (#74): its photo with Replace and Remove, or a box to add
-    one. Choosing a picture sends it straight away (the script); without the script a
-    Save photo button does."""
-    action = f"{PREFIX}/foods/{food_id}/photo"
-    keep = f'<input type="hidden" name="back" value="{e(back)}">'
-
-    def picker(text: str, cls: str) -> str:
-        return (
-            f'<form class="photo-form" method="post" action="{action}"'
-            f' enctype="multipart/form-data">{keep}'
-            f'<label class="{cls}"><span>{text}</span><input type="file" name="photo"'
-            ' accept="image/*" required data-autosubmit></label>'
-            '<button class="no-js" type="submit">Save photo</button></form>'
-        )
-
+    """The top of a food's page (#74, #105): its photo edge to edge with a camera button to
+    replace it (removing it is in the … menu), or a tile to add one. /app/foods/<id>#photo
+    lands here: the connector hands Claude that link for adding a photo."""
     if not src:
         return (
             '<div class="food-photo none" id="photo">'
-            + picker('<b aria-hidden="true">+</b> Add photo', "photo-add")
-            + '<p class="small muted">Take a picture of it, or pick one from your photos.</p>'
-            "</div>"
+            + photo_form(
+                food_id,
+                back,
+                f"{icon('camera')}<b>Add a photo</b><small>Take one, or pick one from your"
+                " photos</small>",
+                "photo-add",
+            )
+            + "</div>"
         )
     return (
         f'<div class="food-photo" id="photo"><img src="{e(src)}" alt="Photo of {e(name)}">'
-        '<div class="photo-tools">'
-        + picker("Replace photo", "button ghost")
-        + '<details class="sub confirm"><summary>Remove photo…</summary>'
-        f'<form method="post" action="{action}/delete">{keep}'
-        '<button class="danger" type="submit">Yes, remove the photo</button></form>'
-        "</details></div></div>"
+        + photo_form(
+            food_id, back, f'{icon("camera")}<span class="sr">Replace photo</span>', "photo-swap"
+        )
+        + "</div>"
     )
 
 
-def facts_table(per_100g: logic.Nutrients, serving_g: float | None) -> str:
-    """A food's nutrition facts in label order: per serving (when it has one) and per 100 g.
-    Rows the food has no value for are left out."""
-    columns = [logic.scale(per_100g, serving_g)] if serving_g else []
-    columns.append(dict(per_100g))
-    heads = (["Serving"] if serving_g else []) + ["100 g"]
+def detail_bar(back: str, where: str, menu: str, name: str) -> str:
+    """The bar over a food, saved meal or recipe (#105): back to its list, and its … menu."""
+    return (
+        '<header class="detailbar">'
+        f'<a class="iconbtn" href="{e(back)}" aria-label="Back to {where}">'
+        f"{icon('chevron-left')}</a>"
+        f'<a class="iconbtn" href="{e(menu)}" data-sheet aria-label="More for {e(name)}">'
+        f"{icon('ellipsis')}</a></header>"
+    )
+
+
+def initials_art(name: str, tone: str, glyph: str) -> str:
+    """The hero of a saved meal or recipe, which have no photo: its first letter on its
+    color, with its kind's icon."""
+    return (
+        f'<div class="detail-art tone-{tone}" aria-hidden="true"><b>{e(initial(name))}</b>'
+        f"{icon(glyph)}</div>"
+    )
+
+
+def macro_tiles(n: logic.Nutrients, basis: str, caption: str = "Calories") -> str:
+    """Calories (`basis` under them: "per serving") and the three macros as tiles (#105),
+    each macro with its share of the calories, then the split as one bar."""
+    split = logic.macro_split(n)
+    shown = logic.round_for_display(n)
+    rects, cells, x = [], [], 0.0
+    for key, _, _ in MACROS:
+        share = split[key] if split else 0.0
+        rects.append(
+            f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
+        )
+        x += share
+        tone = key.removesuffix("_g")
+        cells.append(
+            tile(
+                amount(key, shown[key]), NUTRIENT_LABELS[key], f"{round(share)}% of kcal", tone=tone
+            )
+        )
+    kcal = tile(f"{num(shown['kcal'])}<small> kcal</small>", caption, tone="kcal")
+    return (
+        f'<div class="tiles macro-tiles">{kcal}{"".join(cells)}</div>'
+        '<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
+        f' aria-hidden="true">{"".join(rects)}</svg>'
+    )
+
+
+def basis_switch(name: str, options: list[tuple[str, str, str]]) -> str:
+    """A segmented control that swaps what the page shows without a reload (#105): radios
+    the stylesheet reads (.basis-<value> blocks), so it works without the script. Each
+    option is (value, label, block)."""
+    labels = "".join(
+        f'<label><input type="radio" name="{name}" value="{value}"'
+        f"{' checked' if i == 0 else ''}>{label}</label>"
+        for i, (value, label, _) in enumerate(options)
+    )
+    blocks = "".join(
+        f'<div class="basis basis-{value}">{block}</div>' for value, _, block in options
+    )
+    return (
+        f'<div class="segment switch" role="radiogroup" aria-label="Show values">{labels}</div>'
+        + blocks
+    )
+
+
+def log_bar(href: str, label: str = "Log it") -> str:
+    """The detail pages' Log it (#105), kept at the bottom of the screen over the tab bar."""
+    return (
+        f'<div class="logbar"><a class="button" href="{e(href)}" data-sheet>'
+        f"{icon('plus')}<span>{label}</span></a></div>"
+    )
+
+
+def list_row(href: str, name: str, sub: str, value: str, photo: str = "", tone: str = "") -> str:
+    """A row in a detail page's list group: a saved meal's foods, a recipe's ingredients."""
+    return (
+        f'<a class="item" href="{e(href)}">{thumb(photo, name, tone)}<span class="grow">'
+        f'<span class="clamp">{e(name)}</span><small>{sub}</small></span>'
+        f'<span class="kcal">{value}</span>{icon("chevron-right", "icon chev")}</a>'
+    )
+
+
+def facts_table(per_100g: logic.Nutrients, grams: float | None, head: str) -> str:
+    """A food's nutrition facts in label order, for `grams` of it (else per 100 g), under
+    `head` ("Per serving · 1 cup (240 g)"). Rows the food has no value for are left out."""
+    n = logic.scale(per_100g, grams) if grams else dict(per_100g)
     rows = []
     for key, indent in FACTS:
         if key == "net_carbs":
-            values = [logic.net_carbs(c) for c in columns]
-            label, unit_key = "Net carbs", "carbs_g"
+            value, label, unit_key = logic.net_carbs(n), "Net carbs", "carbs_g"
         else:
-            values = [c.get(key) for c in columns]
-            label, unit_key = NUTRIENT_LABELS[key], key
-        if values[-1] is None:
+            value, label, unit_key = n.get(key), NUTRIENT_LABELS[key], key
+        if value is None:
             continue
-        cells = "".join(f"<td>{amount(unit_key, v)}</td>" for v in values)
         cls = ' class="indent"' if indent else (' class="top"' if key == "kcal" else "")
-        rows.append(f'<tr{cls}><th scope="row">{label}</th>{cells}</tr>')
-    head = "".join(f'<th scope="col">{h}</th>' for h in heads)
+        rows.append(f'<tr{cls}><th scope="row">{label}</th><td>{amount(unit_key, value)}</td></tr>')
     return (
-        '<table class="label-table"><thead><tr><th scope="col"><span class="sr">Nutrient'
-        f"</span></th>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        '<table class="label-table"><thead><tr><th scope="col" colspan="2">'
+        f"{head}</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
     )
 
 
@@ -2211,8 +2314,9 @@ def recipe_url(recipe_id: int) -> str:
 
 
 def recipe_item(recipe: store.Recipe) -> str:
-    """A recipe in the Recipes list: name and calories per serving. Tap opens it; with the
-    script, swipe it left to delete it and press and hold it to edit it."""
+    """A recipe in the Recipes list: name, servings and calories and macros per serving.
+    A tap opens it and its … opens its menu; with the script, swipe it left to delete it
+    and press and hold it to edit it."""
     n = logic.round_for_display(recipe_numbers(recipe)["per_serving"])
     url = recipe_url(recipe.id)
     delete = (
@@ -2221,12 +2325,19 @@ def recipe_item(recipe: store.Recipe) -> str:
     )
     return (
         f'<li id="recipe-{recipe.id}" class="swipe" data-hold="{url}/edit">{delete}'
-        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}"'
+        f'<div class="swipe-body lrow" data-swipe><a class="food-link" href="{url}"'
         ' draggable="false">'
-        f'<div class="row"><span class="name clamp">{e(recipe.name)}</span>'
-        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-        f'<div class="row small muted"><span>Makes {count_text(recipe.servings)}'
-        f" · per serving</span><span>{macros_line(n)}</span></div></a></div></li>"
+        + with_thumb(
+            "",
+            recipe.name,
+            f'<div class="row"><span class="name clamp">{e(recipe.name)}</span>'
+            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+            f'<div class="row small muted"><span class="meta">Serves'
+            f" {count_text(recipe.servings)}</span><span>{macros_line(n)}</span>"
+            "</div>",
+            "fat",
+        )
+        + f"</a>{more_link(f'{url}/menu', recipe.name)}</div></li>"
     )
 
 
@@ -2250,19 +2361,43 @@ def elsewhere(q: str, *, typed: bool = False) -> str:
     return f'<div class="elsewhere">{"".join(links)}</div>'
 
 
+FOODS_SIDES = (
+    ("foods", f"{PREFIX}/foods", "Foods", f"{PREFIX}/foods/new", "New food"),
+    ("meals", SAVED, "Meals", f"{SAVED}/new", "New saved meal"),
+    ("recipes", f"{PREFIX}/recipes", "Recipes", f"{PREFIX}/recipes/new", "New recipe"),
+)
+
+
 def foods_switch(active: str) -> str:
-    """Foods / Meals / Recipes at the top of the Foods tab (#60, #105); the tab always opens
-    on Foods."""
-    sides = (
-        ("foods", f"{PREFIX}/foods", "Foods"),
-        ("meals", SAVED, "Meals"),
-        ("recipes", f"{PREFIX}/recipes", "Recipes"),
-    )
+    """The Foods tab's head (#60, #105): its title with a + for a new one of what's shown,
+    and Foods / Meals / Recipes pills; the tab always opens on Foods."""
     links = "".join(
         f'<a href="{href}"{" aria-current=page" if key == active else ""}>{label}</a>'
-        for key, href, label in sides
+        for key, href, label, _, _ in FOODS_SIDES
     )
-    return f'<nav class="segment" aria-label="Foods, saved meals or recipes">{links}</nav>'
+    _, _, _, new, words = next(side for side in FOODS_SIDES if side[0] == active)
+    plus = f'<a class="iconbtn" href="{new}" aria-label="{words}">{icon("plus")}</a>'
+    return (
+        page_head("Foods", plus)
+        + f'<nav class="pills" aria-label="Foods, saved meals or recipes">{links}</nav>'
+    )
+
+
+def list_search(
+    action: str, q: str, placeholder: str, label: str, extra: str = "", **attrs: str
+) -> str:
+    """The search at the top of a Foods list (#105), kept in reach as the list scrolls."""
+    more = "".join(
+        f" {k.replace('_', '-')}" + (f'="{e(v)}"' if v else "") for k, v in attrs.items()
+    )
+    clear = f'<a class="clear" href="{action}" data-clear{"" if q else " hidden"}>Clear</a>'
+    return (
+        f'<form class="search listsearch" method="get" action="{action}" role="search"{more}>'
+        f'{extra}<span class="field-icon">{icon("search")}</span>'
+        f'<input type="search" name="q" value="{e(q)}" placeholder="{placeholder}"'
+        f' aria-label="{label}" maxlength="100" autocomplete="off" enterkeyhint="search">'
+        f'<button class="no-js" type="submit">Search</button>{clear}</form>'
+    )
 
 
 def template_totals(items) -> logic.Nutrients:
@@ -2284,9 +2419,10 @@ def item_amount(item) -> str:
 
 
 def saved_meal_item(t, items, query: str = "") -> str:
-    """A saved meal on the Meals side of Foods: name, calories and macros. Tap opens it; with
-    the script, swipe it left to delete it (after asking) and press and hold it to edit it.
-    `query` (?date=) carries the day the Log sheet was opened on to its Log it form."""
+    """A saved meal on the Meals side of Foods: name, items, calories and macros. A tap
+    opens it and its … opens its menu; with the script, swipe it left to delete it (after
+    asking), right to log it again now (#105), and press and hold it to edit it. `query`
+    (?date=) carries the day the Log sheet was opened on to its page."""
     n = logic.round_for_display(template_totals(items))
     url = f"{SAVED}/{t['id']}"
     name = capitalized(t["name"])
@@ -2295,14 +2431,26 @@ def saved_meal_item(t, items, query: str = "") -> str:
         f' data-confirm="Delete the saved meal {e(name)}?">'
         f'<button type="submit" aria-label="Delete {e(name)}">Delete</button></form>'
     )
+    again = (
+        f'<form class="swipe-action confirm js-only" method="post" action="{PREFIX}/log-template">'
+        f'<input type="hidden" name="template_id" value="{t["id"]}">'
+        '<input type="hidden" name="to" value="new"><input type="hidden" name="now" value="1">'
+        f'<button type="submit" aria-label="Log {e(name)} now">Log</button></form>'
+    )
     return (
-        f'<li id="saved-{t["id"]}" class="swipe" data-hold="{url}/edit">{delete}'
-        f'<div class="swipe-body" data-swipe><a class="food-link" href="{url}{query}"'
+        f'<li id="saved-{t["id"]}" class="swipe" data-hold="{url}/edit">{again}{delete}'
+        f'<div class="swipe-body lrow" data-swipe><a class="food-link" href="{url}{query}"'
         ' draggable="false">'
-        f'<div class="row"><span class="name clamp">{e(name)}</span>'
-        f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
-        f'<div class="row small muted"><span>{items_text(len(items))}</span>'
-        f"<span>{macros_line(n)}</span></div></a></div></li>"
+        + with_thumb(
+            "",
+            name,
+            f'<div class="row"><span class="name clamp">{e(name)}</span>'
+            f'<span class="kcal">{num(n["kcal"])} <small>kcal</small></span></div>'
+            f'<div class="row small muted"><span class="meta">{items_text(len(items))}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+            "protein",
+        )
+        + f"</a>{more_link(f'{url}/menu{query}', name)}</div></li>"
     )
 
 
@@ -3311,7 +3459,7 @@ def add_routes(
             + (f'<input type="hidden" name="view" value="{e(view)}">' if view else "")
         )
         scan = (
-            f'<a class="scan" href="{PREFIX}/foods/new#scan" aria-label="Scan a barcode">'
+            f'<a class="scan" href="{PREFIX}/foods/new?how=scan" aria-label="Scan a barcode">'
             f"{icon('scan-barcode')}</a>"
         )
         search = (
@@ -3523,8 +3671,15 @@ def add_routes(
                 store.add_to_meal(conn, into, items)
                 created = []
             else:
+                # Swiping a saved meal right on Foods (#105) logs it as a new meal now
+                now_local = datetime.now(ZoneInfo(tz))
+                day_text, time_text = (
+                    (now_local.date().isoformat(), now_local.strftime("%H:%M"))
+                    if form.get("now") == "1"
+                    else (str(form.get("date", "")), str(form.get("time", "")))
+                )
                 try:
-                    when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
+                    when = parse_when(day_text, time_text)
                 except ValueError as err:
                     return go(with_params(retry, problem=str(err)))
                 before = store.capture(conn)
@@ -3927,22 +4082,52 @@ def add_routes(
         status: int = 200,
         *,
         title: str = "New food",
-        back: str = f"{PREFIX}/foods",
+        back: str = f"{PREFIX}/foods/new",
     ) -> Response:
+        """New food's flows and Edit food (#59, #105): full screen, the tab bar hidden, with a
+        top bar of Cancel and the title. Cancel goes back where the flow was opened from
+        (the script), else to `back`."""
         header = (
-            '<header class="daynav">'
-            f'<a class="step" href="{e(back)}" aria-label="Back">&lsaquo;</a>'
-            f'<div class="daytitle"><h1>{e(title)}</h1></div>'
-            '<span class="step off" aria-hidden="true"></span></header>'
+            '<header class="flowbar">'
+            f'<a class="cancel" href="{e(back)}" data-back>Cancel</a>'
+            f"<h1>{e(title)}</h1><span></span></header>"
         )
         return render(
             title,
             header + body,
-            "foods",
+            None,
             signed_in=provider is not None,
             user=account(request),
             status=status,
             scripts=("zxing.min.js", "scan.js"),
+        )
+
+    # New food's four ways in (#105): (how, icon, tone, title, what it's for)
+    NEW_FOOD_WAYS = (
+        ("scan", "scan-barcode", "kcal", "Scan a barcode", "A packaged food, by its code"),
+        ("label", "scan-text", "protein", "Read a nutrition label", "A photo of Nutrition Facts"),
+        ("search", "globe", "steps", "Search databases", "USDA and Open Food Facts, by name"),
+        ("type", "keyboard", "carbs", "Type it in", "Restaurant dishes, home cooking"),
+    )
+
+    def new_food_ways(skip: str = "", code: str = "") -> str:
+        """The ways to add a food as large rows; `skip` leaves out the one already open."""
+        return "".join(
+            item(
+                new_food_url(how=how, barcode=code if how in ("label", "type") else ""),
+                glyph,
+                tone,
+                title,
+                sub,
+            )
+            for how, glyph, tone, title, sub in NEW_FOOD_WAYS
+            if how != skip
+        )
+
+    def other_ways(skip: str, code: str = "") -> str:
+        return (
+            '<section class="group ways"><h3 class="group-cap">Other ways to add it</h3>'
+            f"{new_food_ways(skip, code)}</section>"
         )
 
     def new_food_url(**params: str) -> str:
@@ -4076,15 +4261,6 @@ def add_routes(
             out.append('<p class="muted small center">Set FDC_API_KEY to search USDA here too.</p>')
         return "".join(out)
 
-    def type_card(code: str = "") -> str:
-        return (
-            '<section class="card"><h2>Type it in</h2><p class="small muted">For a restaurant'
-            " dish, home cooking or anything without a label. Tick Verified to count it as"
-            " confirmed.</p>"
-            f'<a class="button ghost wide" href="{e(new_food_url(how="type", barcode=code))}">'
-            "Type in a food</a></section>"
-        )
-
     @server.custom_route(f"{PREFIX}/foods/new", methods=["GET", "POST"])
     async def new_food(request: Request) -> Response:
         if request.method == "POST":
@@ -4093,11 +4269,13 @@ def add_routes(
             return to_login(request)
         params = request.query_params
         typed = params.get("barcode", "").strip()[:40]
-        if params.get("how") == "type":
+        how = params.get("how", "")
+        if how == "type":
             # From Foods' "Type it in" (#97), the name searched for comes along
             name = " ".join(params.get("name", "").split())[:FOOD_NAME_MAX]
             form = FoodForm("manual", {}, barcode=typed, name=name)
-            return new_food_page(request, f'<section class="card">{food_form(form)}</section>')
+            body = f'<section class="card">{food_form(form)}</section>'
+            return new_food_page(request, body, title="Type it in")
         q = " ".join(params.get("q", "").split())[:100]
         if params.get("part") == "usda":  # the script's USDA search as you type (#97)
             if not (q and usda):
@@ -4105,20 +4283,34 @@ def add_routes(
             with connect(request) as conn:
                 results = await search_online(conn, q, with_off=False)
             return HTMLResponse(results, headers=SECURITY_HEADERS)
-        if q:
-            with connect(request) as conn:
-                results = await search_online(conn, q)
-            body = search_card(q, results) + barcode_card() + label_card() + type_card()
-            return new_food_page(request, body)
+        if q or how == "search":
+            results = ""
+            if q:
+                with connect(request) as conn:
+                    results = await search_online(conn, q)
+            body = search_card(q, results) + other_ways("search")
+            return new_food_page(request, body, title="Search databases")
+        if how == "scan" and not typed:
+            body = barcode_card() + other_ways("scan")
+            return new_food_page(request, body, title="Scan a barcode")
+        if how == "label":
+            body = label_card(typed) + other_ways("label", typed)
+            return new_food_page(request, body, title="Read a label")
         if not typed:
-            body = search_card() + barcode_card() + label_card() + type_card()
-            return new_food_page(request, body)
+            # The chooser (#105); an old link to its #scan opens the scanner (the script)
+            body = (
+                '<p class="muted flow-lead">How do you want to add it?</p>'
+                f'<section class="group ways chooser" data-chooser>{new_food_ways()}</section>'
+                '<p class="muted small center">Or tell Claude about it, with a photo of the'
+                " label or the restaurant's nutrition numbers.</p>"
+            )
+            return new_food_page(request, body, back=f"{PREFIX}/foods")
         try:
             code = gtins.normalize(typed)
         except gtins.InvalidBarcode:
             problem = "That isn't a barcode number. Check the digits and try again."
-            body = barcode_card(typed, problem) + label_card() + type_card()
-            return new_food_page(request, body, 400)
+            body = barcode_card(typed, problem) + other_ways("scan")
+            return new_food_page(request, body, 400, title="Scan a barcode")
         with connect(request) as conn:
             hit = await barcode_lookup(conn, code, fdc, off)
         photos.backfill_soon(settings.db_path)
@@ -4139,10 +4331,9 @@ def add_routes(
             body = (
                 f'<section class="card empty"><p>{e(text)}</p></section>'
                 + label_card(code)
-                + type_card(code)
-                + barcode_card()
+                + other_ways("label", code)
             )
-            return new_food_page(request, body)
+            return new_food_page(request, body, title="Scan a barcode")
         row = hit.row
         # Saving here confirms the food, so OFF's generic "unverified" note doesn't apply
         note = "; ".join(f for f in hit.flags if not f.startswith("unverified"))
@@ -4204,7 +4395,9 @@ def add_routes(
         try:
             read = await anyio.to_thread.run_sync(label_reader.read_photo, data, limiter=ocr_limit)
         except label_reader.LabelError as err:
-            return new_food_page(request, label_card(code, str(err)) + type_card(code), 400)
+            return new_food_page(
+                request, label_card(code, str(err)) + other_ways("label", code), 400
+            )
         found = {k: field_text(k, v) for k, v in read.values.items()}
         if read.serving_g is not None:
             found["serving_g"] = field_text("serving_g", read.serving_g)
@@ -4417,9 +4610,11 @@ def add_routes(
 
     @server.custom_route(PREFIX + "/foods/{food_id:int}", methods=["GET"])
     async def food_page(request: Request) -> Response:
-        """One food (#72): name, brand and calories up top, protein, carbs and fat, the
-        nutrition facts per serving and per 100 g, vitamins and minerals folded away, the
-        person's portions, then how often they've logged it and where it came from."""
+        """One food (#72, #105): its photo edge to edge (or a tile to add one), name, brand
+        and whether it's confirmed; per serving / per 100 g switching the calorie and macro
+        tiles and the label-style nutrition facts, vitamins and minerals folded away; the
+        person's portions; how often they've logged it and where it came from; Log it at
+        the bottom and everything else in its … menu. #photo lands on the photo."""
         if not signed_in(request):
             return to_login(request)
         food_id = request.path_params["food_id"]
@@ -4438,85 +4633,50 @@ def add_routes(
         banner += food_toasts(request.query_params)
         per_100g = store.nutrients_of(row)
         serving_g = row["serving_g"]
-        basis = logic.scale(per_100g, serving_g) if serving_g else per_100g
+
+        def basis(grams: float | None, head: str) -> str:
+            n = logic.scale(per_100g, grams) if grams else per_100g
+            micros = food_micros(per_100g, grams)
+            return (
+                macro_tiles(n, "per serving" if grams else "per 100 g")
+                + f'<section class="card facts-card"><h2>Nutrition facts</h2>'
+                f"{facts_table(per_100g, grams, head)}</section>"
+                + (
+                    fold("food-micros", "Vitamins and minerals", micros, opened=False)
+                    if micros
+                    else ""
+                )
+            )
+
         if serving_g:
             grams = f"{num(serving_g, 1)}{NBSP}g"
             desc = row["serving_desc"]
-            per = f"per serving · {e(desc)}" if desc and desc != grams else f"per {grams} serving"
+            head = f"Per serving · {e(desc)}" if desc and desc != grams else f"Per {grams} serving"
             if desc and grams.replace(NBSP, "") not in desc.replace(" ", ""):
-                per += f" ({grams})"
+                head += f" ({grams})"
+            values = basis_switch(
+                "basis",
+                [
+                    ("serving", "Per serving", basis(serving_g, head)),
+                    ("100g", "Per 100 g", basis(None, "Per 100 g")),
+                ],
+            )
         else:
-            per = "per 100 g"
-        badge = (
-            '<span class="badge ok">Confirmed</span>'
-            if row["verified"]
-            else '<span class="badge unsure">Unconfirmed</span>'
-        )
-        split = logic.macro_split(basis)
-        rects, tiles, x = [], [], 0.0
-        for key, cls, _ in MACROS:
-            share = split[key] if split else 0.0
-            rects.append(
-                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
+            values = (
+                '<p class="muted small basis-note">No serving size on record, so these are per'
+                " 100 g.</p>" + basis(None, "Per 100 g")
             )
-            x += share
-            tiles.append(
-                f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                f"<div><strong>{amount(key, basis[key])}</strong></div>"
-                f'<div class="muted small">{round(share)}% of kcal</div></div>'
-            )
-        parts = [
-            '<header class="daynav">'
-            f'<a class="step" href="{e(back)}" aria-label="Back to Foods">&lsaquo;</a>'
-            '<span class="step off" aria-hidden="true"></span></header>',
-            banner,
-            f'<section class="card summary food-hero{"" if row["verified"] else " unconfirmed"}">'
-            + photo_block(food_id, row["name"], photo_src(food_id), here)
-            + f'<h1 class="food-name">{e(row["name"])}</h1>'
-            + (f'<p class="muted brand">{e(row["brand"])}</p>' if row["brand"] else "")
-            + f'<p class="badges">{badge}</p>'
-            f'<p class="hero"><span class="big kcal">{num(basis["kcal"])}</span> kcal'
-            f' <span class="muted small">{per}</span></p>'
-            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
-            f' aria-hidden="true">{"".join(rects)}</svg>'
-            f'<div class="macros">{"".join(tiles)}</div></section>',
-            fold("food-facts", "Nutrition facts", facts_table(per_100g, serving_g)),
-        ]
-        if micros := food_micros(per_100g, serving_g):
-            parts.append(fold("food-micros", "Vitamins and minerals", micros, opened=False))
-        parts.append(
-            f'<section class="card" id="portions">{portions_block(row, portions, here)}</section>'
-        )
         base = f"{PREFIX}/foods/{food_id}"
         keep = f'<input type="hidden" name="back" value="{e(here)}">'
-        confirm = (
-            f'<form method="post" action="{base}/confirm">{keep}'
-            '<input type="hidden" name="confirmed" value="0">'
-            '<button class="button ghost" type="submit">Mark unconfirmed</button></form>'
-            if row["verified"]
-            else f'<form method="post" action="{base}/confirm">{keep}'
-            '<input type="hidden" name="confirmed" value="1">'
-            '<button type="submit">Confirm</button></form>'
-        )
-        log_it = add_url(today(), None, row["name"])
-        parts.append(
-            '<section class="card actions">'
-            f'<a class="button" href="{e(log_it)}">Log it</a>{confirm}'
-            f'<a class="button ghost" href="{e(f"{base}/edit?" + urlencode({"back": here}))}">'
-            "Edit</a>"
-            '<details class="sub rename"><summary>Rename…</summary>'
-            f'<form class="stack" method="post" action="{base}/rename">{keep}'
-            f'<label>Name<input name="name" value="{e(row["name"])}" required'
-            f' maxlength="{FOOD_NAME_MAX}"></label>'
-            '<button type="submit">Save name</button></form></details>'
-            '<details class="sub confirm"><summary>Delete…</summary>'
-            f'<form class="stack" method="post" action="{base}/delete">'
-            f'<input type="hidden" name="back" value="{e(back)}">'
-            '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
-            " numbers; portions of it go, and it leaves any saved meal.</p>"
-            f'<button class="danger" type="submit">Yes, delete {e(row["name"])}</button>'
-            "</form></details></section>"
-        )
+        if row["verified"]:
+            state = '<span class="badge ok">Confirmed</span>'
+        else:
+            state = (
+                '<span class="badge unsure">Unconfirmed</span>'
+                f'<form class="inline" method="post" action="{base}/confirm">{keep}'
+                '<input type="hidden" name="confirmed" value="1">'
+                '<button class="chip" type="submit">Confirm it</button></form>'
+            )
         foot = []
         if uses:
             when = day_title(logic.local_date(last_used, tz), today())
@@ -4525,13 +4685,213 @@ def add_routes(
         else:
             foot.append("Not logged yet")
         foot.append(f"Source: {SOURCES[row['source']]}")
-        parts.append(f'<p class="muted small center">{" · ".join(foot)}</p>')
+        menu = f"{base}/menu?{urlencode({'back': here, 'gone': back})}"
+        parts = [
+            detail_bar(back, "Foods", menu, row["name"]),
+            banner,
+            f'<article class="detail{"" if row["verified"] else " unconfirmed"}">'
+            + photo_block(food_id, row["name"], photo_src(food_id), here)
+            + f'<div class="detail-head"><h1 class="detail-name">{e(row["name"])}</h1>'
+            + (f'<p class="detail-sub">{e(row["brand"])}</p>' if row["brand"] else "")
+            + f'<div class="badges">{state}</div></div>'
+            + values
+            + portions_block(row, portions, here)
+            + f'<p class="muted small center detail-foot">{" · ".join(foot)}</p>'
+            + log_bar(f"{base}/log?{urlencode({'back': here})}")
+            + "</article>",
+        ]
         return render(
             row["name"],
             "".join(parts),
             "foods",
             signed_in=provider is not None,
             user=account(request),
+        )
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/menu", methods=["GET"])
+    async def food_menu(request: Request) -> Response:
+        """A food's … (#105), from its row on Foods or its page: Log it, Edit, Rename, its
+        photo, Confirm (or Mark unconfirmed) and Delete. ?back= is where a change returns
+        to; ?gone= where Delete does (the list, from the food's page)."""
+        if not signed_in(request):
+            return to_login(request)
+        food_id = request.path_params["food_id"]
+        back = came_from(request, f"{PREFIX}/foods")
+        gone = safe_next(request.query_params.get("gone", "")) or back
+        with connect(request) as conn:
+            try:
+                row = store.get_food(conn, food_id, live=True)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+        base = f"{PREFIX}/foods/{food_id}"
+        name = row["name"]
+        keep = f'<input type="hidden" name="back" value="{e(back)}">'
+        src = photo_src(food_id)
+
+        def option(glyph: str, tone: str, title: str, body: str, sub: str = "") -> str:
+            note = f"<small>{sub}</small>" if sub else ""
+            return (
+                f'<details class="opt"><summary class="item"><span class="badge-icon'
+                f' tone-{tone}">{icon(glyph)}</span><span class="grow">{title}{note}</span>'
+                f"{icon('chevron-right', 'icon chev')}</summary>{body}</details>"
+            )
+
+        def button(action: str, fields: str, glyph: str, tone: str, title: str, cls="") -> str:
+            return (
+                f'<form method="post" action="{base}{action}">{keep}{fields}'
+                f'<button class="item{cls}" type="submit"><span class="badge-icon tone-{tone}">'
+                f'{icon(glyph)}</span><span class="grow">{title}</span></button></form>'
+            )
+
+        photo = option(
+            "camera",
+            "steps",
+            "Change photo" if src else "Add a photo",
+            '<div class="body">'
+            + photo_form(food_id, back, "Choose a photo", "button ghost")
+            + "</div>",
+            "Take one, or pick one from your photos",
+        )
+        rows = [
+            item(
+                f"{base}/log?{urlencode({'back': back})}",
+                "plus",
+                "kcal",
+                "Log it",
+                "Pick an amount and a meal",
+                data_sheet="",
+            ),
+            item(
+                f"{base}/edit?{urlencode({'back': back})}",
+                "pencil",
+                "protein",
+                "Edit",
+                "Serving size and nutrition values",
+            ),
+            option(
+                "pencil",
+                "carbs",
+                "Rename",
+                f'<form class="stack" method="post" action="{base}/rename">{keep}'
+                f'<label>Name<input name="name" value="{e(name)}" required'
+                f' maxlength="{FOOD_NAME_MAX}"></label>'
+                '<button type="submit">Save name</button></form>',
+            ),
+            photo,
+        ]
+        if src:
+            rows.append(button("/photo/delete", "", "image-minus", "muted", "Remove photo"))
+        if row["verified"]:
+            rows.append(
+                button(
+                    "/confirm",
+                    '<input type="hidden" name="confirmed" value="0">',
+                    "badge-check",
+                    "carbs",
+                    "Mark unconfirmed",
+                )
+            )
+        else:
+            rows.append(
+                button(
+                    "/confirm",
+                    '<input type="hidden" name="confirmed" value="1">',
+                    "badge-check",
+                    "kcal",
+                    "Confirm<small>You've checked its numbers</small>",
+                )
+            )
+        rows.append(
+            f'<details class="opt danger"><summary class="item danger"><span class="badge-icon'
+            f' tone-over">{icon("trash-2")}</span><span class="grow">Delete</span>'
+            f"{icon('chevron-right', 'icon chev')}</summary>"
+            f'<form class="stack" method="post" action="{base}/delete">'
+            f'<input type="hidden" name="back" value="{e(gone)}">'
+            '<p class="small muted">Deletes it for everyone. Meals already logged keep their'
+            " numbers; portions of it go, and it leaves any saved meal.</p>"
+            f'<button class="danger" type="submit">Yes, delete {e(name)}</button></form>'
+            "</details>"
+        )
+        state = "Confirmed" if row["verified"] else "Unconfirmed"
+        sub = " · ".join(filter(None, [e(row["brand"] or ""), state]))
+        sheet = (
+            f'<h2 id="food-menu-title">{e(name)}</h2><p class="sheet-sub muted small">{sub}</p>'
+            f'<div class="group">{"".join(rows)}</div>'
+        )
+        return sheet_or_page(request, name, sheet, back, "foods")
+
+    @server.custom_route(PREFIX + "/foods/{food_id:int}/log", methods=["GET"])
+    async def food_log(request: Request) -> Response:
+        """Log it (#105), from a food's or recipe's page or its … menu: the amount (servings
+        when it has a serving size), a live preview, and a new meal now or a meal already
+        logged today."""
+        if not signed_in(request):
+            return to_login(request)
+        food_id = request.path_params["food_id"]
+        back = came_from(request, food_url(food_id, f"{PREFIX}/foods"))
+        day = today()
+        with connect(request) as conn:
+            try:
+                food = store.get_food(conn, food_id, live=True)
+            except store.NotFound:
+                return message("Not found", "That food no longer exists.", 404, signed_in=True)
+            last, estimated = store.last_amounts(conn, [food_id]).get(food_id, (None, False))
+            portions = store.portions_of(conn, [food_id])[food_id]
+            _, _, _, ctx = load_day(conn, day)
+        per_100g = store.nutrients_of(food)
+        serving = food["serving_g"]
+        grams = serving or last or 100.0
+        estimated = bool(not serving and last and estimated)
+        now_local = datetime.now(ZoneInfo(tz))
+        form = (
+            f'<form class="stack edit" method="post" action="{PREFIX}/log"'
+            f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
+            f'<input type="hidden" name="food_id" value="{food["id"]}">'
+            f'<input type="hidden" name="date" value="{day.isoformat()}">'
+            f'<input type="hidden" name="estimated" value="{int(estimated)}">'
+            + amount_picker(food, grams, slider_top(grams, serving))
+            + grams_chips(food, portions, None if serving else last)
+            + preview(per_100g, grams, ctx, ctx.kcal)
+            + meal_menu(ctx, None, "Add to", now_local.strftime("%H:%M"), with_name=True)
+            + '<button type="submit">Log it</button></form>'
+        )
+        sheet = (
+            f'<h2 id="food-log-title">Log {e(food["name"])}</h2>'
+            f'<p class="sheet-sub muted small">To today</p>{form}'
+        )
+        return sheet_or_page(request, f"Log {food['name']}", sheet, back, "foods")
+
+    @server.custom_route(f"{PREFIX}/foods/sort", methods=["GET"])
+    async def foods_sort(request: Request) -> Response:
+        """The Foods sort sheet (#105): what to sort by, which way, and whether values show
+        per serving or per 100 g. Each pick reloads the list (and is remembered)."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        q = params.get("q", "").strip()[:100]
+        sort, desc, per_serving = foods_order(params, request.cookies.get(FOODS_COOKIE, ""))
+        by = "".join(
+            choice(foods_list_url(q, key, True, per_serving), label, key == sort)
+            for key, label in FOOD_SORTS.items()
+        )
+        words = SORT_ORDERS.get(sort) or ("Highest first", "Lowest first")
+        order = choice(foods_list_url(q, sort, True, per_serving), words[0], desc) + choice(
+            foods_list_url(q, sort, False, per_serving), words[1], not desc
+        )
+        per = choice(
+            foods_list_url(q, sort, desc, True),
+            "Per serving",
+            per_serving,
+            "Foods without a serving size stay per 100 g",
+        ) + choice(foods_list_url(q, sort, desc, False), "Per 100 g", not per_serving)
+        sheet = (
+            '<h2 id="sort-title">Sort foods</h2>'
+            f'<div class="group"><h3 class="group-cap">Sort by</h3>{by}</div>'
+            f'<div class="group"><h3 class="group-cap">Order</h3>{order}</div>'
+            f'<div class="group"><h3 class="group-cap">Show values</h3>{per}</div>'
+        )
+        return sheet_or_page(
+            request, "Sort foods", sheet, foods_list_url(q, sort, desc, per_serving), "foods"
         )
 
     # --- Food names ---
@@ -4719,114 +5079,134 @@ def add_routes(
         banner = ""
         if removed := params.get("removed", "")[:RECIPE_NAME_MAX]:
             banner = toast(f"<span>Deleted {e(removed)}.</span>", "status")
-        parts = [
-            page_head("Foods"),
-            foods_switch("recipes"),
-            banner,
-            f'<a class="button add" href="{PREFIX}/recipes/new">+ New recipe</a>',
-        ]
+        parts = [foods_switch("recipes"), banner]
         if recipes:
-            hint = (
-                '<p class="small muted js-only hint">Tap a recipe to see it; press and hold it'
-                " to edit. Swipe left to delete.</p>"
-            )
             items = "".join(recipe_item(r) for r in recipes)
             parts.append(
-                f'<section class="card">{hint}<ul class="entries recipes">{items}</ul></section>'
+                f'<h2 class="section-title">Your recipes<small>{len(recipes)}</small></h2>'
+                f'<section class="group list"><ul class="entries recipes">{items}</ul></section>'
             )
         else:
             parts.append(
                 '<section class="card empty"><p>No recipes yet.</p><p class="muted small">'
-                "Add one here, or tell Claude “save this as my chili recipe”.</p></section>"
+                "Add one here, or tell Claude “save this as my chili recipe”.</p>"
+                f'<a class="button" href="{PREFIX}/recipes/new">New recipe</a></section>'
             )
         return recipe_page("Recipes", "".join(parts), request)
 
+    def detail_menu(
+        request: Request, name: str, sub: str, rows: list[str], back: str, title_id: str
+    ) -> Response:
+        """A saved meal's or recipe's … sheet (#105)."""
+        sheet = (
+            f'<h2 id="{title_id}">{e(name)}</h2><p class="sheet-sub muted small">{sub}</p>'
+            f'<div class="group">{"".join(rows)}</div>'
+        )
+        return sheet_or_page(request, name, sheet, back, "foods")
+
+    def delete_row(action: str, what: str, note: str, ask: str = "") -> str:
+        """Delete in a … sheet: it opens to say what goes, then a button that does it."""
+        confirm = f' data-confirm="{e(ask)}"' if ask else ""
+        return (
+            f'<details class="opt danger"><summary class="item danger"><span class="badge-icon'
+            f' tone-over">{icon("trash-2")}</span><span class="grow">Delete</span>'
+            f"{icon('chevron-right', 'icon chev')}</summary>"
+            f'<form class="stack" method="post" action="{action}"{confirm}>'
+            f'<p class="small muted">{note}</p>'
+            f'<button class="danger" type="submit">Yes, delete {e(what)}</button></form></details>'
+        )
+
     @server.custom_route(PREFIX + "/recipes/{recipe_id:int}", methods=["GET"])
     async def recipe_view(request: Request) -> Response:
-        """One recipe: calories and macros per serving, ingredients, steps, and a Log
-        card pinned to the bottom that logs it in servings like any food."""
+        """One recipe (#82, #105), on the same template as a food: per serving / whole
+        recipe switching the calorie and macro tiles, its ingredients as a list (each opens
+        its food), its steps, Log it (in servings) at the bottom, and Edit and Delete in
+        its … menu."""
         if not signed_in(request):
             return to_login(request)
         recipe_id = request.path_params["recipe_id"]
-        day = today()
         with connect(request) as conn:
             try:
                 recipe = store.get_recipe_by_id(conn, recipe_id)
-                food = store.get_food(conn, recipe.food_id)
             except store.NotFound:
                 return message("Not found", "That recipe no longer exists.", 404, signed_in=True)
-            _, _, _, ctx = load_day(conn, day)
         numbers = recipe_numbers(recipe)
-        per = logic.round_for_display(numbers["per_serving"])
-        total = logic.round_for_display(numbers["total"])
         params = request.query_params
         banner = (
             toast(f"<span>Saved {e(recipe.name)}.</span>", "status") if params.get("saved") else ""
         )
-        split = logic.macro_split(numbers["per_serving"])
-        rects, tiles, x = [], [], 0.0
-        for key, cls, _ in MACROS:
-            share = split[key] if split else 0.0
-            rects.append(
-                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
-            )
-            x += share
-            tiles.append(
-                f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                f"<div><strong>{amount(key, per[key])}</strong></div>"
-                f'<div class="muted small">{round(share)}% of kcal</div></div>'
-            )
+        url = recipe_url(recipe.id)
         ingredients = "".join(
-            f'<li class="row"><span class="name">{e(i["name"])}'
-            + (f' <span class="muted small">{e(i["brand"])}</span>' if i["brand"] else "")
-            + f'</span><span class="muted">{num(i["grams"], 1)}{NBSP}g</span></li>'
+            list_row(
+                food_url(i["id"], url),
+                i["name"],
+                " · ".join(filter(None, [e(i["brand"] or ""), f"{num(i['grams'], 1)}{NBSP}g"])),
+                f"{num(logic.snapshot(store.nutrients_of(i), i['grams'])['kcal'])}{NBSP}"
+                "<small>kcal</small>",
+                photo_src(i["id"]),
+            )
             for i in recipe.ingredients
-        )
-        whole = (
-            f'<p class="small muted">Whole recipe: {num(total["kcal"])}{NBSP}kcal ·'
-            f" {macros_line(total)} · {num(numbers['total_g'], 0)}{NBSP}g of ingredients</p>"
         )
         steps = (
             '<ol class="steps">' + "".join(f"<li>{e(s)}</li>" for s in recipe.steps) + "</ol>"
             if recipe.steps
-            else '<p class="muted small">No steps yet. Press Edit to add them.</p>'
+            else '<p class="muted small">No steps yet. Add them with Edit in the … menu.</p>'
         )
-        now_local = datetime.now(ZoneInfo(tz))
-        log_form = (
-            f'<form class="stack edit" method="post" action="{PREFIX}/log"'
-            f' data-per100="{per100_attr(store.nutrients_of(food))}"{day_attrs(ctx, ctx.kcal)}>'
-            f'<input type="hidden" name="food_id" value="{food["id"]}">'
-            f'<input type="hidden" name="date" value="{day.isoformat()}">'
-            '<input type="hidden" name="estimated" value="0">'
-            + amount_picker(food, food["serving_g"], slider_top(food["serving_g"]), by="servings")
-            + preview(store.nutrients_of(food), food["serving_g"], ctx, ctx.kcal)
-            + meal_menu(ctx, None, "Add to", now_local.strftime("%H:%M"), with_name=True)
-            + '<button type="submit">Log it</button></form>'
+        whole = f"Whole recipe · {num(numbers['total_g'], 0)}{NBSP}g of ingredients"
+        values = basis_switch(
+            "basis",
+            [
+                ("serving", "Per serving", macro_tiles(numbers["per_serving"], "per serving")),
+                ("whole", "Whole recipe", macro_tiles(numbers["total"], "whole recipe")),
+            ],
         )
+        log = f"{PREFIX}/foods/{recipe.food_id}/log?{urlencode({'back': url})}"
         parts = [
-            '<header class="daynav">'
-            f'<a class="step" href="{PREFIX}/recipes" aria-label="Back to Recipes">&lsaquo;</a>'
-            f'<a class="step edit-link" href="{recipe_url(recipe.id)}/edit">Edit</a></header>',
+            detail_bar(f"{PREFIX}/recipes", "Recipes", f"{url}/menu", recipe.name),
             banner,
-            '<section class="card summary food-hero">'
-            f'<h1 class="food-name">{e(recipe.name)}</h1>'
-            f'<p class="muted brand">Makes {servings_text(recipe.servings)}</p>'
-            f'<p class="hero"><span class="big kcal">{num(per["kcal"])}</span> kcal'
-            ' <span class="muted small">per serving</span></p>'
-            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
-            f' aria-hidden="true">{"".join(rects)}</svg>'
-            f'<div class="macros">{"".join(tiles)}</div></section>',
-            fold(
-                "recipe-ingredients",
-                "Ingredients",
-                f'<ul class="plain ingredients">{ingredients}</ul>{whole}',
-            ),
-            fold("recipe-steps", "Steps", steps),
-            '<section class="card log-recipe"><details class="fold">'
-            '<summary><h2 class="section">Log it<small>in servings</small></h2></summary>'
-            f"{log_form}</details></section>",
+            '<article class="detail">'
+            + initials_art(recipe.name, "fat", "chef-hat")
+            + f'<div class="detail-head"><h1 class="detail-name">{e(recipe.name)}</h1>'
+            f'<p class="detail-sub">Recipe · makes {servings_text(recipe.servings)}</p></div>'
+            + values
+            + f'<section class="group"><h3 class="group-cap">Ingredients<small>{e(whole)}'
+            f"</small></h3>{ingredients}</section>"
+            + f'<section class="card"><h2>Steps</h2>{steps}</section>'
+            + (log_bar(log) if recipe.food_id else "")
+            + "</article>",
         ]
         return recipe_page(recipe.name, "".join(parts), request)
+
+    @server.custom_route(PREFIX + "/recipes/{recipe_id:int}/menu", methods=["GET"])
+    async def recipe_menu(request: Request) -> Response:
+        """A recipe's … (#105): Log it, Edit and Delete."""
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            try:
+                recipe = store.get_recipe_by_id(conn, request.path_params["recipe_id"])
+            except store.NotFound:
+                return message("Not found", "That recipe no longer exists.", 404, signed_in=True)
+        url = recipe_url(recipe.id)
+        back = came_from(request, url)
+        rows = [
+            item(
+                f"{PREFIX}/foods/{recipe.food_id}/log?{urlencode({'back': back})}",
+                "plus",
+                "kcal",
+                "Log it",
+                "In servings",
+                data_sheet="",
+            ),
+            item(f"{url}/edit", "pencil", "protein", "Edit", "Ingredients, servings and steps"),
+            delete_row(
+                f"{url}/delete",
+                recipe.name,
+                "Meals already logged keep their numbers.",
+            ),
+        ]
+        sub = f"Recipe · makes {servings_text(recipe.servings)}"
+        return detail_menu(request, recipe.name, sub, rows, back, "recipe-menu-title")
 
     def recipe_editor(conn, draft: RecipeDraft, error: str = "") -> str:
         """The recipe form: name, servings, ingredients with grams (search your foods to add
@@ -5092,25 +5472,24 @@ def add_routes(
         banner = ""
         if removed := params.get("removed", "")[:TEMPLATE_NAME_MAX]:
             banner = toast(f"<span>Deleted {e(capitalized(removed))}.</span>", "status")
-        clear = f'<a class="clear" href="{SAVED}">Clear</a>' if q else ""
         parts = [
-            page_head("Foods"),
             foods_switch("meals"),
             banner,
-            f'<form class="search" method="get" action="{SAVED}">'
-            + (f'<input type="hidden" name="date" value="{day.isoformat()}">' if day else "")
-            + f'<input type="search" name="q" value="{e(q)}" placeholder="Your saved meals"'
-            ' aria-label="Search your saved meals">'
-            f'<button type="submit">Search</button>{clear}</form>',
-            f'<a class="button add" href="{SAVED}/new">+ New saved meal</a>',
+            list_search(
+                SAVED,
+                q,
+                "Search your saved meals",
+                "Search your saved meals",
+                (f'<input type="hidden" name="date" value="{day.isoformat()}">' if day else ""),
+            ),
         ]
         if templates:
-            hint = (
-                '<p class="small muted js-only hint">Tap a meal to see it; press and hold it'
-                " to edit. Swipe left to delete.</p>"
-            )
             items = "".join(saved_meal_item(t, t_items, query) for t, t_items in templates)
-            parts.append(f'<section class="card">{hint}<ul class="entries">{items}</ul></section>')
+            heading = "Matches" if q else "Your saved meals"
+            parts.append(
+                f'<h2 class="section-title">{heading}<small>{len(templates)}</small></h2>'
+                f'<section class="group list"><ul class="entries">{items}</ul></section>'
+            )
         elif q:
             parts.append(
                 f'<section class="card empty"><p>No saved meal matches “{e(q)}”.</p></section>'
@@ -5118,18 +5497,23 @@ def add_routes(
         else:
             parts.append(
                 '<section class="card empty"><p>No saved meals yet.</p><p class="muted small">'
-                "Add one here, or tell Claude “save this as my usual breakfast”.</p></section>"
+                "Save one from a meal's … on Today, or tell Claude “save this as my usual"
+                f' breakfast”.</p><a class="button" href="{SAVED}/new">New saved meal</a>'
+                "</section>"
             )
         return foods_page("Saved meals", "".join(parts), request)
 
     @server.custom_route(SAVED + "/{template_id:int}", methods=["GET"])
     async def saved_meal_view(request: Request) -> Response:
-        """One saved meal: its total calories and macros, its foods, and a Log it card."""
+        """One saved meal (#60, #105), on the same template as a food: its total calories
+        and macros as tiles, its foods as a list (each opens its food), Log it at the
+        bottom, and Edit and Delete in its … menu. ?date= (from the Log sheet) is the day
+        Log it starts on."""
         if not signed_in(request):
             return to_login(request)
         template_id = request.path_params["template_id"]
-        now = today()
-        day = optional_day(request.query_params.get("date")) or now  # from the Log sheet
+        day = optional_day(request.query_params.get("date"))
+        query = f"?{urlencode({'date': day.isoformat()})}" if day else ""
         with connect(request) as conn:
             try:
                 template, items = store.template_with_foods(conn, template_id)
@@ -5137,43 +5521,105 @@ def add_routes(
                 return message(
                     "Not found", "That saved meal no longer exists.", 404, signed_in=True
                 )
-            _, _, _, ctx = load_day(conn, day)
         name = capitalized(template["name"])
-        totals = template_totals(items)
-        shown = logic.round_for_display(totals)
         banner = (
             toast(f"<span>Saved {e(name)}.</span>", "status")
             if request.query_params.get("saved")
             else ""
         )
-        split = logic.macro_split(totals)
-        rects, tiles, x = [], [], 0.0
-        for key, cls, _ in MACROS:
-            share = split[key] if split else 0.0
-            rects.append(
-                f'<rect class="fill {key}" x="{x:.1f}" y="0" width="{share:.1f}" height="10"/>'
-            )
-            x += share
-            tiles.append(
-                f'<div class="macro"><div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                f"<div><strong>{amount(key, shown[key])}</strong></div>"
-                f'<div class="muted small">{round(share)}% of kcal</div></div>'
-            )
+        url = f"{SAVED}/{template['id']}"
         foods_list = "".join(
-            f'<li class="row"><span class="name">{e(i["name"])}'
-            + (f' <span class="muted small">{e(i["brand"])}</span>' if i["brand"] else "")
-            + f'</span><span class="muted">{item_amount(i)}</span></li>'
+            list_row(
+                food_url(i["id"], url),
+                i["name"],
+                " · ".join(filter(None, [e(i["brand"] or ""), item_amount(i)])),
+                f"{num(logic.snapshot(store.nutrients_of(i), i['grams'])['kcal'])}{NBSP}"
+                "<small>kcal</small>",
+                photo_src(i["id"]),
+            )
             for i in items
         )
+        parts = [
+            detail_bar(SAVED, "Meals", f"{url}/menu{query}", name),
+            banner,
+            '<article class="detail">'
+            + initials_art(name, "protein", "utensils")
+            + f'<div class="detail-head"><h1 class="detail-name">{e(name)}</h1>'
+            f'<p class="detail-sub">Saved meal · {items_text(len(items))}</p></div>'
+            + macro_tiles(template_totals(items), "the whole meal")
+            + f'<section class="group"><h3 class="group-cap">Foods</h3>{foods_list}</section>'
+            + log_bar(f"{url}/log{query}", "Log this meal")
+            + "</article>",
+        ]
+        return foods_page(name, "".join(parts), request)
+
+    @server.custom_route(SAVED + "/{template_id:int}/menu", methods=["GET"])
+    async def saved_meal_menu(request: Request) -> Response:
+        """A saved meal's … (#105): Log it, Edit and Delete."""
+        if not signed_in(request):
+            return to_login(request)
+        day = optional_day(request.query_params.get("date"))
+        query = f"?{urlencode({'date': day.isoformat()})}" if day else ""
+        with connect(request) as conn:
+            try:
+                template, items = store.template_with_foods(
+                    conn, request.path_params["template_id"]
+                )
+            except store.NotFound:
+                return message(
+                    "Not found", "That saved meal no longer exists.", 404, signed_in=True
+                )
+        name = capitalized(template["name"])
+        url = f"{SAVED}/{template['id']}"
+        rows = [
+            item(
+                f"{url}/log{query}",
+                "plus",
+                "kcal",
+                "Log it",
+                "As a new meal or into one",
+                data_sheet="",
+            ),
+            item(f"{url}/edit", "pencil", "protein", "Edit", "Name, foods and amounts"),
+            delete_row(
+                f"{url}/delete",
+                name,
+                "Meals already logged from it stay as they are.",
+            ),
+        ]
+        kcal = num(template_totals(items)["kcal"] or 0)
+        sub = f"Saved meal · {items_text(len(items))} · {kcal}{NBSP}kcal"
+        return detail_menu(
+            request, name, sub, rows, came_from(request, url), "saved-meal-menu-title"
+        )
+
+    @server.custom_route(SAVED + "/{template_id:int}/log", methods=["GET"])
+    async def saved_meal_log(request: Request) -> Response:
+        """Log a saved meal (#105): a new meal at a time and date, or into a meal already
+        logged that day."""
+        if not signed_in(request):
+            return to_login(request)
+        now = today()
+        day = optional_day(request.query_params.get("date")) or now
+        with connect(request) as conn:
+            try:
+                template, items = store.template_with_foods(
+                    conn, request.path_params["template_id"]
+                )
+            except store.NotFound:
+                return message(
+                    "Not found", "That saved meal no longer exists.", 404, signed_in=True
+                )
+            _, _, _, ctx = load_day(conn, day)
+        name = capitalized(template["name"])
+        shown = logic.round_for_display(template_totals(items))
         after = ctx.kcal + shown["kcal"]
         goal = f" of {num(ctx.goal)}" if ctx.goal else ""
-        url = f"{SAVED}/{template['id']}"
-        log_form = (
+        default_time = datetime.now(ZoneInfo(tz)).strftime("%H:%M") if day == now else "12:00"
+        form = (
             f'<form class="stack edit" method="post" action="{PREFIX}/log-template">'
             f'<input type="hidden" name="template_id" value="{template["id"]}">'
-            + meal_menu(
-                ctx, None, "Add to", datetime.now(ZoneInfo(tz)).strftime("%H:%M"), with_date=True
-            )
+            + meal_menu(ctx, None, "Add to", default_time, with_date=True)
             # Only true for today, so the script hides it while another date is picked
             + (
                 f'<p class="preview small muted" data-today="{day.isoformat()}">'
@@ -5183,28 +5629,13 @@ def add_routes(
             )
             + '<button type="submit">Log this meal</button></form>'
         )
-        parts = [
-            '<header class="daynav">'
-            f'<a class="step" href="{SAVED}" aria-label="Back to Meals">&lsaquo;</a>'
-            f'<a class="step edit-link" href="{url}/edit">Edit</a></header>',
-            banner,
-            '<section class="card summary food-hero">'
-            f'<h1 class="food-name">{e(name)}</h1>'
-            f'<p class="muted brand">Saved meal · {items_text(len(items))}</p>'
-            f'<p class="hero"><span class="big kcal">{num(shown["kcal"])}</span> kcal</p>'
-            f'<svg class="splitbar" viewBox="0 0 100 10" preserveAspectRatio="none"'
-            f' aria-hidden="true">{"".join(rects)}</svg>'
-            f'<div class="macros">{"".join(tiles)}</div></section>',
-            fold("saved-meal-foods", "Foods", f'<ul class="plain ingredients">{foods_list}</ul>'),
-            '<section class="card"><details class="confirm"><summary>Delete saved meal…'
-            f'</summary><form method="post" action="{url}/delete">'
-            f'<button class="danger" type="submit">Yes, delete {e(name)}</button></form>'
-            "</details></section>",
-            '<section class="card log-recipe"><details class="fold">'
-            '<summary><h2 class="section">Log it</h2></summary>'
-            f"{log_form}</details></section>",
-        ]
-        return foods_page(name, "".join(parts), request)
+        sheet = (
+            f'<h2 id="saved-log-title">Log {e(name)}</h2>'
+            f'<p class="sheet-sub muted small">{items_text(len(items))} ·'
+            f" {num(shown['kcal'])}{NBSP}kcal · {macros_line(shown)}</p>{form}"
+        )
+        url = f"{SAVED}/{template['id']}"
+        return sheet_or_page(request, f"Log {name}", sheet, came_from(request, url), "foods")
 
     def template_editor(conn, draft: TemplateDraft, error: str = "") -> str:
         """The saved meal form: a name, then its foods (search your foods to add one), each
@@ -7081,7 +7512,7 @@ def add_routes(
             (
                 item(add, "search", "kcal", "Log food", f"Search your foods{e(on)}", data_sheet=""),
                 item(
-                    f"{PREFIX}/foods/new#scan",
+                    f"{PREFIX}/foods/new?how=scan",
                     "scan-barcode",
                     "kcal",
                     "Scan a barcode",
@@ -7159,19 +7590,16 @@ def add_routes(
             recipe_foods = store.recipe_food_ids(conn)
             rows = [r for r in rows if r["id"] not in recipe_foods]
 
-        clear = (
-            f'<a class="clear" href="{PREFIX}/foods" data-clear{"" if q else " hidden"}>Clear</a>'
-        )
         parts = [
-            page_head("Foods"),
             foods_switch("foods"),
             banner,
-            f'<form class="search" method="get" action="{PREFIX}/foods" role="search"'
-            " data-live-search>"
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Your foods"'
-            ' aria-label="Search your foods" maxlength="100" autocomplete="off">'
-            f'<button type="submit">Search</button>{clear}</form>',
-            f'<a class="button ghost wide" href="{PREFIX}/foods/new">Add a new food</a>',
+            list_search(
+                f"{PREFIX}/foods",
+                q,
+                "Search your foods",
+                "Search your foods",
+                data_live_search="",
+            ),
         ]
         found = []
         if q and not rows:
@@ -7181,7 +7609,7 @@ def add_routes(
                 + "</section>"
             )
         if rows:
-            heading = "Foods" if q else "Your foods"
+            heading = "Matches" if q else "Your foods"
             day = today()
 
             def last(row) -> str:
@@ -7192,20 +7620,28 @@ def add_routes(
 
             items = "".join(
                 food_item(
-                    r, back, last(r), add_url(day, None, r["name"]), photo_src(r["id"]), per_serving
+                    r,
+                    back,
+                    last(r),
+                    f"{PREFIX}/foods/{r['id']}/log?{urlencode({'back': back})}",
+                    photo_src(r["id"]),
+                    per_serving,
                 )
                 for r in rows
             )
-            hint = (
-                '<p class="small muted js-only hint">Tap a food to see it; press and hold it'
-                " for more. Swipe left to delete, or right to confirm an amber one.</p>"
+            found.append(
+                f'<div class="listbar"><h2 class="section-title">{heading}'
+                f"<small>{len(rows)}</small></h2>{sort_button(q, sort, desc, per_serving)}</div>"
+                f'<section class="group list"><ul class="entries">{items}</ul></section>'
             )
-            bar = sort_bar(q, sort, desc, per_serving)
-            found.append(fold("foods", heading, f'{bar}{hint}<ul class="entries">{items}</ul>'))
             if q:
                 found.append(elsewhere(q))
         elif not q:
-            found.append('<section class="card empty"><p>No saved foods yet.</p></section>')
+            found.append(
+                '<section class="card empty"><p>No saved foods yet.</p><p class="muted small">'
+                "Scan a barcode, read a label or search the databases, or tell Claude what you"
+                f' ate.</p><a class="button" href="{PREFIX}/foods/new">New food</a></section>'
+            )
         results = "".join(found)
         if params.get("part") == "1":  # the script's search as you type (#97)
             return HTMLResponse(results, headers=SECURITY_HEADERS)
@@ -7214,8 +7650,8 @@ def add_routes(
             "Foods", "".join(parts), "foods", signed_in=provider is not None, user=account(request)
         )
         if any(k in params for k in ("sort", "dir", "per")):
-            choice = f"{sort}.{'down' if desc else 'up'}.{'serving' if per_serving else '100g'}"
+            chosen = f"{sort}.{'down' if desc else 'up'}.{'serving' if per_serving else '100g'}"
             response.set_cookie(
-                FOODS_COOKIE, choice, 365 * 86400, path=PREFIX, secure=secure, samesite="lax"
+                FOODS_COOKIE, chosen, 365 * 86400, path=PREFIX, secure=secure, samesite="lax"
             )
         return response

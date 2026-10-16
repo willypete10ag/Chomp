@@ -200,13 +200,16 @@ def upload(client, food_id, data, back="", headers=None):
 def test_food_page_add_replace_remove(app, conn, settings):
     food_id = add_food(conn, "Banana", 89, 1.1, 22.8, 0.3)
     page = app.get(f"/app/foods/{food_id}").text
-    assert "Add photo" in page and 'id="photo"' in page and "<img" not in page
+    assert "Add a photo" in page and 'id="photo"' in page and "<img" not in page
+    assert "Add a photo" in app.get(f"/app/foods/{food_id}/menu").text
 
     r = upload(app, food_id, picture(), back=f"/app/foods/{food_id}")
     assert r.status_code == 303 and "pic=saved" in r.headers["location"]
     page = app.get(r.headers["location"]).text
     assert "Photo saved." in page and 'alt="Photo of Banana"' in page
-    assert "Replace photo" in page and "Remove photo" in page
+    assert "Replace photo" in page and 'class="photo-swap"' in page
+    menu = app.get(f"/app/foods/{food_id}/menu").text
+    assert "Change photo" in menu and "Remove photo" in menu
 
     p = Photos(settings.photos_path)
     shown = app.get(f"/app/foods/{food_id}/photo?v={p.version(food_id)}")

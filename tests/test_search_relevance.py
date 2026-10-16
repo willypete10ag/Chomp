@@ -447,7 +447,7 @@ def test_foods_search_as_you_type_finds_a_half_typed_word(app, conn):
 def test_new_food_search_as_you_type_asks_only_usda(app, upstream):
     upstream.add(SEARCH, fixture_json("fdc/search_egg_white_generic.json"), match=GENERIC)
     upstream.add(SEARCH, fixture_json("fdc/search_egg_white_branded.json"), match=BRANDED)
-    page = app.get("/app/foods/new").text
+    page = app.get("/app/foods/new?how=search").text
     assert "data-live-usda" in page and "data-db-results" in page
     part = app.get("/app/foods/new", params={"q": "egg white", "part": "usda"})
     assert "<html" not in part.text and "Egg, white, raw, fresh" in part.text
