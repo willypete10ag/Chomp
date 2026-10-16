@@ -5824,7 +5824,9 @@ def add_routes(
             targets = store.get_targets(conn)
             synced = store.last_activity_sync(conn)
         days = logic.date_range(first, last)
-        done = [d for d in days if d != last]  # today is still going
+        # today is still going, so averages use full days; Today's range is today so far
+        done = [d for d in days if d != last] or days
+        per = "today" if span == 1 else "a day"
         prev_days = logic.date_range(*prev) if prev else []
         words = prev_words(span) if prev else ""
         parts = progress_head("overview", PROGRESS, span)
@@ -5849,7 +5851,7 @@ def add_routes(
                     "burn",
                     "Energy balance",
                     f"{'&minus;' if net < 0 else '+'}{num(abs(net))}",
-                    "kcal a day",
+                    f"kcal {per}",
                     f'<span class="kcal-ate">{num(ate)} eaten</span> · '
                     f'<span class="kcal-burn">{num(burned)} burned</span>'
                     f" · {len(both)} day{'' if len(both) == 1 else 's'} with both",
@@ -5910,7 +5912,7 @@ def add_routes(
                     "steps",
                     "Activity",
                     num(avg),
-                    "steps a day",
+                    f"steps {per}",
                     " · ".join(extra) + delta_chip(logic.change_percent(avg, before), words, "up"),
                     spark,
                     fresh=f"Apple Health · {sent_text(synced, last)}" if synced else "",
@@ -5964,7 +5966,7 @@ def add_routes(
                     "kcal",
                     "Nutrition",
                     num(kcal),
-                    f"kcal a day{goal}",
+                    f"kcal {per}{goal}",
                     f"{num(protein)}{NBSP}g protein · on target {on} of {len(logged)} days"
                     f" · {len(logged)} of {len(done) or 1} days logged",
                     spark,

@@ -167,6 +167,18 @@ def test_progress_overview_cards(http, conn):
     assert 'href="/app/progress?days=7"' in page
 
 
+def test_today_overview_counts_today_so_far(http, conn):
+    from chomp import logic, store
+
+    zone = "America/New_York"
+    start = logic.local_day_bounds(logic.parse_local_date(None, zone), zone)[0]
+    store.add_activity(conn, [("steps", "day", start, 4321)])
+    sign_in(http)
+    page = http.get("/app/progress?days=1").text.replace("\xa0", " ")
+    assert "Nothing to show yet." not in page
+    assert "4,321" in page and "steps today" in page
+
+
 def test_weight_and_step_goals_on_you(http, conn):
     from chomp import store
 
