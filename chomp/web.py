@@ -8064,7 +8064,7 @@ def add_routes(
             '<details><summary class="small muted">Share your Shortcut</summary>'
             f'<form class="stack" method="post" action="{INTEGRATIONS}/shortcut-link">'
             '<p class="small muted">Share your Send to Chomp Shortcut with its token as an'
-            ' Import Question (docs/apple-health.md, "Share the Shortcut") and paste its iCloud'
+            " Import Question (docs/people.md, part 1) and paste its iCloud"
             " link here. Connect iPhone then offers it to everyone. Leave it empty to remove"
             " it.</p>"
             f'<input name="url" type="url" inputmode="url" autocomplete="off" value="{e(link)}"'
