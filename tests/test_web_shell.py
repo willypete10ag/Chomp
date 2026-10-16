@@ -40,12 +40,13 @@ def test_log_sheet_and_its_page(http):
     sign_in(http)
     part = http.get("/app/actions", params={"part": "1"}).text
     assert not part.startswith("<!doctype") and "Log food" in part
-    for target in ("/app/foods/new#scan", "/app/saved-meals", "/app/progress/weight#weigh-in"):
+    for target in ("/app/foods/new#scan", "/app/add?view=meals", "/app/weight/new?back=%2Fapp"):
         assert f'href="{target}"' in part
     whole = http.get("/app/actions").text
     assert whole.startswith("<!doctype") and "Log food" in whole
     day = http.get("/app/actions", params={"part": "1", "date": "2026-10-01"}).text
     assert 'href="/app/add?date=2026-10-01"' in day
+    assert 'href="/app/weight/new?back=%2Fapp%3Fdate%3D2026-10-01"' in day
 
 
 def test_progress_opens_its_overview_and_old_addresses_move(http):
@@ -115,7 +116,9 @@ def test_saved_meal_from_a_past_day_logs_to_that_day(http, conn):
     template_id, _ = store.save_template(conn, "oatmeal", [(oats, 80)])
     sign_in(http)
     sheet = http.get("/app/actions", params={"part": "1", "date": "2026-10-01"}).text
-    assert 'href="/app/saved-meals?date=2026-10-01"' in sheet
+    assert 'href="/app/add?date=2026-10-01&amp;view=meals"' in sheet
+    logs = http.get("/app/add", params={"date": "2026-10-01", "view": "meals"}).text
+    assert "Oatmeal" in logs and "Log this meal" in logs
     meals = http.get("/app/saved-meals", params={"date": "2026-10-01"}).text
     assert f'href="/app/saved-meals/{template_id}?date=2026-10-01"' in meals
     assert '<input type="hidden" name="date" value="2026-10-01">' in meals  # kept by search

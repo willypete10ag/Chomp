@@ -1156,3 +1156,177 @@ details.table td + td, details.table th + th { text-align: right; }
 .facts-list li { padding: .7rem 0; }
 .facts-list li + li { border-top: 1px solid var(--line); }
 .weigh-ins > .hint { margin: 0 .25rem .5rem; }
+
+/* --- Today hub and sheets (#105) --------------------------------------------------------- */
+
+.section-title { font-size: 1.15rem; margin: 1.25rem .25rem .6rem; display: flex; align-items: baseline; gap: .5rem; }
+.section-title small { font-weight: 400; font-size: .8rem; color: var(--muted); margin-left: auto; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.card-head h2 { margin: 0; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.card-head .iconbtn, .mealhead .iconbtn { width: 2.5rem; height: 2.5rem; margin: -.4rem -.4rem -.4rem 0; background: none; color: var(--muted); }
+.card-head .iconbtn:active, .mealhead .iconbtn:active { background: var(--track); }
+.dayfresh { display: flex; justify-content: center; margin: -.4rem 0 .5rem; }
+.dayfresh .fresh-tag { margin: 0; }
+
+/* Energy: the calorie ring with what's left, then eaten, burned and net */
+.energy {
+  background: radial-gradient(110% 90% at 0% 0%, color-mix(in srgb, var(--kcal) 16%, transparent), transparent 62%), var(--card);
+}
+.energy-body {
+  display: flex; align-items: center; gap: 1.25rem; color: inherit; text-decoration: none;
+  margin-top: .5rem; border-radius: var(--r);
+}
+.energy-body:active { background: var(--track); }
+.ring-box { position: relative; width: 8.5rem; height: 8.5rem; flex: none; }
+.ring { width: 100%; height: 100%; display: block; }
+.ring circle { fill: none; stroke-width: 11; }
+.ring .track { stroke: var(--track); }
+.ring .arc {
+  stroke: var(--kcal); stroke-linecap: round; transition: stroke-dasharray .6s var(--ease);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--kcal) 45%, transparent));
+}
+.ring .arc.caution { stroke: var(--carbs); filter: none; }
+.ring .arc.over { stroke: var(--over); filter: none; }
+.ring-num {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; line-height: 1.05;
+}
+.ring-num b {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; font-size: 2rem; font-weight: 700;
+  letter-spacing: -.02em; color: var(--text);
+}
+.ring-num b.caution { color: var(--carbs-text); } .ring-num b.over { color: var(--over); }
+.ring-num span { color: var(--muted); font-size: .85rem; margin-top: .15rem; }
+.energy-lines { flex: 1; min-width: 0; display: grid; gap: .35rem; font-variant-numeric: tabular-nums; }
+.energy-lines li { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+.energy-lines .key { color: var(--muted); font-size: .9rem; }
+.energy-lines .key.kcal-ate { color: var(--kcal); } .energy-lines .key.kcal-burn { color: var(--burn); }
+.energy-lines b {
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif; font-size: 1.15rem; font-weight: 650;
+}
+.energy-lines .goal {
+  display: block; color: var(--faint); font-size: .8rem; border-top: 1px solid var(--line);
+  padding-top: .4rem; margin-top: .15rem;
+}
+.energy-lines .more-link { color: var(--accent); white-space: nowrap; float: right; }
+@media (prefers-reduced-motion: reduce) { .ring .arc { transition: none; } }
+.macros-card .macros { margin-top: 0; }
+.macros-card:has(.morenut) { padding-bottom: .4rem; }
+.macros-card .extras:first-of-type { margin-top: .5rem; }
+.morenut > summary { font-weight: 600; }
+.morenut .inner { margin-top: .25rem; }
+
+/* Your day: four tiles that open Progress */
+.yourday .tiles { margin-bottom: 0; }
+a.day-tile {
+  display: block; color: var(--text); text-decoration: none; transition: transform .12s var(--ease);
+  min-height: 6.25rem;
+}
+a.day-tile:active { transform: scale(.97); }
+.day-tile .cap { display: flex; align-items: center; gap: .35rem; }
+.day-tile .cap .icon { width: 1rem; height: 1rem; color: var(--tone); }
+.day-tile .val small { font-size: .85rem; color: var(--muted); font-weight: 600; }
+.day-tile .sub { display: block; }
+.day-tile .sub .meter { height: 5px; margin: .35rem 0 0; }
+.day-tile .sub .fill.steps { fill: var(--steps); }
+.day-tile .link { color: color-mix(in srgb, var(--tone) 80%, var(--text)); font-weight: 600; }
+.day-tile .trend { white-space: nowrap; }
+.day-tile .trend .icon { width: .95rem; height: .95rem; vertical-align: -.15em; margin-right: .1rem; }
+.clamp1 { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Meals: the time, name and calories, a … for the meal, and its entries */
+.meal .mealhead { display: flex; align-items: center; gap: .5rem; margin-bottom: .1rem; }
+.meal .mealhead h2 { flex: 1; min-width: 0; font-size: 1.05rem; }
+.meal .mealhead .kcal { color: var(--muted); font-weight: 600; font-size: .95rem; }
+.meal .note { margin: 0 0 .25rem; }
+.meal + .meal { margin-top: 0; }
+a.entry { display: block; color: inherit; text-decoration: none; min-height: 2.75rem; border-radius: 10px; }
+a.entry:active { background: var(--track); }
+.entries li:has(> a.entry) { padding: .5rem 0; }
+
+/* Sheets: a bar with back and close, half or full height, and the options inside */
+.sheet { overscroll-behavior: contain; }
+.sheet:focus { outline: none; }
+.sheet-bar { display: flex; justify-content: space-between; height: 0; position: sticky; top: 0; z-index: 2; }
+.sheet-bar .iconbtn { width: 2.25rem; height: 2.25rem; background: var(--surface-2); color: var(--muted); margin-top: -.25rem; }
+.sheet-bar .icon { width: 1.15rem; height: 1.15rem; }
+.sheet-bar .sheet-close { margin-left: auto; }
+.sheet-content > h2, .sheet-content > .logfood > .loghead { padding-right: 2.5rem; }
+.sheet-content > h2:first-child { margin-top: .1rem; }
+.sheet-back:not([hidden]) ~ .sheet-close { margin-left: auto; }
+.sheet:has(.sheet-back:not([hidden])) .sheet-content > h2,
+.sheet:has(.sheet-back:not([hidden])) .loghead { padding-left: 2.5rem; }
+.sheet.full { height: 92vh; max-height: 92vh; }
+.sheet-sub { margin: -.5rem .25rem 1rem; }
+.sheet .stack { margin: 0 .25rem 1rem; }
+.sheet form + .group, .sheet p + .group { margin-top: .5rem; }
+.sheet .group form { margin: 0; }
+.tone-over { --tone: var(--over); }
+details.opt > summary { list-style: none; cursor: pointer; }
+details.opt > summary::-webkit-details-marker { display: none; }
+details.opt[open] > summary .chev { transform: rotate(90deg); }
+details.opt .chev { transition: transform .2s var(--ease); }
+details.opt > form { padding: 0 1rem 1rem; margin: 0; }
+.group > details.opt + *, .group > * + details.opt, .group > a + form .item, .group > details + form .item { border-top: 1px solid var(--line); }
+.backlink { margin: .5rem 0 0; }
+.sheet-page { margin-top: .5rem; }
+@media (min-width: 40rem) {
+  .sheet { width: 30rem; }
+  .sheet.full { height: min(46rem, 88vh); }
+}
+
+/* The weigh-in sheet: one large number with its unit */
+.bignum {
+  display: flex !important; align-items: baseline; justify-content: center; gap: .4rem;
+  margin: .25rem 0 0;
+}
+.bignum input {
+  width: 9rem; text-align: center; font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  font-size: 2.6rem; font-weight: 700; padding: .25rem .5rem; min-height: 4rem; font-variant-numeric: tabular-nums;
+}
+.bignum > span:last-child { font-size: 1.2rem; color: var(--muted); font-weight: 600; }
+.weigh-in .center { margin: -.25rem 0 0; }
+.weigh-ins a.row { align-items: center; min-height: 2.75rem; }
+
+/* Log food: where it goes, a search with the barcode inside, pills, then foods */
+.loghead { display: grid; justify-items: start; gap: .5rem; margin: .1rem .25rem .75rem; }
+.loghead h2 { margin: 0; }
+.dest { position: relative; }
+.dest > summary {
+  list-style: none; display: inline-flex; align-items: center; gap: .35rem; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  border: 0; font-weight: 600; max-width: 16rem;
+}
+.dest > summary span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dest > summary::-webkit-details-marker { display: none; }
+.dest > summary .icon { width: 1rem; height: 1rem; }
+.dest-menu {
+  position: absolute; left: 0; top: calc(100% + .35rem); z-index: 5; min-width: 13rem;
+  background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden;
+}
+.dest-menu a { display: block; padding: .7rem 1rem; color: var(--text); text-decoration: none; }
+.dest-menu a + a { border-top: 1px solid var(--line); }
+.dest-menu a[aria-current] { color: var(--accent); font-weight: 600; }
+.logsearch { position: relative; margin: 0 0 .75rem; }
+.logsearch input { padding-left: 2.6rem; padding-right: 3rem; min-height: 3rem; border-radius: 999px; }
+.logsearch .field-icon { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: var(--muted); display: flex; pointer-events: none; }
+.logsearch .field-icon .icon { width: 1.15rem; height: 1.15rem; }
+.logsearch .scan {
+  position: absolute; right: .25rem; top: 50%; transform: translateY(-50%); width: 2.6rem; height: 2.6rem;
+  display: flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--accent);
+}
+.logfood .pills { margin-bottom: .75rem; }
+.sheet .logfood .pills { margin-left: 0; margin-right: 0; padding: 0; }
+.sheet .logfood .card { background: var(--surface-2); }
+.sheet .logfood .section-title { margin-top: .75rem; }
+.results > .card:first-child { margin-top: 0; }
+li.pick.has-quick { display: grid; grid-template-columns: 1fr auto; column-gap: .6rem; align-items: start; }
+li.pick.has-quick > details { min-width: 0; }
+li.pick.has-quick > details[open] { grid-column: 1 / -1; grid-row: 2; }
+form.quick { margin: 0; align-self: center; }
+form.quick button {
+  display: inline-flex; align-items: center; gap: .15rem; min-height: 2.5rem; padding: .3rem .7rem .3rem .45rem;
+  border-radius: 999px; font-size: .8rem; background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+form.quick .icon { width: 1.1rem; height: 1.1rem; }

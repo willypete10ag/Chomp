@@ -3,9 +3,10 @@
 Server-rendered HTML on the same Starlette app as /mcp: charts are inline SVG and every
 edit (log food, change grams, move an entry, edit or combine meals, rename a food, set
 goals, undo) is a plain form post that goes through store.py. A small script served from
-here (static/app.js, no third-party code) adds sliders, quick picks and live previews; the
-pages work without it. New food (#59) also loads static/scan.js and the vendored ZXing
-reader for camera barcode scans, and reads label photos with tesseract (chomp/label.py).
+here (static/app.js, no third-party code) adds sliders, quick picks, live previews and bottom
+sheets (#105); the pages work without it. New food (#59) also loads static/scan.js and the
+vendored ZXing reader for camera barcode scans, and reads label photos with tesseract
+(chomp/label.py).
 Phones can add it to the home screen (web app manifest at /app/manifest.webmanifest).
 
 Undo: each edit stores the rows it touched before and after (undo_actions, migration 0005)
@@ -76,6 +77,7 @@ ACTIVITY_PAGE = f"{PROGRESS}/activity"  # was /app/activity
 TRAINING_PAGE = f"{PROGRESS}/training"  # was /app/workouts
 YOU = f"{PREFIX}/you"
 INTEGRATIONS = f"{YOU}/integrations"
+GOALS_PAGE = f"{PREFIX}/targets"  # the daily nutrition goals
 BODY_GOALS = f"{YOU}/body-goals"  # goal weight and step goal (#105)
 ACTIONS = f"{PREFIX}/actions"  # the + sheet
 WEIGHT = f"{PREFIX}/weight"  # posts: add a weigh-in, delete one
@@ -90,7 +92,14 @@ FOODS_LIMIT = 200
 MAX_GRAMS = 10_000
 LABEL_MAX, NOTE_MAX, FOOD_NAME_MAX = 60, 200, 120
 PORTION_NAME_MAX = 40
-ADD_LIMIT = 30  # foods listed on the Add food page
+ADD_LIMIT = 30  # foods listed on the Log food page
+# Log food's pills (#105) when nothing is searched: ?view= -> its name
+ADD_VIEWS = {
+    "recent": "Recent",
+    "frequent": "Frequent",
+    "meals": "Saved meals",
+    "recipes": "Recipes",
+}
 USDA_LIMIT = 10
 AUTO_USDA_BELOW = 3  # Add food searches USDA by itself when fewer of your foods match (#88)
 FOUND_LIMIT = 8  # results per source in New food's search (#88)
@@ -420,6 +429,45 @@ def hero(value: str, unit: str, context: str, chips: str = "", extra: str = "") 
     )
 
 
+RING_R = 52  # the calorie ring's radius in its 120 x 120 box
+
+
+def energy_ring(percent: float, tone: str = "") -> str:
+    """Today's calorie ring (#105): eaten against the goal. Past the goal it closes and
+    turns amber, then red (`tone`), like the number in it."""
+    length = 2 * math.pi * RING_R
+    shown = max(0.0, min(percent, 100.0)) / 100
+    cls = f"arc {tone}".rstrip()
+    return (
+        '<svg class="ring" viewBox="0 0 120 120" aria-hidden="true">'
+        f'<circle class="track" cx="60" cy="60" r="{RING_R}"/>'
+        f'<circle class="{cls}" cx="60" cy="60" r="{RING_R}"'
+        f' stroke-dasharray="{length * shown:.1f} {length:.1f}" transform="rotate(-90 60 60)"/>'
+        "</svg>"
+    )
+
+
+def day_tile(
+    href: str, glyph: str, tone: str, label: str, value: str, sub: str = "", *, sheet: bool = False
+) -> str:
+    """A Your day tile on Today (#105): a tinted tile with its metric's icon, opening that
+    metric on Progress (or, with `sheet`, its link in a sheet)."""
+    under = f'<div class="sub">{sub}</div>' if sub else ""
+    opens = " data-sheet" if sheet else ""
+    return (
+        f'<a class="tile day-tile tone-{tone}" href="{e(href)}"{opens}><div class="cap">'
+        f'{icon(glyph)}{e(label)}</div><div class="val">{value}</div>{under}</a>'
+    )
+
+
+def ago_text(day: date, today: date) -> str:
+    """ "today", "yesterday", "3 days ago", or a date further back."""
+    days = (today - day).days
+    if days <= 1:
+        return short_date(day, today)
+    return f"{days} days ago" if days < 14 else short_date(day, today)
+
+
 def prev_words(span: int) -> str:
     """ "prev 30D" for a range's previous period."""
     return "prev " + next(short for n, short, _ in RANGES if n == span)
@@ -455,25 +503,27 @@ def change_text(kg: float) -> str:
     return f"{'&minus;' if kg < 0 else '+'}{num(lb, 1)}{NBSP}lb"
 
 
-def weight_item(row, tz: str) -> str:
-    """One weigh-in in the Weight page's list: time, where it came from, the weight. With the
-    script, swipe it left to delete it (after asking)."""
+def weight_item(row, tz: str, back: str) -> str:
+    """One weigh-in in the Weight page's list: time, where it came from, the weight. A tap
+    opens its edit sheet (#105); with the script, swipe it left to delete it (after asking)."""
     local = logic.local_iso(row["measured_at"], tz)
     when = datetime.fromisoformat(local)
     label = f"{when.strftime('%a %b')} {when.day}, {clock(local)}"
     url = f"{WEIGHT}/{row['id']}"
+    edit = f"{url}?{urlencode({'back': back})}"
     delete = (
         f'<form class="swipe-action js-only" method="post" action="{url}/delete"'
         f' data-confirm="Delete the weigh-in from {e(label)}?">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
         f'<button type="submit" aria-label="Delete the weigh-in from {e(label)}">Delete'
         "</button></form>"
     )
     return (
-        f'<li id="weight-{row["id"]}" class="swipe">{delete}'
-        '<div class="swipe-body" data-swipe><div class="row">'
-        f'<span>{e(label)}<br><span class="small muted">'
-        f"{e(WEIGHT_SOURCES.get(row['source'], ''))}</span></span>"
-        f'<span class="kcal">{lb_text(row["kg"])}</span></div></div></li>'
+        f'<li id="weight-{row["id"]}" class="swipe" data-sheet-hold="{e(edit)}">{delete}'
+        f'<div class="swipe-body" data-swipe><a class="row food-link" href="{e(edit)}" data-sheet>'
+        f'<span><span class="sr">Edit the weigh-in from </span>{e(label)}<br>'
+        f'<span class="small muted">{e(WEIGHT_SOURCES.get(row["source"], ""))}</span></span>'
+        f'<span class="kcal">{lb_text(row["kg"])}</span></a></div></li>'
     )
 
 
@@ -760,10 +810,12 @@ def render(
     scripts: tuple[str, ...] = (),
     hue: str = "",
     log_date: date | None = None,
+    refresh: bool = False,
 ) -> HTMLResponse:
     """A dashboard page. `scripts` are extra static scripts (STATIC) this page loads; `hue`
     tints the page with a metric's color (steps, train, weight, you); `log_date` is the day
-    the + sheet logs to, when not today. Signing out lives on You (#105)."""
+    the + sheet logs to, when not today; `refresh` lets the script reload the page when
+    the app comes back after a while away (#105). Signing out lives on You (#105)."""
     nav = ""
     if active is not None:
         links = [
@@ -788,7 +840,7 @@ def render(
             theme_version=STATIC_VERSIONS["theme.js"],
             title=e(f"{title} · Chomp"),
             body_class=' class="has-tabs"' if nav else "",
-            hue=f' data-hue="{hue}"' if hue else "",
+            hue=(f' data-hue="{hue}"' if hue else "") + (" data-refresh" if refresh else ""),
             scripts="".join(
                 f'<script src="{PREFIX}/static/{name}?v={STATIC_VERSIONS[name]}" defer></script>'
                 for name in scripts
@@ -970,6 +1022,7 @@ class DayContext:
     meals: list[tuple[int, str]]  # (meal id, "8:05 AM · Breakfast") for the menus
     kcal: float  # calories logged that day
     goal: float | None  # the calorie target, if set
+    meal_sizes: dict[int, int] = field(default_factory=dict)  # meal id -> how many entries
 
 
 def slider_top(*grams: float | None) -> int:
@@ -1199,26 +1252,45 @@ def with_thumb(src: str, name: str, inner: str) -> str:
     return f'<div class="with-thumb">{thumb(src, name)}<div class="grow">{inner}</div></div>'
 
 
-def entry_item(
-    x: store.EntryRow,
-    food,
-    single: bool,
-    error: tuple[int, str, str] | None,
-    ctx: DayContext,
-    meal_time: str,
-    photo: str = "",
-) -> str:
-    """One logged food. Tapping the row opens its grams slider (with a live preview), a move
-    to another meal, and a guarded delete.
+def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
+    """One logged food on Today: its photo, name, amount, calories and macros. Tapping it
+    opens its edit sheet (#105), or the edit page without the script.
 
     In a one-item meal the meal header already carries the calories, so the row leaves them out.
     """
     n = logic.round_for_display(x.nutrients)
     brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
     kcal = "" if single else f'<span class="kcal">{num(n["kcal"])}{NBSP}<small>kcal</small></span>'
-    by, typed, problem, is_open = "", "", "", ""
-    if error and error[0] == x.id:
-        by, typed, is_open = error[1], error[2], " open"
+    return (
+        f'<li id="entry-{x.id}"><a class="entry" href="{PREFIX}/entries/{x.id}" data-sheet>'
+        + with_thumb(
+            photo,
+            x.name,
+            f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
+            f"{brand}</span>{kcal}</div>"
+            f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
+            f"<span>{macros_line(n)}</span></div>",
+        )
+        + "</a></li>"
+    )
+
+
+def entry_editor(
+    x: store.EntryRow,
+    food,
+    ctx: DayContext,
+    meal_time: str,
+    *,
+    by: str = "",
+    typed: str | None = None,
+) -> str:
+    """An entry's edit sheet (#105): its amount by slider, servings or grams with a live
+    preview of it and the day, then move it to another meal or delete it (Undo brings it
+    back, so it doesn't ask first). `by` and `typed` put back an amount that was refused
+    (`typed` is None when nothing was)."""
+    n = logic.round_for_display(x.nutrients)
+    problem = ""
+    if typed is not None:
         try:
             if by == "servings" and food["serving_g"]:
                 parse_servings(typed, food["serving_g"])
@@ -1229,40 +1301,47 @@ def entry_item(
     extras = " · ".join(filter(None, (extras_line(n), micros_line(n))))
     per_100g = store.nutrients_of(food)
     base = ctx.kcal - (x.nutrients["kcal"] or 0)
+    meal = next((title for mid, title in ctx.meals if mid == x.meal_id), "")
+    brand = f"{e(x.brand)} · " if x.brand else ""
     move = ""
-    if len(ctx.meals) > 1 or not single:
+    if len(ctx.meals) > 1 or ctx.meal_sizes.get(x.meal_id, 1) > 1:
         move = (
-            '<details class="sub"><summary>Move to another meal…</summary>'
+            f'<details class="opt"><summary class="item">'
+            f'<span class="badge-icon tone-protein">{icon("arrow-right-left")}</span>'
+            '<span class="grow">Move to another meal</span></summary>'
             f'<form class="stack" method="post" action="{PREFIX}/entries/{x.id}/move">'
             + meal_menu(ctx, x.meal_id, "Move to", meal_time)
             + '<button type="submit">Move</button></form></details>'
         )
     return (
-        f'<li id="entry-{x.id}"><details{is_open}><summary>'
-        + with_thumb(
-            photo,
-            x.name,
-            f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
-            f"{brand}</span>{kcal}</div>"
-            f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
-            f"<span>{macros_line(n)}</span></div>",
-        )
-        + "</summary>"
-        f'<div class="edit">{problem}'
-        + (f'<p class="muted small">{e(x.name)}</p>' if len(x.name) > LONG_NAME else "")
+        f'<h2 id="entry-title" class="clamp">{e(x.name)}</h2>'
+        f'<p class="sheet-sub muted small">{brand}{e(meal)}</p>'
+        + problem
         + f'<form class="stack" method="post" action="{PREFIX}/entries/{x.id}"'
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, base)}>'
-        + amount_picker(food, x.grams, slider_top(x.grams), by=by, typed=typed)
+        + amount_picker(food, x.grams, slider_top(x.grams), by=by, typed=typed or "")
         + grams_chips(food, current=x.grams)
         + preview(per_100g, x.grams, ctx, base)
         + '<button type="submit">Save</button></form>'
         + (f'<p class="muted small">{extras}</p>' if extras else "")
+        + '<div class="group">'
         + move
-        + '<details class="confirm"><summary>Delete…</summary>'
-        f'<form method="post" action="{PREFIX}/entries/{x.id}/delete">'
-        f'<button class="danger" type="submit">Yes, delete {e(x.name)}</button></form>'
-        "</details></div></details></li>"
+        + item(
+            food_url(x.food_id, day_url_of(ctx.day)),
+            "apple",
+            "kcal",
+            "Open the food",
+            "Its nutrition, portions and photo",
+        )
+        + f'<form method="post" action="{PREFIX}/entries/{x.id}/delete">'
+        f'<button class="item danger" type="submit"><span class="badge-icon tone-over">'
+        f'{icon("trash-2")}</span><span class="grow">Delete from the log</span></button>'
+        "</form></div>"
     )
+
+
+def day_url_of(day: date) -> str:
+    return f"{PREFIX}?date={day.isoformat()}"
 
 
 # Foods page sorts (#91): sort -> its name in the Sort by menu (store.FOOD_SORTS orders them)
@@ -1547,7 +1626,7 @@ def with_params(url: str, anchor: str = "", **params: str | int) -> str:
     query = [
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in ("done", "undone", "problem", "checked", "ok", "portion", "pic")
+        if k not in ("done", "undone", "problem", "checked", "ok", "portion", "pic", "weighed")
     ]
     query += [(k, str(v)) for k, v in params.items()]
     return parts.path + (f"?{urlencode(query)}" if query else "") + (f"#{anchor}" if anchor else "")
@@ -1566,6 +1645,8 @@ PROBLEMS = {
     "photo": "That file isn't a photo Chomp can read. Try a JPEG or PNG.",
     "photo_big": "That photo is too big. Try one under 20 MB.",
     "weight": "Weight must be a number of pounds, like 182.4.",
+    "meal_name": "A saved meal needs a name.",
+    "meal_taken": "You already have a saved meal by that name. Pick another.",
     "hevy": "That file isn't a Hevy workout export. In Hevy: Profile > Settings > Export &"
     " Import Data > Export Workouts.",
     "hevy_big": "That file is too big for a Hevy export (20 MB at most).",
@@ -1902,9 +1983,12 @@ def pick_item(
     default_time: str,
     portions=(),
     photo: str = "",
+    *,
+    quick: float | None = None,
+    quick_estimated: bool = False,
 ) -> str:
-    """A food on the Add food page: tap it for a grams slider, a live preview and where to
-    log it."""
+    """A food on Log food: tap it for a grams slider, a live preview and where to log it.
+    `quick` is the grams it was last logged at, which its + logs again in one tap (#105)."""
     keys = row.keys()
     per_100g = store.nutrients_of(row)
     n = logic.round_for_display(per_100g)
@@ -1924,8 +2008,27 @@ def pick_item(
         if meal_id is not None
         else meal_menu(ctx, None, "Add to", default_time, with_name=True)
     )
+    again = ""
+    if quick:
+        target = (
+            f'<input type="hidden" name="meal" value="{meal_id}">'
+            if meal_id is not None
+            else f'<input type="hidden" name="to" value="new">'
+            f'<input type="hidden" name="time" value="{default_time}">'
+        )
+        again = (
+            f'<form class="quick" method="post" action="{PREFIX}/log">'
+            f'<input type="hidden" name="food_id" value="{row["id"]}">'
+            f'<input type="hidden" name="grams" value="{round(quick, 1)}">'
+            f'<input type="hidden" name="estimated" value="{int(quick_estimated)}">'
+            f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
+            f'<input type="hidden" name="q" value="{e(q)}">{target}'
+            f'<button type="submit" aria-label="Log {num(quick, 1)} g of {e(row["name"])}'
+            f' again">{icon("plus")}<span>{grams_text(quick, quick_estimated)}</span></button>'
+            "</form>"
+        )
     return (
-        "<li><details><summary>"
+        f'<li class="pick{" has-quick" if again else ""}"><details><summary>'
         + with_thumb(
             photo,
             row["name"],
@@ -1946,7 +2049,9 @@ def pick_item(
         + grams_chips(row, portions)
         + preview(per_100g, grams, ctx, ctx.kcal)
         + where
-        + '<button type="submit">Add to log</button></form></details></li>'
+        + '<button type="submit">Add to log</button></form></details>'
+        + again
+        + "</li>"
     )
 
 
@@ -2310,6 +2415,29 @@ def add_routes(
     def day_url(day: date) -> str:
         return f"{PREFIX}?date={day.isoformat()}"
 
+    def sheet_or_page(
+        request: Request, title: str, sheet: str, back: str, active: str = "today"
+    ) -> Response:
+        """A sheet's content (#105): just the content with ?part=1, for app.js to show over
+        the page it opened from; else a page of its own, with a way back."""
+        if request.query_params.get("part"):
+            return HTMLResponse(sheet, headers=SECURITY_HEADERS)
+        return render(
+            title,
+            f'<p class="backlink"><a href="{e(back)}">&lsaquo; Back</a></p>'
+            f'<section class="sheet-page">{sheet}</section>',
+            active,
+            signed_in=provider is not None,
+            user=account(request),
+        )
+
+    def came_from(request: Request, fallback: str) -> str:
+        """Where a sheet or its form goes back to: its ?back= (or the ?from= app.js adds,
+        the page the sheet opened over), when that's a dashboard page."""
+        params = request.query_params
+        value = params.get("back") or params.get("from") or ""
+        return safe_next(value) if value else fallback
+
     def breakdown_url(day: date, anchor: str = "", back: str = "") -> str:
         query = {"date": day.isoformat()} | ({"back": back} if back else {})
         return f"{PREFIX}/breakdown?{urlencode(query)}" + (f"#{anchor}" if anchor else "")
@@ -2338,6 +2466,7 @@ def add_routes(
             meals=[(m["id"], meal_title(m)) for m, _ in meals],
             kcal=totals["kcal"] or 0.0,
             goal=targets["kcal"],
+            meal_sizes={m["id"]: len(entries) for m, entries in meals},
         )
         return meals, totals, targets, ctx
 
@@ -2391,6 +2520,8 @@ def add_routes(
                 return toast(f"<span>Undone: {e(summary)}.</span>", "status")
         if problem := PROBLEMS.get(params.get("problem", "")):
             return toast(f"<span>{e(problem)}</span>", "alert", " bad")
+        if said := WEIGHED.get(params.get("weighed", "")):
+            return toast(f"<span>{said}</span>", "status")
         return ""
 
     # --- static files (no sign-in: the home-screen installer fetches these) ---
@@ -2464,48 +2595,185 @@ def add_routes(
 
     # --- Today (any day) ---
 
-    def meal_tools(meal, entries: list[store.EntryRow], ctx: DayContext) -> str:
-        """Under each meal: add to it, and (folded away) edit, combine or delete it."""
-        local = logic.local_iso(meal["eaten_at"], tz)
-        others = "".join(
-            f'<option value="{mid}">{e(title)}</option>'
-            for mid, title in ctx.meals
-            if mid != meal["id"]
-        )
-        combine = ""
-        if others:
-            combine = (
-                '<details class="sub"><summary>Combine with another meal…</summary>'
-                f'<form class="stack" method="post" action="{PREFIX}/meals/{meal["id"]}/merge">'
-                f'<label>Move everything in this meal into<select name="into">{others}</select>'
-                '</label><button type="submit">Combine</button></form></details>'
+    def your_day(conn, day: date, now: date) -> str:
+        """Today's Your day tiles (#105): steps, exercise, weight and training on that day,
+        each opening its screen on Progress."""
+        lo, hi = bounds(day - timedelta(days=30), day)
+        moved = logic.activity_by_day(store.activity_between(conn, lo, hi), tz)
+        synced = store.last_activity_sync(conn)
+        goals = store.get_body_goals(conn)
+        _, end = bounds(day, day)
+        weights = store.weights_between(conn, bounds(day - timedelta(days=60), day)[0], end)
+        latest = store.latest_weight(conn, end)
+        workouts = store.workouts_between(conn, *bounds(day, day))
+        last_workout = workouts[0] if workouts else store.latest_workout(conn, end)
+        sets = store.workout_sets(conn, [last_workout["id"]]) if last_workout else {}
+
+        values = moved.get(day, {})
+        so_far = " so far" if day == now else ""
+        connect_health = '<span class="link">Connect Apple Health</span>'
+        one_day = f"{ACTIVITY_PAGE}/day?date={day.isoformat()}"
+        tiles_html = []
+
+        # Steps: against the step goal, else the 30 days before
+        if "steps" in values:
+            steps = values["steps"]
+            if goals["step_goal"]:
+                pct = steps / goals["step_goal"] * 100
+                sub = f"of {num(goals['step_goal'])}{so_far}" + meter(pct, "steps")
+            else:
+                before = mean(
+                    moved.get(d, {}).get("steps")
+                    for d in logic.date_range(day - timedelta(days=30), day - timedelta(days=1))
+                )
+                sub = f"30-day avg {num(before)}" if before is not None else so_far.strip()
+            tiles_html.append(
+                day_tile(
+                    ACTIVITY_PAGE if day == now else one_day,
+                    "footprints",
+                    "steps",
+                    "Steps",
+                    num(steps),
+                    sub,
+                )
             )
-        items = "1 item" if len(entries) == 1 else f"{len(entries)} items"
-        add = urlencode({"date": ctx.day.isoformat(), "meal": meal["id"]})
+        else:
+            sub = (
+                ("Nothing from your phone yet" if day == now else "No steps that day")
+                if synced
+                else connect_health
+            )
+            tiles_html.append(
+                day_tile(
+                    ACTIVITY_PAGE if synced else f"{INTEGRATIONS}#health",
+                    "footprints",
+                    "steps",
+                    "Steps",
+                    "&ndash;",
+                    sub,
+                )
+            )
+
+        # Exercise: minutes, with the active energy under them
+        if "exercise_min" in values:
+            sub = (
+                f"{num(values['active_kcal'])}{NBSP}kcal active"
+                if "active_kcal" in values
+                else so_far.strip()
+            )
+            tiles_html.append(
+                day_tile(
+                    f"{ACTIVITY_PAGE}?metric=exercise" if day == now else one_day,
+                    "timer",
+                    "exercise",
+                    "Exercise",
+                    f"{num(values['exercise_min'])}<small>{NBSP}min</small>",
+                    sub,
+                )
+            )
+        else:
+            tiles_html.append(
+                day_tile(
+                    f"{ACTIVITY_PAGE}?metric=exercise" if synced else f"{INTEGRATIONS}#health",
+                    "timer",
+                    "exercise",
+                    "Exercise",
+                    "&ndash;",
+                    "No exercise yet" if synced else connect_health,
+                )
+            )
+
+        # Weight: the latest weigh-in up to that day, and how the trend moved that week
+        if latest is not None:
+            measured = logic.local_date(latest["measured_at"], tz)
+            trend = logic.weight_trend(
+                (logic.local_date(r["measured_at"], tz), r["kg"]) for r in weights
+            )
+            bits = [] if measured == day else [capitalized(short_date(measured, now))]
+            change = logic.week_change(trend, day)
+            if change is not None:
+                lb = logic.weight_out(abs(change))["lb"]
+                if lb >= 0.1:
+                    glyph = "trending-down" if change < 0 else "trending-up"
+                    sign = "&minus;" if change < 0 else "+"
+                    bits.append(
+                        f'<span class="trend">{icon(glyph)}{sign}{num(lb, 1)}{NBSP}lb'
+                        "</span> this week"
+                    )
+                else:
+                    bits.append("Steady this week")
+            sub = " · ".join(bits)
+            tiles_html.append(
+                day_tile(
+                    WEIGHT_PAGE,
+                    "scale",
+                    "weight",
+                    "Weight",
+                    f"{num(logic.weight_out(latest['kg'])['lb'], 1)}<small>{NBSP}lb</small>",
+                    sub,
+                )
+            )
+        else:
+            tiles_html.append(
+                day_tile(
+                    f"{PREFIX}/weight/new?{urlencode({'back': day_url(day)})}",
+                    "scale",
+                    "weight",
+                    "Weight",
+                    "&ndash;",
+                    '<span class="link">Add a weigh-in</span>',
+                    sheet=True,
+                )
+            )
+
+        # Training: that day's workout, else when the last one was
+        if last_workout is not None:
+            started = logic.local_date(last_workout["started_at"], tz)
+            rows = sets.get(last_workout["id"], [])
+            title = e(last_workout["title"] or "Workout")
+            if started == day:
+                bits = []
+                if volume := logic.workout_volume_kg(rows):
+                    bits.append(f"{num(logic.weight_out(volume)['lb'])}{NBSP}lb")
+                if length := duration_text(last_workout):
+                    bits.append(length)
+                if len(workouts) > 1:
+                    bits.append(f"+{len(workouts) - 1} more")
+                sub = " · ".join(bits)
+            else:
+                sub = f"Last workout, {ago_text(started, day)}"
+            tiles_html.append(
+                day_tile(
+                    f"{WORKOUTS}/{last_workout['id']}" if started == day else TRAINING_PAGE,
+                    "dumbbell",
+                    "train",
+                    "Training",
+                    f'<span class="clamp1">{title}</span>',
+                    sub,
+                )
+            )
+        else:
+            tiles_html.append(
+                day_tile(
+                    f"{INTEGRATIONS}#hevy",
+                    "dumbbell",
+                    "train",
+                    "Training",
+                    "&ndash;",
+                    '<span class="link">Import from Hevy</span>',
+                )
+            )
         return (
-            '<div class="mealtools">'
-            f'<a class="button ghost" href="{PREFIX}/add?{add}">+ Add to this meal</a>'
-            '<details class="sub mealedit"><summary>Edit meal…</summary>'
-            f'<form class="stack" method="post" action="{PREFIX}/meals/{meal["id"]}">'
-            f'<label>Name<input name="label" value="{e(meal["label"] or "")}"'
-            f' maxlength="{LABEL_MAX}" placeholder="Optional, like Post-workout"></label>'
-            '<div class="pair">'
-            f'<label>Time<input type="time" name="time" value="{hhmm(local)}" required></label>'
-            f'<label>Date<input type="date" name="date" value="{local[:10]}"'
-            f' max="{ctx.today.isoformat()}" required></label></div>'
-            + time_nudges()
-            + f'<label>Note<input name="note" value="{e(meal["note"] or "")}"'
-            f' maxlength="{NOTE_MAX}" placeholder="Optional"></label>'
-            '<button type="submit">Save meal</button></form>'
-            + combine
-            + '<details class="confirm"><summary>Delete meal…</summary>'
-            f'<form method="post" action="{PREFIX}/meals/{meal["id"]}/delete">'
-            f'<button class="danger" type="submit">Yes, delete this meal ({items})</button>'
-            "</form></details></details></div>"
+            '<section class="yourday" aria-labelledby="yourday-title">'
+            '<h2 class="section-title" id="yourday-title">Your day</h2>'
+            f'<div class="tiles">{"".join(tiles_html)}</div></section>'
         )
 
     @server.custom_route(PREFIX, methods=["GET"])
     async def day_view(request: Request) -> Response:
+        """Today (#105): the day's energy (eaten against the goal and burned), its macros,
+        Your day tiles for steps, exercise, weight and training, and the meals. Tapping an
+        entry or a meal's … opens its sheet; the + in the tab bar logs to this day."""
         if not signed_in(request):
             return to_login(request)
         now = today()
@@ -2518,18 +2786,15 @@ def add_routes(
             return message("Unknown date", "Dates look like 2026-10-06.", 400, signed_in=True)
         page_url = day_url(day)
         with connect(request) as conn:
-            meals, totals, targets, ctx = load_day(conn, day)
+            meals, totals, targets, _ = load_day(conn, day)
             rows = [x.nutrients for _, entries in meals for x in entries]
-            foods = store.get_foods(conn, (x.food_id for _, entries in meals for x in entries))
             banner = notice(conn, params, page_url)
+            moved = logic.activity_by_day(store.activity_between(conn, *bounds(day, day)), tz)
+            synced = store.last_activity_sync(conn)
+            tiles_section = your_day(conn, day, now) if day <= now else ""
         # Goals not set count as the defaults here (the sliders and History keep the stored ones)
         progress = logic.progress(totals, logic.with_default_targets(targets))
         shown = logic.round_for_display(totals)
-
-        # After a rejected amount: the typed value back on its entry, which says what's wrong
-        error: tuple[int, str, str] | None = None
-        if (failed := int_param(params.get("error"))) is not None:
-            error = (failed, params.get("by", ""), params.get("amount", "")[:20])
 
         prev_day, next_day = day - timedelta(days=1), day + timedelta(days=1)
         forward = (
@@ -2537,6 +2802,11 @@ def add_routes(
             if day < now
             else '<span class="step off" aria-hidden="true">&rsaquo;</span>'
         )
+        fresh = ""
+        if synced:
+            fresh = fresh_tag(
+                f"{INTEGRATIONS}#health", "heart-pulse", "Apple Health", sent_text(synced, now)
+            )
         head = [
             '<header class="daynav">',
             f'<a class="step" href="{day_url(prev_day)}" aria-label="Previous day">&lsaquo;</a>',
@@ -2549,38 +2819,55 @@ def add_routes(
             forward,
             "</header>",
             week_strip(day, now),
+            f'<div class="dayfresh">{fresh}</div>' if fresh else "",
             banner,
         ]
 
-        goals_url = f"{PREFIX}/targets?{urlencode({'back': page_url})}"
-        summary = [
-            f'<section class="card summary" aria-label="Totals for {e(day_title(day, now))}">'
-        ]
+        # The energy hero: what's left of the goal in a ring, then eaten, burned and net
         kcal = progress["kcal"]
         left = round(kcal["remaining"])
         # Over the goal: amber up to 100 kcal over, red past that
         tone = "" if left >= 0 else "over" if left < -100 else "caution"
-        cls = f"big kcal {tone}".rstrip()
-        summary.append(
-            f'<div class="row"><a class="hero" href="{breakdown_url(day)}">'
-            f'<span class="{cls}">{num(abs(left))}</span>'
-            f" {'remaining' if left >= 0 else 'over'}"
-            f' <span class="more-link small">Breakdown&nbsp;&rsaquo;</span></a>'
-            f'<a class="small" href="{goals_url}">Edit goals</a></div>'
-            + meter(kcal["percent"], "kcal", tone=tone)
-            + f'<p class="muted small">Goal {num(kcal["target"])} kcal</p>'
+        eaten = totals["kcal"] or 0.0
+        burned = logic.burned_kcal(moved.get(day, {}))
+        so_far = " so far" if day == now else ""
+        if burned is not None:
+            net = eaten - burned
+            sign = "&minus;" if net < 0 else "+"
+            burned_text = f"{num(burned)}"
+            net_text = f"{sign}{num(abs(net))}"
+        else:
+            burned_text = net_text = "&ndash;"
+        title = day_title(day, now)
+        more = (
+            f'<a class="iconbtn" href="{PREFIX}/day-menu?date={day.isoformat()}" data-sheet'
+            f' aria-label="More for {e(title)}: breakdown and goals">{icon("ellipsis")}</a>'
         )
+        summary = [
+            f'<section class="card energy" aria-label="Energy for {e(title)}">'
+            f'<div class="card-head"><h2>Energy</h2>{more}</div>'
+            f'<a class="energy-body" href="{breakdown_url(day)}">'
+            f'<div class="ring-box">{energy_ring(kcal["percent"] or 0.0, tone)}'
+            f'<div class="ring-num"><b class="kcal {tone}">{num(abs(left))}</b>'
+            f"<span>{'left' if left >= 0 else 'over'}</span></div></div>"
+            '<ul class="energy-lines">'
+            f'<li><span class="key kcal-ate">Eaten</span><b>{num(eaten)}</b></li>'
+            f'<li><span class="key kcal-burn">Burned{so_far}</span><b>{burned_text}</b></li>'
+            f'<li><span class="key">Net</span><b>{net_text}</b></li>'
+            f'<li class="goal">Goal {num(kcal["target"])} kcal'
+            f' <span class="more-link">Breakdown&nbsp;&rsaquo;</span></li></ul></a></section>'
+        ]
         macros = []
         for key, cls, _ in MACROS:
             p = progress.get(key)
-            eaten = num(shown[key], logic.DISPLAY_PLACES[key])
+            eaten_g = num(shown[key], logic.DISPLAY_PLACES[key])
             if p:
-                left = round(p["remaining"], logic.DISPLAY_PLACES[key])
-                note = f"{amount(key, abs(left))} {'left' if left >= 0 else 'over'}"
+                left_g = round(p["remaining"], logic.DISPLAY_PLACES[key])
+                note = f"{amount(key, abs(left_g))} {'left' if left_g >= 0 else 'over'}"
                 macros.append(
                     f'<a class="macro" href="{breakdown_url(day, f"top-{key}")}">'
                     f'<div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                    f"<div><strong>{eaten}</strong>"
+                    f"<div><strong>{eaten_g}</strong>"
                     f' <span class="muted target">/ {amount(key, p["target"])}</span></div>'
                     f"{meter(p['percent'], key)}"
                     f'<div class="muted small">{note}</div></a>'
@@ -2589,73 +2876,108 @@ def add_routes(
                 macros.append(
                     f'<a class="macro" href="{breakdown_url(day, f"top-{key}")}">'
                     f'<div class="small {cls}">{NUTRIENT_LABELS[key]}</div>'
-                    f"<div><strong>{eaten}</strong> g</div></a>"
+                    f"<div><strong>{eaten_g}</strong> g</div></a>"
                 )
-        summary.append(f'<div class="macros">{"".join(macros)}</div>')
-        if extras := extras_line(shown):
-            summary.append(
-                '<details class="extras"><summary class="small">Fiber, sugar and sodium</summary>'
-                f'<p class="muted small">{extras}</p></details>'
+        more_nutrients = ""
+        extras = extras_line(shown)
+        micros = micros_table(shown, logic.partial_micros(rows))
+        if extras or micros:
+            more_nutrients = (
+                '<details class="extras morenut"><summary class="small">More nutrients</summary>'
+                + (f'<p class="muted small">{extras}</p>' if extras else "")
+                + micros.replace('<details class="extras">', '<details class="extras inner">', 1)
+                + "</details>"
             )
-        summary.append(micros_table(shown, logic.partial_micros(rows)))
-        if not progress:
+        summary.append(
+            f'<section class="card macros-card" aria-label="Macros for {e(title)}">'
+            f'<div class="macros">{"".join(macros)}</div>{more_nutrients}'
+        )
+        if not targets["kcal"] and not any(targets[k] for k, _, _ in MACROS):
             summary.append(
-                f'<p class="muted small">No daily goals yet. <a href="{goals_url}">Set them'
+                f'<p class="muted small">No daily goals yet. <a href="{GOALS_PAGE}">Set them'
                 "</a>, or tell Claude something like “my protein target is 180 g”.</p>"
             )
         summary.append("</section>")
-        if day <= now:
-            summary.append(
-                f'<a class="button add" href="{PREFIX}/add?date={day.isoformat()}">+ Add food</a>'
-            )
+        summary.append(tiles_section)
 
         cards = []
         for meal, entries in meals:
             single = len(entries) == 1
             meal_totals = logic.round_for_display(logic.sum_nutrients(x.nutrients for x in entries))
-            time_value = hhmm(logic.local_iso(meal["eaten_at"], tz))
-            items = "".join(
-                entry_item(
-                    x, foods[x.food_id], single, error, ctx, time_value, photo_src(x.food_id)
-                )
-                for x in entries
-            )
+            items = "".join(entry_row(x, single, photo_src(x.food_id)) for x in entries)
             when = clock(logic.local_iso(meal["eaten_at"], tz))
             label = meal["label"] or ""
-            label_html = f' <span class="label">{e(capitalized(label))}</span>'
-            note = f'<p class="muted small">{e(meal["note"])}</p>' if meal["note"] else ""
+            label_html = f' <span class="label">· {e(capitalized(label))}</span>' if label else ""
+            note = f'<p class="muted small note">{e(meal["note"])}</p>' if meal["note"] else ""
             total = (
                 ""
                 if single
                 else '<div class="row small muted total"><span>Meal total</span>'
                 f"<span>{macros_line(meal_totals)}</span></div>"
             )
-            cards.append(
-                f'<section class="card meal" id="meal-{meal["id"]}"><div class="row mealhead">'
-                f"<h2>{when}{label_html if label else ''}</h2>"
-                f'<span class="kcal">{num(meal_totals["kcal"])}{NBSP}kcal</span></div>{note}'
-                f'<ul class="entries">{items}</ul>{total}{meal_tools(meal, entries, ctx)}'
-                "</section>"
+            options = (
+                f'<a class="iconbtn" href="{PREFIX}/meals/{meal["id"]}" data-sheet'
+                f' aria-label="Options for the {e(meal_title(meal))} meal">{icon("ellipsis")}</a>'
             )
-        if not cards:
+            cards.append(
+                f'<section class="card meal" id="meal-{meal["id"]}"><div class="mealhead">'
+                f'<h2>{when}{label_html}</h2><span class="kcal">{num(meal_totals["kcal"])}'
+                f"{NBSP}kcal</span>{options}</div>{note}"
+                f'<ul class="entries">{items}</ul>{total}</section>'
+            )
+        if cards:
+            cards.insert(0, '<h2 class="section-title">Meals</h2>')
+        elif day <= now:
+            log_here = f"{PREFIX}/add?date={day.isoformat()}"
             cards.append(
                 '<section class="card empty"><p>Nothing logged on this day.</p>'
-                '<p class="muted small">Add food above, or tell Claude what you ate.</p>'
-                "</section>"
+                f'<p class="muted small">Tap + to <a href="{log_here}" data-sheet>log food</a>,'
+                " or tell Claude what you ate.</p></section>"
             )
-        loaded = clock(datetime.now(ZoneInfo(tz)).isoformat())
-        cards.append(
-            f'<p class="fresh muted small">Page loaded at {loaded}.'
-            f' <a href="{e(page_url)}">Refresh</a></p>'
-        )
         return render(
-            day_title(day, now),
+            title,
             "".join(head) + "".join(summary) + "".join(cards),
             "today",
             signed_in=provider is not None,
             user=account(request),
             log_date=day if day != now else None,
+            refresh=True,
         )
+
+    @server.custom_route(f"{PREFIX}/day-menu", methods=["GET"])
+    async def day_menu(request: Request) -> Response:
+        """The … on Today's energy (#105): the day's breakdown and the goals."""
+        if not signed_in(request):
+            return to_login(request)
+        try:
+            day = parse_day(request.query_params.get("date"))
+        except ValueError:
+            day = today()
+        back = day_url(day)
+        rows = (
+            item(
+                breakdown_url(day),
+                "chart-pie",
+                "kcal",
+                "Breakdown",
+                "Macro split, calories by meal, top foods",
+            )
+            + item(
+                f"{GOALS_PAGE}?{urlencode({'back': back})}",
+                "target",
+                "protein",
+                "Edit goals",
+                "Calories and macros",
+            )
+            + item(
+                calendar_url(month_start(day), day), "sun", "carbs", "Pick a day", "The month view"
+            )
+        )
+        sheet = (
+            f'<h2 id="daymenu-title">{e(day_title(day, today()))}</h2>'
+            f'<div class="group">{rows}</div>'
+        )
+        return sheet_or_page(request, "Today", sheet, back)
 
     # --- Day breakdown (#63) ---
 
@@ -2870,6 +3192,12 @@ def add_routes(
 
     @server.custom_route(f"{PREFIX}/add", methods=["GET"])
     async def add_food(request: Request) -> Response:
+        """Log food (#105): a full-height sheet from + (?part=1), else a page. A chip says
+        where food goes (a new meal now, or a meal already that day); pills switch between
+        Recent, Frequent, Saved meals and Recipes; a search covers your foods and saved
+        meals, then USDA on a tap (or by itself when few of yours match, unless the search
+        is being typed: ?live=1). Each food logs again at its last amount with its +, or
+        opens for an amount with a tap."""
         if not signed_in(request):
             return to_login(request)
         serving_fill.backfill_soon(settings.db_path, fdc)  # once: servings for USDA foods
@@ -2880,26 +3208,48 @@ def add_routes(
             return message("Unknown date", "Pick a day up to today.", 400, signed_in=True)
         q = params.get("q", "").strip()[:100]
         meal_id = int_param(params.get("meal"))
+        view = params.get("view", "")
         usda_rows, usda_note = [], ""
+        templates: list = []
+        portioned: list = []
+        rows: list = []
         with connect(request) as conn:
             meals, _, _, ctx = load_day(conn, day)
             meal = next((m for m, _ in meals if m["id"] == meal_id), None)
             if meal is None:  # gone, or on another day: log a new meal instead
                 meal_id = None
             if q:
+                view = ""
                 portioned = store.search_portions(conn, q, ADD_LIMIT)
-                rows = store.search_foods(conn, q, ADD_LIMIT)
+                # The last word may be half typed ("chick"), after whole-word matches
+                rows = store.search_foods(conn, q, ADD_LIMIT, typing=True)
                 names = set(store.templates_matching(conn, q))
                 templates = [t for t in store.list_templates(conn) if t[0]["name"] in names]
             else:
-                portioned = []
-                rows = store.list_used_foods(conn, ADD_LIMIT)
-                templates = store.list_templates(conn)
+                recent = [
+                    r for r in store.list_used_foods(conn, ADD_LIMIT, "recent") if r["last_used"]
+                ]
+                if view not in ADD_VIEWS:
+                    view = "recent" if recent else "frequent"
+                if view == "recent":
+                    rows = recent
+                elif view == "frequent":
+                    rows = store.list_used_foods(conn, ADD_LIMIT)
+                elif view == "meals":
+                    templates = store.list_templates(conn)
+                else:
+                    ids = [r.food_id for r in store.list_recipes(conn) if r.food_id]
+                    found = store.get_foods(conn, ids)
+                    rows = [found[i] for i in ids if i in found]
             seen = {r["id"] for r in rows} | {a["id"] for a in portioned}
             portions = store.portions_of(conn, seen)
-            # On its own when few of your foods match (#88), else behind the button
+            # On its own when few of your foods match (#88), else behind the button; never
+            # while the search is still being typed
+            asked = bool(params.get("usda"))
             want_usda = (
-                usda and bool(q) and (bool(params.get("usda")) or len(seen) < AUTO_USDA_BELOW)
+                usda
+                and bool(q)
+                and (asked or (len(seen) < AUTO_USDA_BELOW and not params.get("live")))
             )
             if want_usda:
                 try:
@@ -2916,61 +3266,122 @@ def add_routes(
                     if row["id"] not in seen:
                         seen.add(row["id"])
                         usda_rows.append(row)
+            last = store.last_amounts(conn, seen)
             back = add_url(day, meal_id, q)
             banner = notice(conn, params, back)
 
         now_local = datetime.now(ZoneInfo(tz))
         default_time = now_local.strftime("%H:%M") if day == now_local.date() else "12:00"
-        target = f"Adding to {meal_title(meal)}" if meal is not None else "Logging a new meal"
-        hidden = f'<input type="hidden" name="date" value="{day.isoformat()}">' + (
-            f'<input type="hidden" name="meal" value="{meal_id}">' if meal_id is not None else ""
+        keep = {"view": view} if view and not q else {}
+
+        def to(mid: int | None, **extra: str | int) -> str:
+            return add_url(day, mid, q, **keep, **extra)
+
+        # Where it goes: a new meal at the time, or a meal already logged that day
+        new_meal = (
+            f"New meal at {clock(now_local.isoformat())}" if day == now_local.date() else "New meal"
         )
-        clear = f'<a class="clear" href="{e(add_url(day, meal_id, ""))}">Clear</a>' if q else ""
-        parts = [
-            '<header class="daynav">',
-            f'<a class="step" href="{day_url(day)}" aria-label="Back to'
-            f' {e(day_title(day, ctx.today))}">&lsaquo;</a>',
-            f'<div class="daytitle"><h1>Add food</h1><p class="muted small">'
-            f"{e(day_title(day, ctx.today))} · {e(target)}</p></div>",
-            '<span class="step off" aria-hidden="true"></span></header>',
-            banner,
-            f'<form class="search" method="get" action="{PREFIX}/add">{hidden}'
-            f'<input type="search" name="q" value="{e(q)}" placeholder="Search your foods"'
-            ' aria-label="Search foods and saved meals">'
-            f'<button type="submit">Search</button>{clear}</form>',
-        ]
+        choices = [(None, new_meal)] + [(mid, title) for mid, title in ctx.meals]
+        menu = "".join(
+            f'<a href="{e(to(mid))}" data-sheet-swap'
+            f"{' aria-current=true' if mid == meal_id else ''}>{e(title)}</a>"
+            for mid, title in choices
+        )
+        dest_title = meal_title(meal) if meal is not None else new_meal
+        when = "" if day == ctx.today else f"{day_title(day, ctx.today)} · "
+        dest = (
+            f'<details class="dest"><summary class="chip">{icon("utensils")}'
+            f'<span>{e(when)}{e(dest_title)}</span><span aria-hidden="true">&#9662;</span>'
+            f'</summary><nav class="dest-menu" aria-label="Log to">{menu}</nav></details>'
+        )
+        hidden = (
+            f'<input type="hidden" name="date" value="{day.isoformat()}">'
+            + (
+                f'<input type="hidden" name="meal" value="{meal_id}">'
+                if meal_id is not None
+                else ""
+            )
+            + (f'<input type="hidden" name="view" value="{e(view)}">' if view else "")
+        )
+        scan = (
+            f'<a class="scan" href="{PREFIX}/foods/new#scan" aria-label="Scan a barcode">'
+            f"{icon('scan-barcode')}</a>"
+        )
+        search = (
+            f'<form class="search logsearch" method="get" action="{PREFIX}/add" data-live-results'
+            f' role="search">{hidden}<span class="field-icon">{icon("search")}</span>'
+            f'<input type="search" name="q" value="{e(q)}" placeholder="Search foods and meals"'
+            ' aria-label="Search foods and saved meals" autocomplete="off" enterkeyhint="search">'
+            f"{scan}</form>"
+        )
+        pills = ""
+        if not q:
+            pills = (
+                '<nav class="pills" aria-label="Show">'
+                + "".join(
+                    f'<a href="{e(add_url(day, meal_id, "", view=key))}" data-sheet-swap'
+                    f"{' aria-current=page' if key == view else ''}>{label}</a>"
+                    for key, label in ADD_VIEWS.items()
+                )
+                + "</nav>"
+            )
+
+        def picks_of(found) -> list[str]:
+            out = []
+            for r in found:
+                grams, est = last.get(r["id"], (None, False))
+                out.append(
+                    pick_item(
+                        r,
+                        ctx,
+                        meal_id,
+                        q,
+                        default_time,
+                        portions.get(r["id"], ()),
+                        photo_src(r["id"]),
+                        quick=grams,
+                        quick_estimated=est,
+                    )
+                )
+            return out
+
+        parts: list[str] = []
         if templates:
             lis = "".join(
                 template_pick(t, items, ctx, meal_id, default_time) for t, items in templates
             )
+            parts.append(f'<section class="card"><ul class="entries">{lis}</ul></section>')
+        elif view == "meals":
             parts.append(
-                '<section class="card"><h2 class="section">Saved meals</h2>'
-                f'<ul class="entries">{lis}</ul></section>'
+                '<section class="card empty"><p>No saved meals yet.</p><p class="muted small">'
+                "Save one from a meal's … menu on Today, or "
+                f'<a href="{SAVED}/new">make one</a>.</p></section>'
             )
-        picks = [
-            pick_item(a, ctx, meal_id, q, default_time, portions[a["id"]], photo_src(a["id"]))
-            for a in portioned
-        ]
-        picks += [
-            pick_item(r, ctx, meal_id, q, default_time, portions[r["id"]], photo_src(r["id"]))
-            for r in rows
-            if r["id"] not in {a["id"] for a in portioned}
-        ]
+        picks = picks_of(portioned) + picks_of(
+            [r for r in rows if r["id"] not in {a["id"] for a in portioned}]
+        )
         if picks:
-            heading = "Your matches" if q else "Your foods"
-            note = "per 100 g" if q else "most logged first"
+            heading = (
+                '<h2 class="section-title">Your foods<small>per 100 g</small></h2>' if q else ""
+            )
             parts.append(
-                f'<section class="card"><h2 class="section">{heading}<small>{note}</small></h2>'
-                f'<ul class="entries">{"".join(picks)}</ul></section>'
+                f'{heading}<section class="card"><ul class="entries">{"".join(picks)}</ul>'
+                "</section>"
             )
         elif q and not templates:
             parts.append(
                 f'<section class="card empty"><p>None of your foods match “{e(q)}”.</p></section>'
             )
-        elif not q:
+        elif view in ("recent", "frequent"):
             parts.append(
                 '<section class="card empty"><p>No saved foods yet.</p><p class="muted small">'
                 "Search for a food to find it in USDA FoodData Central.</p></section>"
+            )
+        elif view == "recipes":
+            parts.append(
+                '<section class="card empty"><p>No recipes yet.</p><p class="muted small">'
+                f'<a href="{PREFIX}/recipes/new">Make one</a> and it logs like a food.</p>'
+                "</section>"
             )
         if usda_rows or usda_note:
             lis = "".join(
@@ -2978,11 +3389,9 @@ def add_routes(
                 for r in usda_rows
             )
             body = f'<ul class="entries">{lis}</ul>' if lis else ""
-            if not usda_rows and not usda_note:
-                usda_note = "No USDA matches."
             parts.append(
-                '<section class="card"><h2 class="section">USDA FoodData Central'
-                "<small>per 100 g</small></h2>"
+                '<h2 class="section-title">USDA FoodData Central<small>per 100 g</small></h2>'
+                '<section class="card">'
                 + (f'<p class="muted small">{e(usda_note)}</p>' if usda_note else "")
                 + f"{body}</section>"
             )
@@ -2990,7 +3399,7 @@ def add_routes(
             parts.append('<section class="card empty"><p>No USDA matches.</p></section>')
         elif q and usda:
             parts.append(
-                f'<a class="button ghost wide" href="{e(add_url(day, meal_id, q, usda=1))}">'
+                f'<a class="button ghost wide" href="{e(to(meal_id, usda=1))}" data-sheet-swap>'
                 f"Search USDA for “{e(q)}”</a>"
             )
         elif q:
@@ -3002,9 +3411,20 @@ def add_routes(
             f'<p class="muted small center">Not here? <a href="{PREFIX}/foods/new">Add a new'
             " food</a> by barcode, label photo or by hand.</p>"
         )
+        sheet = (
+            '<div class="logfood" data-sheet-full>'
+            f'<div class="loghead"><h2 id="log-title">Log food</h2>{dest}</div>'
+            + banner
+            + search
+            + pills
+            + f'<div class="results" data-results>{"".join(parts)}</div></div>'
+        )
+        if params.get("part"):
+            return HTMLResponse(sheet, headers=SECURITY_HEADERS)
         return render(
-            "Add food",
-            "".join(parts),
+            "Log food",
+            f'<p class="backlink"><a href="{day_url(day)}">&lsaquo;'
+            f" {e(day_title(day, ctx.today))}</a></p>{sheet}",
             "today",
             signed_in=provider is not None,
             user=account(request),
@@ -3111,6 +3531,150 @@ def add_routes(
 
     # --- Entry edits ---
 
+    @server.custom_route(PREFIX + "/entries/{entry_id:int}", methods=["GET"])
+    async def entry_view(request: Request) -> Response:
+        """An entry's edit sheet (#105): ?part=1 for app.js, else a page."""
+        if not signed_in(request):
+            return to_login(request)
+        params = request.query_params
+        with connect(request) as conn:
+            try:
+                entry = store.get_entry(conn, request.path_params["entry_id"])
+                meal = store.get_meal(conn, entry.meal_id)
+            except store.NotFound:
+                return message("Not found", "That entry no longer exists.", 404, signed_in=True)
+            day = meal_day(meal)
+            _, _, _, ctx = load_day(conn, day)
+            food = store.get_food(conn, entry.food_id)
+            banner = notice(conn, params, day_url(day))
+        meal_time = hhmm(logic.local_iso(meal["eaten_at"], tz))
+        by = params.get("by", "") if params.get("error") else ""
+        typed = params.get("amount", "")[:20] if params.get("error") else None
+        sheet = banner + entry_editor(entry, food, ctx, meal_time, by=by, typed=typed)
+        return sheet_or_page(request, entry.name, sheet, f"{day_url(day)}#entry-{entry.id}")
+
+    @server.custom_route(PREFIX + "/meals/{meal_id:int}", methods=["GET"])
+    async def meal_view(request: Request) -> Response:
+        """A meal's … sheet (#105): add food to it, rename it or change its time, combine it
+        with another meal, save it as a saved meal, or delete it (with Undo)."""
+        if not signed_in(request):
+            return to_login(request)
+        with connect(request) as conn:
+            try:
+                meal = store.get_meal(conn, request.path_params["meal_id"])
+            except store.NotFound:
+                return message("Not found", "That meal no longer exists.", 404, signed_in=True)
+            day = meal_day(meal)
+            meals, _, _, ctx = load_day(conn, day)
+        entries = next((es for m, es in meals if m["id"] == meal["id"]), [])
+        meal_id = meal["id"]
+        local = logic.local_iso(meal["eaten_at"], tz)
+        kcal = logic.sum_nutrients(x.nutrients for x in entries)["kcal"] or 0
+        count = items_text(len(entries))
+        others = "".join(
+            f'<option value="{mid}">{e(title)}</option>'
+            for mid, title in ctx.meals
+            if mid != meal_id
+        )
+
+        def option(glyph: str, tone: str, title: str, body: str, sub: str = "") -> str:
+            note = f"<small>{e(sub)}</small>" if sub else ""
+            return (
+                f'<details class="opt"><summary class="item"><span class="badge-icon'
+                f' tone-{tone}">{icon(glyph)}</span><span class="grow">{e(title)}{note}</span>'
+                f"{icon('chevron-right', 'icon chev')}</summary>{body}</details>"
+            )
+
+        rows = [
+            item(
+                add_url(day, meal_id, ""),
+                "plus",
+                "kcal",
+                "Add food to this meal",
+                data_sheet="",
+            ),
+            option(
+                "pencil",
+                "protein",
+                "Rename or change the time",
+                f'<form class="stack" method="post" action="{PREFIX}/meals/{meal_id}">'
+                f'<label>Name<input name="label" value="{e(meal["label"] or "")}"'
+                f' maxlength="{LABEL_MAX}" placeholder="Optional, like Post-workout"></label>'
+                '<div class="pair">'
+                f'<label>Time<input type="time" name="time" value="{hhmm(local)}" required>'
+                f'</label><label>Date<input type="date" name="date" value="{local[:10]}"'
+                f' max="{ctx.today.isoformat()}" required></label></div>'
+                + time_nudges()
+                + f'<label>Note<input name="note" value="{e(meal["note"] or "")}"'
+                f' maxlength="{NOTE_MAX}" placeholder="Optional"></label>'
+                '<button type="submit">Save</button></form>',
+            ),
+        ]
+        if others:
+            rows.append(
+                option(
+                    "merge",
+                    "carbs",
+                    "Combine with another meal",
+                    f'<form class="stack" method="post" action="{PREFIX}/meals/{meal_id}/merge">'
+                    f'<label>Move everything in this meal into<select name="into">{others}'
+                    '</select></label><button type="submit">Combine</button></form>',
+                )
+            )
+        if entries:
+            rows.append(
+                option(
+                    "bookmark-plus",
+                    "fat",
+                    "Save as a saved meal",
+                    f'<form class="stack" method="post" action="{PREFIX}/meals/{meal_id}/save">'
+                    f'<label>Name<input name="name" required maxlength="{TEMPLATE_NAME_MAX}"'
+                    f' value="{e(capitalized(meal["label"] or ""))}"'
+                    ' placeholder="Like Usual breakfast"></label>'
+                    '<button type="submit">Save meal</button></form>',
+                    "Log it again in one tap",
+                )
+            )
+        rows.append(
+            f'<form method="post" action="{PREFIX}/meals/{meal_id}/delete">'
+            '<button class="item danger" type="submit"><span class="badge-icon tone-over">'
+            f'{icon("trash-2")}</span><span class="grow">Delete this meal'
+            f"<small>{count}</small></span></button></form>"
+        )
+        sheet = (
+            f'<h2 id="meal-title">{e(meal_title(meal))}</h2>'
+            f'<p class="sheet-sub muted small">{count} · {num(kcal)}{NBSP}kcal</p>'
+            f'<div class="group">{"".join(rows)}</div>'
+        )
+        return sheet_or_page(request, meal_title(meal), sheet, f"{day_url(day)}#meal-{meal_id}")
+
+    @server.custom_route(PREFIX + "/meals/{meal_id:int}/save", methods=["POST"])
+    async def save_meal_as(request: Request) -> Response:
+        """Save a logged meal's foods and amounts as a saved meal (#105)."""
+        if (no := refused(request, "Save meals")) is not None:
+            return no
+        form = await request.form()
+        name = " ".join(str(form.get("name", "")).split())[:TEMPLATE_NAME_MAX]
+        meal_id = request.path_params["meal_id"]
+        with connect(request) as conn:
+            try:
+                meal = store.get_meal(conn, meal_id)
+                entries = store.meal_entries(conn, meal_id)
+            except store.NotFound:
+                return message("Not found", "That meal no longer exists.", 404, signed_in=True)
+            day = meal_day(meal)
+            if not name:
+                return back_to_day(day, f"meal-{meal_id}", problem="meal_name")
+            items: list[store.Item] = [(x.food_id, x.grams, x.estimated) for x in entries]
+            try:
+                template_id = store.edit_template(conn, None, name, items)
+            except store.NotFound:
+                return back_to_day(day, f"meal-{meal_id}", problem="gone")
+            except ValueError:
+                return back_to_day(day, f"meal-{meal_id}", problem="meal_taken")
+        log.info("dashboard: saved meal %d as template %d", meal_id, template_id)
+        return go(f"{SAVED}/{template_id}?saved=1")
+
     @server.custom_route(PREFIX + "/entries/{entry_id:int}", methods=["POST"])
     async def edit_entry(request: Request) -> Response:
         if (no := refused(request, "Edit entries")) is not None:
@@ -3135,7 +3699,10 @@ def add_routes(
                 else:
                     grams = parse_grams(raw)
             except ValueError:
-                return back_to_day(day, anchor, error=entry_id, by=by, amount=raw[:20])
+                return go(
+                    f"{PREFIX}/entries/{entry_id}?"
+                    + urlencode({"error": 1, "by": by, "amount": raw[:20]})
+                )
             before = store.capture(conn, entries=[entry_id])
             store.update_entry(conn, entry_id, grams, None)
             summary = f"Changed {entry.name} from {num(entry.grams, 1)} g to {num(grams, 1)} g"
@@ -5010,17 +5577,153 @@ def add_routes(
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(WEIGHT_PAGE + query, status_code=301, headers=SECURITY_HEADERS)
 
+    WEIGHED = {
+        "added": "Weigh-in saved.",
+        "edited": "Weigh-in changed.",
+        "removed": "Weigh-in deleted.",
+    }
+
+    def weigh_in_form(
+        action: str, back: str, lb: str, local: datetime, *, problem: str = "", note: str = ""
+    ) -> str:
+        """The weigh-in sheet's form (#105): one big number in lb, then when."""
+        today_iso = today().isoformat()
+        error = f'<p class="error" role="alert">{e(problem)}</p>' if problem else ""
+        return (
+            f'<form class="stack weigh-in" method="post" action="{action}">{error}'
+            f'<input type="hidden" name="back" value="{e(back)}">'
+            '<label class="bignum"><span class="sr">Weight in pounds</span>'
+            f'<input name="lb" inputmode="decimal" autocomplete="off" required value="{e(lb)}"'
+            ' aria-describedby="lb-unit" data-select><span id="lb-unit">lb</span></label>'
+            + (f'<p class="muted small center">{note}</p>' if note else "")
+            + '<div class="pair"><label>Time<input type="time" name="time"'
+            f' value="{local.strftime("%H:%M")}" required></label>'
+            f'<label>Date<input type="date" name="date" value="{local.date().isoformat()}"'
+            f' max="{today_iso}" required></label></div>'
+            '<button type="submit">Save</button></form>'
+        )
+
+    def weighed(back: str, what: str, **extra: str | int) -> RedirectResponse:
+        """Back where the weigh-in sheet opened, saying what happened."""
+        return go(with_params(back, weighed=what, **extra))
+
+    def read_weigh_in(form) -> tuple[str, float]:
+        """A weigh-in form's time (UTC) and kg. Raises ValueError with a PROBLEMS key."""
+        when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
+        try:
+            lb = float(str(form.get("lb", "")).replace(",", "").strip())
+        except ValueError:
+            raise ValueError("weight") from None
+        if not math.isfinite(lb) or not 0 < lb < 1500:
+            raise ValueError("weight")
+        return when, logic.to_kg(lb, "lb")
+
+    @server.custom_route(WEIGHT + "/new", methods=["GET"])
+    async def weight_new(request: Request) -> Response:
+        """The weigh-in sheet (#105), from the + sheet, Weight's + or Today's weight tile:
+        the last weight to start from, now as the time."""
+        if not signed_in(request):
+            return to_login(request)
+        back = came_from(request, WEIGHT_PAGE)
+        with connect(request) as conn:
+            latest = store.latest_weight(conn)
+        lb = f"{logic.weight_out(latest['kg'])['lb']:.1f}" if latest else ""
+        note = f"Last: {lb_text(latest['kg'])}" if latest else ""
+        problem = PROBLEMS.get(request.query_params.get("problem", ""), "")
+        sheet = '<h2 id="weigh-title">Add a weigh-in</h2>' + weigh_in_form(
+            WEIGHT, back, lb, datetime.now(ZoneInfo(tz)), problem=problem, note=note
+        )
+        return sheet_or_page(request, "Add a weigh-in", sheet, back, "progress")
+
+    async def weight_add(request: Request) -> Response:
+        if (no := refused(request, "Add weigh-ins")) is not None:
+            return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", ""))) if form.get("back") else WEIGHT_PAGE
+        if form.get("days") and not form.get("back"):  # an older page's form
+            back = f"{WEIGHT_PAGE}?{urlencode({'days': str(form.get('days'))})}"
+        try:
+            when, kg = read_weigh_in(form)
+        except ValueError as err:
+            query = urlencode({"back": back, "problem": str(err)})
+            return go(f"{WEIGHT}/new?{query}")
+        with connect(request) as conn:
+            row = store.add_weight(conn, when, kg, "app")
+        log.info("dashboard: added weigh-in %d", row["id"])
+        return weighed(back, "added")
+
+    @server.custom_route(WEIGHT + "/{weight_id:int}", methods=["GET", "POST"])
+    async def weight_edit(request: Request) -> Response:
+        """A weigh-in's sheet (#105): change its weight or time, or delete it. A reading from
+        Apple Health stays as changed here when the phone sends it again."""
+        weight_id = request.path_params["weight_id"]
+        if request.method == "POST":
+            if (no := refused(request, "Change weigh-ins")) is not None:
+                return no
+            form = await request.form()
+            back = safe_next(str(form.get("back", ""))) if form.get("back") else WEIGHT_PAGE
+            try:
+                when, kg = read_weigh_in(form)
+            except ValueError as err:
+                query = urlencode({"back": back, "problem": str(err)})
+                return go(f"{WEIGHT}/{weight_id}?{query}")
+            with connect(request) as conn:
+                try:
+                    was = store.get_weight(conn, weight_id)["measured_at"]
+                    # the form shows local minutes: the same wall minute keeps the reading's
+                    # own time (seconds, and which side of a DST fall-back hour it was on)
+                    typed = f"{form.get('date', '')}T{form.get('time', '')}"
+                    at = was if logic.local_iso(was, tz)[:16] == typed[:16] else when
+                    row = store.update_weight(conn, weight_id, at, kg)
+                except store.NotFound:
+                    return go(with_params(back, problem="gone"))
+            log.info("dashboard: changed weigh-in %d", row["id"])
+            return weighed(back, "edited")
+
+        if not signed_in(request):
+            return to_login(request)
+        back = came_from(request, WEIGHT_PAGE)
+        with connect(request) as conn:
+            try:
+                row = store.get_weight(conn, weight_id)
+            except store.NotFound:
+                return go(back)
+        local = datetime.fromisoformat(logic.local_iso(row["measured_at"], tz))
+        label = f"{local.strftime('%a %b')} {local.day}, {clock(local.isoformat())}"
+        source = WEIGHT_SOURCES.get(row["source"], "")
+        problem = PROBLEMS.get(request.query_params.get("problem", ""), "")
+        sheet = (
+            '<h2 id="weigh-title">Weigh-in</h2>'
+            f'<p class="sheet-sub muted small">{e(label)} · {e(source)}</p>'
+            + weigh_in_form(
+                f"{WEIGHT}/{weight_id}",
+                back,
+                f"{logic.weight_out(row['kg'])['lb']:.1f}",
+                local,
+                problem=problem,
+            )
+            + f'<div class="group"><form method="post" action="{WEIGHT}/{weight_id}/delete"'
+            f' data-confirm="Delete the weigh-in from {e(label)}?">'
+            f'<input type="hidden" name="back" value="{e(back)}">'
+            '<button class="item danger" type="submit"><span class="badge-icon tone-over">'
+            f'{icon("trash-2")}</span><span class="grow">Delete this weigh-in</span></button>'
+            "</form></div>"
+        )
+        return sheet_or_page(request, "Weigh-in", sheet, back, "progress")
+
     @server.custom_route(WEIGHT + "/{weight_id:int}/delete", methods=["POST"])
     async def weight_delete(request: Request) -> Response:
         if (no := refused(request, "Delete weigh-ins")) is not None:
             return no
+        form = await request.form()
+        back = safe_next(str(form.get("back", ""))) if form.get("back") else WEIGHT_PAGE
         with connect(request) as conn:
             try:
                 row = store.delete_weight(conn, request.path_params["weight_id"])
             except store.NotFound:
-                return go(WEIGHT_PAGE)
+                return go(back)
         log.info("dashboard: deleted weigh-in %d", row["id"])
-        return go(f"{WEIGHT_PAGE}?removed=1")
+        return weighed(back, "removed")
 
     def moved(old: str, new: str) -> None:
         """An old page's address (#105) sends a GET on to where it lives now, query and all."""
@@ -5521,22 +6224,7 @@ def add_routes(
         goal, lowest, highest and average against the period before, and each weigh-in by
         month (swipe left to delete). Adding one posts here."""
         if request.method == "POST":
-            if (no := refused(request, "Add weigh-ins")) is not None:
-                return no
-            form = await request.form()
-            back = str(form.get("days", "30"))
-            try:
-                when = parse_when(str(form.get("date", "")), str(form.get("time", "")))
-            except ValueError as err:
-                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': str(err)})}")
-            try:
-                kg = logic.to_kg(float(str(form.get("lb", "")).strip()), "lb")
-            except ValueError:
-                return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'problem': 'weight'})}")
-            with connect(request) as conn:
-                row = store.add_weight(conn, when, kg, "app")
-            log.info("dashboard: added weigh-in %d", row["id"])
-            return go(f"{WEIGHT_PAGE}?{urlencode({'days': back, 'added': row['id']})}")
+            return await weight_add(request)
 
         if not signed_in(request):
             return to_login(request)
@@ -5567,11 +6255,14 @@ def add_routes(
         banner = ""
         if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
             banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
-        elif int_param(params.get("added")) is not None:
-            banner = toast("<span>Weigh-in saved.</span>", "status")
-        elif params.get("removed"):
-            banner = toast("<span>Weigh-in deleted.</span>", "status")
-        add = f'<a class="iconbtn" href="#weigh-in" aria-label="Add a weigh-in">{icon("plus")}</a>'
+        elif said := WEIGHED.get(params.get("weighed", "")):
+            banner = toast(f"<span>{said}</span>", "status")
+        here = f"{WEIGHT_PAGE}?days={span}"
+        add_url_ = f"{WEIGHT}/new?{urlencode({'back': here})}"
+        add = (
+            f'<a class="iconbtn" href="{e(add_url_)}" data-sheet aria-label="Add a weigh-in">'
+            f"{icon('plus')}</a>"
+        )
         parts = [
             page_head("Progress", add),
             progress_pills("weight"),
@@ -5674,16 +6365,15 @@ def add_routes(
             for r in reversed(rows):
                 d = logic.local_date(r["measured_at"], tz)
                 months.setdefault((d.year, d.month), []).append(r)
-            hint = '<p class="small muted js-only hint">Swipe a weigh-in left to delete it.</p>'
             groups = "".join(
                 f'<section class="card"><h2>{date(y, m, 1).strftime("%B %Y")}'
                 f' <small class="muted">{len(rs)} weigh-in{"" if len(rs) == 1 else "s"}'
                 f'</small></h2><ul class="entries">'
-                + "".join(weight_item(r, tz) for r in rs)
+                + "".join(weight_item(r, tz, here) for r in rs)
                 + "</ul></section>"
                 for (y, m), rs in months.items()
             )
-            parts.append(f'<div class="weigh-ins">{hint}{groups}</div>')
+            parts.append(f'<div class="weigh-ins">{groups}</div>')
         elif latest is None:
             parts.append(
                 '<section class="card empty"><p>No weigh-ins yet.</p><p class="muted small">'
@@ -5695,20 +6385,6 @@ def add_routes(
                 '<section class="card empty"><p>No weigh-ins in this period.</p></section>'
             )
 
-        now = datetime.now(ZoneInfo(tz))
-        hint_lb = f"{logic.weight_out(latest['kg'])['lb']:.1f}" if latest else "182.4"
-        parts.append(
-            f'<form class="card stack" id="weigh-in" method="post" action="{WEIGHT}">'
-            "<h2>Add a weigh-in</h2>"
-            f'<input type="hidden" name="days" value="{span}">'
-            '<label>Weight (lb)<input name="lb" inputmode="decimal" autocomplete="off"'
-            f' required placeholder="{e(hint_lb)}"></label>'
-            f'<div class="pair"><label>Time<input type="time" name="time"'
-            f' value="{now.strftime("%H:%M")}" required></label>'
-            f'<label>Date<input type="date" name="date" value="{now.date().isoformat()}"'
-            f' max="{now.date().isoformat()}" required></label></div>'
-            '<button type="submit">Save</button></form>'
-        )
         return progress_page(request, "Weight", "".join(parts), "weight")
 
     @server.custom_route(ACTIVITY_PAGE, methods=["GET"])
@@ -6384,9 +7060,12 @@ def add_routes(
         on = "" if day == today() else f" to {day_title(day, today())}"
         query = f"?{urlencode({'date': day.isoformat()})}" if on else ""
         add = f"{PREFIX}/add{query}"
+        meals = f"{add}{'&' if query else '?'}view=meals"
+        back = came_from(request, day_url(day) if on else PREFIX)
+        weigh = f"{WEIGHT}/new?{urlencode({'back': back})}"
         rows = "".join(
             (
-                item(add, "search", "kcal", "Log food", f"Search your foods{e(on)}"),
+                item(add, "search", "kcal", "Log food", f"Search your foods{e(on)}", data_sheet=""),
                 item(
                     f"{PREFIX}/foods/new#scan",
                     "scan-barcode",
@@ -6395,13 +7074,14 @@ def add_routes(
                     "Find a packaged food by its code",
                 ),
                 item(
-                    f"{SAVED}{query}",
+                    meals,
                     "utensils",
                     "protein",
                     "Log a saved meal",
                     f"Your usual meals{e(on)}",
+                    data_sheet="",
                 ),
-                item(f"{WEIGHT_PAGE}#weigh-in", "scale", "steps", "Add a weigh-in"),
+                item(weigh, "scale", "steps", "Add a weigh-in", data_sheet=""),
                 item(
                     f"{PREFIX}/foods/new",
                     "salad",

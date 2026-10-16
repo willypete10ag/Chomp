@@ -134,7 +134,7 @@ def page(client, url: str) -> str:
 def test_today_links_into_the_breakdown(http, logged):  # noqa: F811
     sign_in(http)
     text = page(http, "/app")
-    assert 'class="hero" href="/app/breakdown?date=' in text
+    assert 'class="energy-body" href="/app/breakdown?date=' in text
     assert "#top-protein_g" in text and "#top-fat_g" in text
 
 

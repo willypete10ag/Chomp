@@ -26,3 +26,4 @@ commit when a migration changes the design.
 | `0015_activity.sql` | `activity`: each person's steps, energy, distance, exercise minutes and flights from Apple Health (#94) |
 | `0016_activity_source.sql` | `activity.source`: `phone` or `export` (Health's export.zip), so imports don't date the phone's last send and can be refreshed (#94) |
 | `0017_body_goals.sql` | `targets.goal_weight_kg` and `targets.step_goal`: optional body goals drawn as reference lines on Weight and Activity (#105) |
+| `0018_weight_edits.sql` | `weights.edited`: weigh-ins changed on the dashboard, which the phone's resends leave as edited (#105) |

@@ -201,31 +201,6 @@
     foodPreview(form);
   }
 
-  // A slider and its number box move together
-  document.querySelectorAll(".amount").forEach(function (box) {
-    var range = box.querySelector("input[type=range]");
-    var field = box.querySelector("[data-amount]");
-    if (!range || !field) return;
-    // Grams chosen by hand are exact; an estimated portion chip marks them again (#75)
-    var estimated = field.form && field.form.querySelector("input[name=estimated]");
-    range.addEventListener("input", function () {
-      field.value = range.value;
-      if (estimated) estimated.value = "0";
-      syncServings(field.form, parse(range.value));
-      changed(field.form);
-    });
-    field.addEventListener("input", function () {
-      if (estimated) estimated.value = "0";
-      var n = parse(field.value);
-      if (n !== null) {
-        if (n > parse(range.max)) range.max = String(Math.ceil(n));
-        range.value = String(n);
-      }
-      syncServings(field.form, n);
-      changed(field.form);
-    });
-  });
-
   // Servings (#80): the servings box and the grams box show the same amount, whichever is
   // changed; the Servings / Grams toggle says which one gets logged
   function countText(n) {
@@ -236,42 +211,84 @@
     if (!box || grams === null || grams <= 0) return;
     box.value = countText(grams / parse(box.closest("[data-serving]").dataset.serving));
   }
-  document.querySelectorAll("[data-servings]").forEach(function (box) {
-    var form = box.form;
-    var size = parse(box.closest("[data-serving]").dataset.serving);
-    var field = form.querySelector("[data-amount]");
-    var range = field.closest(".amount").querySelector("input[type=range]");
-    var estimated = form.querySelector("input[name=estimated]");
-    box.addEventListener("input", function () {
-      if (estimated) estimated.value = "0";
-      var n = parse(box.value);
-      if (n !== null && n > 0) {
-        var grams = Math.round(n * size * 10) / 10;
-        field.value = String(grams);
-        if (range) {
-          if (grams > parse(range.max)) range.max = String(Math.ceil(grams));
-          range.value = String(grams);
-        }
-      }
-      changed(form);
-    });
-    // − and + move to the next whole serving down or up (1.5 goes to 1 or 2), not under 1;
-    // a typed 1.5 still logs as typed
-    box.closest(".field").querySelectorAll("[data-step]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        var n = parse(box.value) || 0;
-        var next = button.dataset.step === "1"
-          ? Math.floor(n + 1e-9) + 1
-          : Math.ceil(n - 1e-9) - 1;
-        if (next < 1) return;
-        box.value = countText(next);
-        box.dispatchEvent(new Event("input"));
-      });
-    });
-  });
   document.addEventListener("change", function (event) {
     if (event.target.name === "by") changed(event.target.form);
   });
+
+  // Forms on the page, and in a sheet once it opens (#105): sliders, servings, previews,
+  // menus and Log food's live search
+  function enhance(root) {
+    // A slider and its number box move together
+    root.querySelectorAll(".amount").forEach(function (box) {
+      var range = box.querySelector("input[type=range]");
+      var field = box.querySelector("[data-amount]");
+      if (!range || !field) return;
+      // Grams chosen by hand are exact; an estimated portion chip marks them again (#75)
+      var estimated = field.form && field.form.querySelector("input[name=estimated]");
+      range.addEventListener("input", function () {
+        field.value = range.value;
+        if (estimated) estimated.value = "0";
+        syncServings(field.form, parse(range.value));
+        changed(field.form);
+      });
+      field.addEventListener("input", function () {
+        if (estimated) estimated.value = "0";
+        var n = parse(field.value);
+        if (n !== null) {
+          if (n > parse(range.max)) range.max = String(Math.ceil(n));
+          range.value = String(n);
+        }
+        syncServings(field.form, n);
+        changed(field.form);
+      });
+    });
+
+    root.querySelectorAll("[data-servings]").forEach(function (box) {
+      var form = box.form;
+      var size = parse(box.closest("[data-serving]").dataset.serving);
+      var field = form.querySelector("[data-amount]");
+      var range = field.closest(".amount").querySelector("input[type=range]");
+      var estimated = form.querySelector("input[name=estimated]");
+      box.addEventListener("input", function () {
+        if (estimated) estimated.value = "0";
+        var n = parse(box.value);
+        if (n !== null && n > 0) {
+          var grams = Math.round(n * size * 10) / 10;
+          field.value = String(grams);
+          if (range) {
+            if (grams > parse(range.max)) range.max = String(Math.ceil(grams));
+            range.value = String(grams);
+          }
+        }
+        changed(form);
+      });
+      // − and + move to the next whole serving down or up (1.5 goes to 1 or 2), not under 1;
+      // a typed 1.5 still logs as typed
+      box.closest(".field").querySelectorAll("[data-step]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var n = parse(box.value) || 0;
+          var next = button.dataset.step === "1"
+            ? Math.floor(n + 1e-9) + 1
+            : Math.ceil(n - 1e-9) - 1;
+          if (next < 1) return;
+          box.value = countText(next);
+          box.dispatchEvent(new Event("input"));
+        });
+      });
+    });
+    // "Move to" and "Add to" menus: the time box only matters for a new meal
+    root.querySelectorAll("select[data-new-meal]").forEach(function (select) {
+      var time = select.form.querySelector(".new-meal");
+      var sync = function () {
+        if (time) time.hidden = select.value !== "new";
+      };
+      select.addEventListener("change", sync);
+      sync();
+    });
+
+    root.querySelectorAll("form").forEach(changed);
+    root.querySelectorAll("form[data-live-results]").forEach(liveResults);
+  }
 
   // Quick picks: "1 serving · 46 g", "1 handful · ~30 g", "100 g"
   document.addEventListener("click", function (event) {
@@ -310,16 +327,6 @@
   document.addEventListener("click", function (event) {
     var button = event.target.closest("[data-dismiss]");
     if (button) button.closest(".flash").remove();
-  });
-
-  // "Move to" and "Add to" menus: the time box only matters for a new meal
-  document.querySelectorAll("select[data-new-meal]").forEach(function (select) {
-    var time = select.form.querySelector(".new-meal");
-    var sync = function () {
-      if (time) time.hidden = select.value !== "new";
-    };
-    select.addEventListener("change", sync);
-    sync();
   });
 
   // New food from a label photo: count the ticked values and say whether saving now gives
@@ -428,6 +435,7 @@
       if (navigator.vibrate) navigator.vibrate(15);
       if (details) details.open = true;
       else if (li.dataset.hold) location.href = li.dataset.hold; // a recipe opens to edit
+      else if (li.dataset.sheetHold) openSheet(li.dataset.sheetHold, press); // a weigh-in
       else holdMenu(li);
     }
     body.addEventListener("pointerdown", function (event) {
@@ -455,6 +463,7 @@
         event.preventDefault();
         hide();
         if (li.dataset.hold) location.href = li.dataset.hold;
+        else if (li.dataset.sheetHold) openSheet(li.dataset.sheetHold, press);
         else holdMenu(li);
       }
     });
@@ -1057,7 +1066,7 @@
     });
   }
 
-  document.querySelectorAll("form").forEach(changed);
+  enhance(document);
 
   // Imports (#94): a big upload can take a while, so the form turns into a spinner with a
   // running count of seconds until the next page arrives
@@ -1092,97 +1101,272 @@
     }, { once: true });
   });
 
-  // Sheets (#105): a link marked data-sheet (the + in the tab bar) opens its page's ?part=1
-  // over the current page instead. A tap outside, Escape or the back button closes it; a
-  // link inside goes on to its page. Without this, the link opens the page itself.
-  document.querySelectorAll("a[data-sheet]").forEach(function (link) {
-    if (!window.fetch) return;
-    link.addEventListener("click", function (event) {
-      event.preventDefault();
-      openSheet(link);
+  // Sheets (#105): a link marked data-sheet (the + in the tab bar, an entry on Today, a
+  // meal's …, a weigh-in) opens its page's ?part=1 over the current page instead. Inside a
+  // sheet, a data-sheet link opens over the last one (‹ goes back to it) and a
+  // data-sheet-swap link replaces it. A tap outside, the ×, Escape, a drag down or the back
+  // button closes it; another link inside goes on to its page, and a form posts as usual
+  // once the sheet is closed. Without this, every link opens the page itself.
+  var sheetNow = null;
+  var ICON_BACK = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+  var ICON_CLOSE = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+  function part(href) {
+    var from = location.pathname + location.search;
+    return href + (href.indexOf("?") < 0 ? "?" : "&") + "part=1&from=" + encodeURIComponent(from);
+  }
+  function getPart(href) {
+    return fetch(part(href), { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok || r.redirected) throw new Error(r.status);
+      return r.text();
     });
+  }
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey ||
+        event.shiftKey || !window.fetch) return;
+    var link = event.target.closest && event.target.closest("a[data-sheet], a[data-sheet-swap]");
+    if (!link) return;
+    var inSheet = sheetNow && sheetNow.sheet.contains(link);
+    if (!inSheet && !link.hasAttribute("data-sheet")) return; // a plain link on its own page
+    event.preventDefault();
+    if (inSheet) sheetNow.load(link.href, link.hasAttribute("data-sheet"));
+    else openSheet(link.href, link);
   });
-  function openSheet(link) {
-    var href = link.href;
-    fetch(href + (href.indexOf("?") < 0 ? "?" : "&") + "part=1", { credentials: "same-origin" })
-      .then(function (r) {
-        if (!r.ok) throw new Error(r.status);
-        return r.text();
-      })
-      .then(function (html) {
-        var layer = document.createElement("div");
-        layer.className = "sheet-layer";
-        var sheet = document.createElement("div");
-        sheet.className = "sheet";
-        sheet.setAttribute("role", "dialog");
-        sheet.setAttribute("aria-modal", "true");
-        sheet.innerHTML = '<div class="grab"></div>' + html;
-        var title = sheet.querySelector("h2[id]");
+  function openSheet(href, opener) {
+    if (sheetNow) return;
+    getPart(href).then(function (html) {
+      var layer = document.createElement("div");
+      layer.className = "sheet-layer";
+      var sheet = document.createElement("div");
+      sheet.className = "sheet";
+      sheet.setAttribute("role", "dialog");
+      sheet.setAttribute("aria-modal", "true");
+      sheet.tabIndex = -1;
+      sheet.innerHTML =
+        '<div class="grab"></div><div class="sheet-bar">' +
+        '<button type="button" class="iconbtn sheet-back" aria-label="Back" hidden>' + ICON_BACK +
+        '</button><button type="button" class="iconbtn sheet-close" aria-label="Close">' +
+        ICON_CLOSE + "</button></div><div class=\"sheet-content\"></div>";
+      var content = sheet.querySelector(".sheet-content");
+      var backButton = sheet.querySelector(".sheet-back");
+      var stack = [];
+      layer.appendChild(sheet);
+
+      function show(html, focus) {
+        content.innerHTML = html;
+        sheet.classList.toggle("full", !!content.querySelector("[data-sheet-full]"));
+        var title = content.querySelector("h2[id]");
         if (title) sheet.setAttribute("aria-labelledby", title.id);
-        layer.appendChild(sheet);
-        document.body.appendChild(layer);
-        requestAnimationFrame(function () {
-          requestAnimationFrame(function () {
-            layer.classList.add("on");
-          });
+        backButton.hidden = stack.length < 2;
+        sheet.scrollTop = 0;
+        enhance(content);
+        if (focus) sheet.focus({ preventScroll: true });
+      }
+      function load(to, push) {
+        return getPart(to).then(function (fresh) {
+          if (push) stack.push(fresh);
+          else stack[stack.length - 1] = fresh;
+          show(fresh, push);
+        }).catch(function () {
+          location.href = to;
         });
-        var first = sheet.querySelector("a, button");
-        if (first) first.focus({ preventScroll: true });
-        function close() {
-          layer.classList.remove("on");
-          document.removeEventListener("keydown", onKey);
-          window.removeEventListener("popstate", close);
-          setTimeout(function () {
-            layer.remove();
-          }, 320);
-          link.focus({ preventScroll: true });
-        }
-        function dismiss() {
-          if (history.state && history.state.sheet) history.back();
-          else close();
-        }
-        function onKey(event) {
-          if (event.key === "Escape") dismiss();
-        }
-        layer.addEventListener("click", function (event) {
-          if (event.target === layer) dismiss();
-        });
-        // A link in the sheet takes the sheet's history entry's place, so Back returns to
-        // the page the sheet opened over
-        sheet.addEventListener("click", function (event) {
-          var to = event.target.closest("a[href]");
-          if (!to || !history.state || !history.state.sheet) return;
-          event.preventDefault();
-          location.replace(to.href);
-        });
-        // Drag the sheet down to dismiss it
-        var startY = null;
-        sheet.addEventListener("touchstart", function (event) {
-          startY = sheet.scrollTop <= 0 ? event.touches[0].clientY : null;
-        }, { passive: true });
-        sheet.addEventListener("touchmove", function (event) {
-          if (startY === null) return;
-          var dy = event.touches[0].clientY - startY;
-          if (dy > 0) sheet.style.transform = "translateY(" + dy + "px)";
-        }, { passive: true });
-        sheet.addEventListener("touchend", function (event) {
-          if (startY === null) return;
-          var dy = event.changedTouches[0].clientY - startY;
-          sheet.style.transform = "";
-          startY = null;
-          if (dy > 80) dismiss();
-        });
-        try {
-          history.pushState({ sheet: true }, "");
-          window.addEventListener("popstate", close);
-        } catch (err) {
-          // the back button just leaves the page then
-        }
-        document.addEventListener("keydown", onKey);
-      })
-      .catch(function () {
-        location.href = href;
+      }
+      backButton.addEventListener("click", function () {
+        stack.pop();
+        show(stack[stack.length - 1], true);
       });
+      sheet.querySelector(".sheet-close").addEventListener("click", dismiss);
+
+      function close() {
+        layer.classList.remove("on");
+        document.removeEventListener("keydown", onKey);
+        window.removeEventListener("popstate", close);
+        sheetNow = null;
+        setTimeout(function () {
+          layer.remove();
+        }, 320);
+        if (opener && opener.isConnected) opener.focus({ preventScroll: true });
+      }
+      function dismiss() {
+        if (history.state && history.state.sheet) history.back();
+        else close();
+      }
+      function onKey(event) {
+        if (event.key === "Escape") dismiss();
+      }
+      layer.addEventListener("click", function (event) {
+        if (event.target === layer) dismiss();
+      });
+      // A link that leaves takes the sheet's history entry's place, so Back returns to the
+      // page the sheet opened over
+      sheet.addEventListener("click", function (event) {
+        if (event.defaultPrevented) return;
+        var to = event.target.closest("a[href]");
+        if (!to || to.target || to.hasAttribute("data-sheet") || to.hasAttribute("data-sheet-swap") ||
+            !history.state || !history.state.sheet) return;
+        event.preventDefault();
+        location.replace(to.href);
+      });
+      // A form: a search loads into the sheet; a post goes once the sheet's history entry
+      // is gone, so Back from the page it lands on doesn't reopen this one
+      sheet.addEventListener("submit", function (event) {
+        var form = event.target;
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        if (form.method.toLowerCase() === "get") {
+          load(form.action + "?" + new URLSearchParams(new FormData(form)).toString(), false);
+          return;
+        }
+        var by = event.submitter;
+        if (by && by.name) {
+          var keep = document.createElement("input");
+          keep.type = "hidden";
+          keep.name = by.name;
+          keep.value = by.value;
+          form.appendChild(keep);
+        }
+        if (by) by.disabled = true;
+        function send() {
+          document.body.appendChild(form); // outlives the sheet
+          form.hidden = true;
+          form.submit();
+        }
+        if (history.state && history.state.sheet) {
+          window.addEventListener("popstate", function once() {
+            window.removeEventListener("popstate", once);
+            send();
+          });
+          history.back();
+        } else {
+          send();
+        }
+      });
+      // Drag the sheet down to dismiss it
+      var startY = null;
+      sheet.addEventListener("touchstart", function (event) {
+        startY = sheet.scrollTop <= 0 ? event.touches[0].clientY : null;
+      }, { passive: true });
+      sheet.addEventListener("touchmove", function (event) {
+        if (startY === null) return;
+        var dy = event.touches[0].clientY - startY;
+        if (dy > 0) sheet.style.transform = "translateY(" + dy + "px)";
+      }, { passive: true });
+      sheet.addEventListener("touchend", function (event) {
+        if (startY === null) return;
+        var dy = event.changedTouches[0].clientY - startY;
+        sheet.style.transform = "";
+        startY = null;
+        if (dy > 80) dismiss();
+      });
+
+      sheetNow = { sheet: sheet, load: load };
+      stack.push(html);
+      document.body.appendChild(layer);
+      show(html, true);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          layer.classList.add("on");
+        });
+      });
+      try {
+        history.pushState({ sheet: true }, "");
+        window.addEventListener("popstate", close);
+      } catch (err) {
+        // the back button just leaves the page then
+      }
+      document.addEventListener("keydown", onKey);
+    }).catch(function () {
+      location.href = href;
+    });
+  }
+
+  // Log food (#105): results follow what's typed, a moment after typing stops, without
+  // leaving the sheet or reloading the page. Typing searches your foods and saved meals
+  // only (live=1); Enter also asks USDA when few of yours match. An older answer never
+  // replaces a newer one.
+  function liveResults(form) {
+    var box = form.querySelector("input[name=q]");
+    if (!box || !window.fetch) return;
+    var timer = null;
+    var asked = 0;
+    function run(live) {
+      var params = new URLSearchParams(new FormData(form));
+      var url = form.action + "?" + params.toString();
+      if (live) params.set("live", "1");
+      params.set("part", "1");
+      var mine = ++asked;
+      fetch(form.action + "?" + params.toString(), { credentials: "same-origin" })
+        .then(function (r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.text();
+        })
+        .then(function (html) {
+          if (mine !== asked) return;
+          var page = new DOMParser().parseFromString(html, "text/html");
+          var root = form.parentNode;
+          var fresh = page.querySelector("[data-results]");
+          var old = root.querySelector("[data-results]");
+          if (!fresh || !old) return;
+          old.replaceWith(fresh);
+          var pills = root.querySelector(":scope > .pills");
+          var freshPills = page.querySelector(".logfood > .pills");
+          if (pills) pills.remove();
+          if (freshPills) form.after(freshPills);
+          enhance(fresh);
+          if (!form.closest(".sheet")) {
+            try {
+              history.replaceState(history.state, "", url);
+            } catch (err) {
+              // the address just keeps the old search
+            }
+          }
+        })
+        .catch(function () {
+          // Offline: Enter still submits the form
+        });
+    }
+    box.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        run(true);
+      }, 300);
+    });
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      clearTimeout(timer);
+      run(false);
+    });
+  }
+
+  // Coming back to Today or Progress after five minutes away (the phone locked, another
+  // app) reloads it, so it shows what arrived meanwhile (#105). Not while a sheet or menu
+  // is open or something is being typed. Notices of edits made before don't come back.
+  var AWAY_MS = 5 * 60 * 1000;
+  var loadedAt = Date.now();
+  var awayAt = null;
+  function busy() {
+    var active = document.activeElement;
+    return !!document.querySelector(".sheet-layer, .cal-layer, .hold-layer") ||
+      (active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName));
+  }
+  function refresh() {
+    var url = new URL(location.href);
+    ["done", "undone", "problem", "weighed"].forEach(function (k) {
+      url.searchParams.delete(k);
+    });
+    location.replace(url.pathname + url.search + url.hash);
+  }
+  if (document.body.hasAttribute("data-refresh")) {
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") {
+        awayAt = Date.now();
+        return;
+      }
+      if (awayAt !== null && Date.now() - awayAt >= AWAY_MS && !busy()) refresh();
+      awayAt = null;
+    });
+    window.addEventListener("pageshow", function (event) {
+      if (event.persisted && Date.now() - loadedAt >= AWAY_MS && !busy()) refresh();
+    });
   }
 
   // A screen's large title (#105) shows small in a bar at the top once it scrolls away

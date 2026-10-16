@@ -212,10 +212,11 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert 'Today <span class="caret"' in text
     assert "Egg, whole" in text and "Kirkland" in text
     # the meal header leads with the time, then the label
-    assert '<span class="label">Breakfast</span></h2>' in text
+    assert '<span class="label">· Breakfast</span></h2>' in text
     # 200 g eggs (286 kcal) + 300 g whites (156 kcal), from the stored snapshots
     # calories left against the default 2,000 kcal goal (only protein is set)
-    assert '<span class="big kcal">1,558</span> remaining' in text
+    assert '<b class="kcal ">1,558</b><span>left</span>' in text
+    assert '<span class="key kcal-ate">Eaten</span><b>442</b>' in text
     assert "Goal 2,000 kcal" in text and "kcal logged" not in text
     assert "Meal total" in text  # two items: keep the combined row
     # protein 25.2 + 32.7 = 57.9 g of 180 g; carbs and fat against a third of the calories
@@ -226,7 +227,8 @@ def test_today_shows_meals_totals_and_target_progress(http, logged):
     assert '<span class="sr">Protein</span>' in text  # full names for screen readers
     assert 'aria-label="Next day"' not in text  # no stepping into the future
     assert 'class="week"' in text and 'aria-current="date"' in text
-    assert "Page loaded at" in text
+    assert "data-refresh" in text  # reloads when it comes back after a while (#105)
+    assert '<h2 class="section-title" id="yourday-title">Your day</h2>' in text
     assert 'aria-label="Pick a date"' not in text and ">Go</button>" not in text  # #71
     assert f"/app/static/app.css?v={web.CSS_VERSION}" in text  # phones fetch new CSS
 
@@ -235,14 +237,14 @@ def test_today_over_the_calorie_goal_turns_amber_then_red(http, conn, logged):
     sign_in(http)
     store.set_targets(conn, {"kcal": 400})  # 442 logged: 42 over
     text = http.get("/app").text
-    assert '<span class="big kcal caution">42</span> over' in text
-    assert 'class="fill kcal caution"' in text and "Goal 400 kcal" in text
+    assert '<b class="kcal caution">42</b><span>over</span>' in text
+    assert 'class="arc caution"' in text and "Goal 400 kcal" in text
     store.set_targets(conn, {"kcal": 342})  # exactly 100 over is still amber
-    assert '<span class="big kcal caution">100</span> over' in http.get("/app").text
+    assert '<b class="kcal caution">100</b><span>over</span>' in http.get("/app").text
     store.set_targets(conn, {"kcal": 341})  # 101 over: red
     text = http.get("/app").text
-    assert '<span class="big kcal over">101</span> over' in text
-    assert 'class="fill kcal over"' in text
+    assert '<b class="kcal over">101</b><span>over</span>' in text
+    assert 'class="arc over"' in text
 
 
 def test_fiber_sugar_sodium_fold_away(http, conn, logged):
@@ -250,7 +252,7 @@ def test_fiber_sugar_sodium_fold_away(http, conn, logged):
     conn.execute("UPDATE entries SET sodium_mg = 140 WHERE food_id = ?", (eggs,))
     sign_in(http)
     text = http.get("/app").text.replace("\xa0", " ")
-    assert '<details class="extras">' in text and "Sodium 140 mg" in text
+    assert '<details class="extras morenut">' in text and "Sodium 140 mg" in text
 
 
 def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
@@ -262,7 +264,7 @@ def test_one_item_meal_shows_its_numbers_once(http, conn, logged):
     card = text[text.index(f'id="meal-{meal}"') :]
     card = card[: card.index("</section>")]
     assert "Meal total" not in card
-    row = card[card.index("<summary>") : card.index("</summary>")]
+    row = card[card.index('<a class="entry"') : card.index("</a>")]
     assert "kcal" not in row  # the header carries the calories
     assert 'class="label"' not in card  # no guessed label
 
@@ -359,19 +361,20 @@ def test_edit_rejects_bad_grams(http, conn, logged, grams):
     r = http.post(f"/app/entries/{entries[0].id}", data={"grams": grams}, headers=ORIGIN)
     assert r.status_code == 303
     assert store.get_entry(conn, entries[0].id).grams == 200
-    # back on the same day, the entry open with the typed value and the reason
+    # back on the entry's sheet with the typed value and the reason
+    assert r.headers["location"].startswith(f"/app/entries/{entries[0].id}?error=1")
     page = http.get(r.headers["location"]).text
-    item = page[page.index(f'id="entry-{entries[0].id}"') :]
-    assert item.startswith(f'id="entry-{entries[0].id}"><details open>')
-    assert f'value="{grams}"' in item and 'role="alert"' in item
+    assert 'role="alert"' in page and (f'value="{grams}"' in page or not grams)
 
 
-def test_delete_needs_a_second_tap_and_confirms(http, logged):
+def test_delete_is_on_the_entry_sheet_and_undoable(http, logged):
     _, _, entries = logged
     sign_in(http)
-    assert "Yes, delete Egg, whole" in http.get("/app").text
+    sheet = http.get(f"/app/entries/{entries[0].id}").text
+    assert f'action="/app/entries/{entries[0].id}/delete"' in sheet and "data-confirm" not in sheet
     r = http.post(f"/app/entries/{entries[0].id}/delete", headers=ORIGIN)
-    assert "Deleted Egg, whole." in http.get(r.headers["location"]).text
+    page = http.get(r.headers["location"]).text
+    assert "Deleted Egg, whole." in page and 'class="undo"' in page
 
 
 def test_edit_and_delete_refuse_cross_site_posts(http, conn, logged):
