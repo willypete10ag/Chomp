@@ -1,5 +1,7 @@
-"""Hevy's workout CSV export (#94). Hevy has no API without Pro, so workouts come in as the
-CSV it exports (Profile > Settings > Export & Import Data > Export Workouts): one row per set,
+"""Hevy workouts: the CSV export (#94) and the API's workout objects (#113).
+
+The API (Hevy Pro, chomp/sources/hevy.py) is how workouts normally arrive; the CSV export
+(Profile > Settings > Export & Import Data > Export Workouts) is the fallback: one row per set,
 
     title, start_time, end_time, description, exercise_title, superset_id, exercise_notes,
     set_index, set_type, weight_lbs, reps, distance_miles, duration_seconds, rpe
@@ -7,6 +9,9 @@ CSV it exports (Profile > Settings > Export & Import Data > Export Workouts): on
 (weight_kg and distance_km instead with metric units). Times are local, like "13 Oct 2026,
 07:15". Rows are grouped into workouts by title and start time; a workout with a bad row is left
 out whole, so it never replaces a complete copy saved before. Pure parsing; no I/O.
+
+An API workout is JSON with UTC start and end times, Hevy's workout id, and exercises holding
+their sets (weight in kg, distance in metres).
 """
 
 from __future__ import annotations
@@ -60,6 +65,7 @@ class Workout:
     ended_at: str | None = None
     description: str | None = None
     sets: list[WorkoutSet] = field(default_factory=list)
+    hevy_id: str | None = None  # Hevy's workout id; only API workouts have one
 
 
 @dataclass
@@ -193,3 +199,70 @@ def parse(data: bytes | str, tz: str) -> Parsed:
     if not parsed.workouts and not parsed.rejected:
         raise HevyError("the export has no workouts in it")
     return parsed
+
+
+def _api_number(value) -> float | None:
+    """A number from the API, or None when it's missing, negative or not a number."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _api_time(value) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise HevyError("a workout has no start time")
+    try:
+        when = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HevyError(f"unknown time {value!r}") from None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=ZoneInfo("UTC"))
+    return logic.format_utc(when)
+
+
+def from_api(data: dict) -> Workout:
+    """A workout from Hevy's API (GET /v1/workouts or an `updated` event). Raises HevyError
+    when it has no id or start time, so a broken one is never saved over a good copy."""
+    if not isinstance(data, dict) or not str(data.get("id") or "").strip():
+        raise HevyError("a workout has no id")
+    end = data.get("end_time")
+    workout = Workout(
+        started_at=_api_time(data.get("start_time")),
+        ended_at=_api_time(end) if end else None,
+        title=_text(data.get("title")) or "Workout",
+        description=_text(data.get("description")),
+        hevy_id=str(data["id"]).strip(),
+    )
+    exercises = [x for x in data.get("exercises") or [] if isinstance(x, dict)]
+    exercises.sort(key=lambda x: _api_number(x.get("index")) or 0)
+    for x in exercises:
+        name = _text(x.get("title"))
+        if name is None:
+            raise HevyError("an exercise has no name")
+        # The spec says supersets_id; the live server and client libraries say superset_id
+        superset = x.get("superset_id", x.get("supersets_id"))
+        superset = _api_number(superset)
+        sets = [s for s in x.get("sets") or [] if isinstance(s, dict)]
+        sets.sort(key=lambda s: _api_number(s.get("index")) or 0)
+        for i, one in enumerate(sets):
+            set_type = (_text(one.get("type")) or "normal").lower()
+            reps = _api_number(one.get("reps"))
+            workout.sets.append(
+                WorkoutSet(
+                    exercise=name,
+                    set_index=i,
+                    set_type=set_type if set_type in SET_TYPES else "normal",
+                    weight_kg=_api_number(one.get("weight_kg")),
+                    reps=None if reps is None else round(reps),
+                    distance_m=_api_number(one.get("distance_meters")),
+                    duration_s=_api_number(one.get("duration_seconds")),
+                    rpe=_api_number(one.get("rpe")),
+                    superset_id=None if superset is None else round(superset),
+                    exercise_notes=_text(x.get("notes")),
+                )
+            )
+    return workout

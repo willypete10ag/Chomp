@@ -348,11 +348,29 @@ Sending the same readings again is harmless: Chomp keeps one weigh-in per time a
 per day for each activity metric. Don't put Cloudflare Access in front of `/ingest` (the
 phone can't sign in to it). Ask Claude "what do I weigh?" or "how many steps today?" to check.
 
-### 10. Import workouts from Hevy
+### 10. Sync workouts from Hevy
 
-In Hevy: Profile › Settings › Export & Import Data › Export Workouts. Then on the dashboard's
-**You › Integrations › Hevy**, pick the CSV. Workouts show under **Progress › Training**. Import again whenever you like; only
-new or changed workouts are added. A big first import can also be done on the server:
+With Hevy Pro, Chomp pulls your workouts from Hevy's API by itself, edits and deletes included.
+Make a key at [hevy.com/settings?developer](https://hevy.com/settings?developer), put it in
+`.env` on the server, and restart:
+
+```bash
+HEVY_API_KEY=your-key       # never commit it
+# HEVY_USER=Will            # whose log they go in; blank = the owner
+# HEVY_SYNC_MINUTES=15      # how often Chomp asks Hevy for changes
+```
+
+The first sync (shortly after the server starts) pulls every workout and takes over ones you
+imported from CSV before, matched by start time, so nothing is doubled. After that Chomp asks
+Hevy for what changed every 15 minutes. **You › Integrations › Hevy** shows when it last
+checked and whether that worked, with a **Sync now** button. On the server,
+`docker compose exec chomp chomp sync-hevy` runs a sync (`--full` pulls everything again).
+Workouts show under **Progress › Training**.
+
+Without Pro, import Hevy's CSV instead. In Hevy: Profile › Settings › Export & Import Data ›
+Export Workouts. Then on **You › Integrations › Hevy**, pick the CSV. Import again whenever
+you like; only new or changed workouts are added (workouts the API sync brought in are left
+as they are). A big first import can also be done on the server:
 
 ```bash
 docker compose exec -T chomp chomp import-hevy - --user Will < workout_data.csv

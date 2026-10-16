@@ -53,6 +53,7 @@ from chomp import (
     export,
     health_export,
     hevy,
+    hevy_sync,
     logic,
     serving_fill,
     store,
@@ -689,6 +690,13 @@ def exercise_card(
     return (
         f'<section class="card exercise"><h2>{e(name)}</h2>{note}'
         f'<table class="settable">{head}<tbody>{"".join(rows)}</tbody></table>{then}</section>'
+    )
+
+
+def hevy_sync_form() -> str:
+    return (
+        f'<form method="post" action="{WORKOUTS}/sync" data-busy="Syncing with Hevy">'
+        '<button type="submit">Sync now</button></form>'
     )
 
 
@@ -1936,6 +1944,7 @@ PROBLEMS = {
     "hevy": "That file isn't a Hevy workout export. In Hevy: Profile > Settings > Export &"
     " Import Data > Export Workouts.",
     "hevy_big": "That file is too big for a Hevy export (20 MB at most).",
+    "hevy_sync": "Syncing with Hevy didn't work. The Hevy card says why.",
     "health": "That file isn't Apple Health's export. In Health: tap your picture > Export All"
     " Health Data, then pick export.zip.",
     "health_big": "That export is over 95 MB, too big to send through the browser. Import it"
@@ -2793,6 +2802,15 @@ def add_routes(
 
     def go(url: str) -> RedirectResponse:
         return RedirectResponse(url, status_code=303, headers=SECURITY_HEADERS)
+
+    def hevy_syncs(conn, request: Request) -> bool:
+        """Whether Hevy's API sync (#113) is on and brings in this person's workouts."""
+        if not settings.hevy_api_key:
+            return False
+        try:
+            return hevy_sync.user_id(conn, settings) == user_of(request)
+        except users.UserError:
+            return False
 
     def day_url(day: date) -> str:
         return f"{PREFIX}?date={day.isoformat()}"
@@ -6165,6 +6183,20 @@ def add_routes(
         done = f"{counts.added}-{counts.updated}-{counts.unchanged}-{parsed.incomplete}"
         return go(f"{INTEGRATIONS}?hevy={done}#hevy")
 
+    @server.custom_route(WORKOUTS + "/sync", methods=["POST"])
+    async def workouts_sync(request: Request) -> Response:
+        """Sync now (#113): one Hevy sync run, then back to Integrations with the result."""
+        if (no := refused(request, "Sync with Hevy")) is not None:
+            return no
+        with connect(request) as conn:
+            if not hevy_syncs(conn, request):
+                return go(f"{INTEGRATIONS}#hevy")
+        result = await anyio.to_thread.run_sync(hevy_sync.run, settings)
+        if result.error:
+            return go(f"{INTEGRATIONS}?problem=hevy_sync#hevy")
+        done = f"{result.added}-{result.updated}-{result.deleted}"
+        return go(f"{INTEGRATIONS}?hevysync={done}#hevy")
+
     @server.custom_route(WORKOUTS + "/{workout_id:int}", methods=["GET"])
     async def workout_view(request: Request) -> Response:
         """One workout (#105): title, when, how long and volume under it, notes, then each
@@ -7729,6 +7761,8 @@ def add_routes(
         with connect(request) as conn:
             synced = store.last_activity_sync(conn)
             workouts = store.workouts_summary(conn)
+            syncing = hevy_syncs(conn, request)
+            sync_state = store.hevy_sync_state(conn) if syncing else None
         banner = ""
         if (problem := PROBLEMS.get(params.get("problem", ""))) is not None:
             banner = toast(f"<span>{e(problem)}</span>", "alert", " bad")
@@ -7747,6 +7781,19 @@ def add_routes(
             text += f" ({', '.join(extra)})." if extra else "."
             banner = toast(
                 f'<span>{e(text)}</span><a class="undo" href="{ACTIVITY_PAGE}?days=365">See it</a>',
+                "status",
+            )
+        elif (done := params.get("hevysync", "")).count("-") == 2:
+            added, updated, deleted = (int_param(x) or 0 for x in done.split("-"))
+            if added or updated or deleted:
+                text = (
+                    f"Synced with Hevy: {added} new workout{'' if added == 1 else 's'},"
+                    f" {updated} updated, {deleted} deleted."
+                )
+            else:
+                text = "Synced with Hevy. Nothing new."
+            banner = toast(
+                f'<span>{e(text)}</span><a class="undo" href="{TRAINING_PAGE}?days=365">See it</a>',
                 "status",
             )
         elif (done := params.get("hevy", "")).count("-") == 3:
@@ -7779,13 +7826,32 @@ def add_routes(
             if workouts["count"]
             else "No workouts yet."
         )
+        if syncing:
+            every = settings.hevy_sync_minutes
+            if sync_state is None or sync_state["last_run_at"] is None:
+                sync_text = "Chomp syncs with Hevy by itself. The first sync runs shortly."
+            else:
+                sync_text = (
+                    f"Chomp syncs with Hevy every {every} min; last checked"
+                    f" {sent_text(sync_state['last_run_at'], last)}."
+                )
+                if sync_state["last_error"]:
+                    sync_text += f" That sync failed: {sync_state['last_error']}"
+            hevy_body = (
+                f'<p class="small">{e(sync_text)}</p><p class="small">{e(hevy_status)}</p>'
+                f"{hevy_sync_form()}"
+                '<details><summary class="small muted">Import a CSV export instead</summary>'
+                f"{hevy_import()}</details>"
+            )
+        else:
+            hevy_body = f'<p class="small">{e(hevy_status)}</p>{hevy_import()}'
         parts = [
             back_head(YOU, "You", "Integrations"),
             banner,
             f'<section class="card" id="health"><h2>{icon("heart-pulse")} Apple Health</h2>'
             f'<p class="small">{e(health_status)}</p>{health_import()}</section>',
             f'<section class="card" id="hevy"><h2>{icon("dumbbell")} Hevy</h2>'
-            f'<p class="small">{e(hevy_status)}</p>{hevy_import()}</section>',
+            f"{hevy_body}</section>",
         ]
         if settings.public_url:
             parts.append(

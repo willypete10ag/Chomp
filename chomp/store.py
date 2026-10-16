@@ -17,6 +17,7 @@ import sqlite3
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 
 from chomp import logic, text
 from chomp.db import transaction
@@ -1547,56 +1548,151 @@ def _same(a: tuple, b: tuple) -> bool:
     )
 
 
+def _minute_after(started_at: str) -> str:
+    """The UTC time a minute after `started_at` (storage format)."""
+    return logic.format_utc(logic.parse_utc(started_at) + timedelta(minutes=1))
+
+
+def _save_workout(conn: sqlite3.Connection, old, w, source: str) -> str:
+    """Write one workout over `old` (a row of the user's workouts, or None to add it) unless
+    nothing changed; returns "added", "updated" or "unchanged". Run inside a transaction."""
+    rows = _set_rows(w)
+    head = (w.started_at, w.ended_at, w.title, w.description, w.hevy_id)
+    if old is not None:
+        old_rows = [
+            tuple(r)
+            for r in conn.execute(
+                f"SELECT {SET_COLS} FROM workout_sets WHERE workout_id = ? ORDER BY position",
+                (old["id"],),
+            )
+        ]
+        same_sets = len(old_rows) == len(rows) and all(
+            _same(a, b) for a, b in zip(old_rows, rows, strict=True)
+        )
+        was = (old["started_at"], old["ended_at"], old["title"], old["description"], old["hevy_id"])
+        if same_sets and was == head:
+            return "unchanged"
+        conn.execute(
+            "UPDATE workouts SET started_at = ?, ended_at = ?, title = ?, description = ?,"
+            " hevy_id = ? WHERE id = ?",
+            (*head, old["id"]),
+        )
+        conn.execute("DELETE FROM workout_sets WHERE workout_id = ?", (old["id"],))
+        workout_id = old["id"]
+    else:
+        workout_id = conn.execute(
+            "INSERT INTO workouts (user_id, started_at, ended_at, title, description, hevy_id,"
+            " source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_of(conn), *head, source),
+        ).lastrowid
+    conn.executemany(
+        f"INSERT INTO workout_sets (workout_id, {SET_COLS})"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(workout_id, *r) for r in rows],
+    )
+    return "updated" if old is not None else "added"
+
+
 def import_workouts(conn: sqlite3.Connection, workouts: Iterable, source: str) -> ImportCounts:
-    """Save parsed workouts (hevy.Workout) for the connection's user. A workout already saved
-    at the same start time is replaced, so importing a newer export of the same history
-    only adds what's new."""
+    """Save parsed workouts from Hevy's CSV export (hevy.Workout) for the connection's user.
+    A workout already saved in the same minute is replaced, so importing a newer export of
+    the same history only adds what's new. One the API sync brought in (#113) is left as it
+    is: the API is the better copy (it has seconds, and edits made in Hevy since)."""
     user_id = user_of(conn)
     counts = ImportCounts()
     with transaction(conn):
         for w in workouts:
-            rows = _set_rows(w)
-            head = (w.ended_at, w.title, w.description)
             old = conn.execute(
-                "SELECT id, ended_at, title, description FROM workouts"
-                " WHERE user_id = ? AND started_at = ?",
-                (user_id, w.started_at),
+                "SELECT id, started_at, ended_at, title, description, hevy_id FROM workouts"
+                " WHERE user_id = ? AND started_at >= ? AND started_at < ?"
+                " ORDER BY hevy_id IS NULL, started_at LIMIT 1",
+                (user_id, w.started_at, _minute_after(w.started_at)),
             ).fetchone()
-            if old is not None:
-                old_rows = [
-                    tuple(r)
-                    for r in conn.execute(
-                        f"SELECT {SET_COLS} FROM workout_sets WHERE workout_id = ?"
-                        " ORDER BY position",
-                        (old["id"],),
-                    )
-                ]
-                same_sets = len(old_rows) == len(rows) and all(
-                    _same(a, b) for a, b in zip(old_rows, rows, strict=True)
-                )
-                if same_sets and tuple(old)[1:] == head:
-                    counts.unchanged += 1
-                    continue
-                conn.execute(
-                    "UPDATE workouts SET ended_at = ?, title = ?, description = ? WHERE id = ?",
-                    (*head, old["id"]),
-                )
-                conn.execute("DELETE FROM workout_sets WHERE workout_id = ?", (old["id"],))
-                workout_id = old["id"]
-                counts.updated += 1
-            else:
-                workout_id = conn.execute(
-                    "INSERT INTO workouts (user_id, started_at, ended_at, title, description,"
-                    " source) VALUES (?, ?, ?, ?, ?, ?)",
-                    (user_id, w.started_at, *head, source),
-                ).lastrowid
-                counts.added += 1
-            conn.executemany(
-                f"INSERT INTO workout_sets (workout_id, {SET_COLS})"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(workout_id, *r) for r in rows],
-            )
+            if old is not None and old["hevy_id"] is not None:
+                counts.unchanged += 1
+                continue
+            done = _save_workout(conn, old, w, source)
+            setattr(counts, done, getattr(counts, done) + 1)
     return counts
+
+
+def save_hevy_workout(conn: sqlite3.Connection, w) -> str:
+    """Save a workout from Hevy's API (hevy.Workout with a hevy_id) for the connection's
+    user: matched by Hevy's id, else adopting a CSV-imported copy that started in the same
+    minute, else added. Returns "added", "updated" or "unchanged"."""
+    user_id = user_of(conn)
+    cols = "id, started_at, ended_at, title, description, hevy_id"
+    with transaction(conn):
+        old = conn.execute(
+            f"SELECT {cols} FROM workouts WHERE user_id = ? AND hevy_id = ?",
+            (user_id, w.hevy_id),
+        ).fetchone()
+        if old is None:
+            minute = w.started_at[:17] + "00Z"  # CSV times have no seconds
+            old = conn.execute(
+                f"SELECT {cols} FROM workouts WHERE user_id = ? AND hevy_id IS NULL"
+                " AND started_at >= ? AND started_at < ? ORDER BY started_at LIMIT 1",
+                (user_id, minute, _minute_after(minute)),
+            ).fetchone()
+        # Another row at exactly this start time (a CSV copy the minute match missed) would
+        # break UNIQUE (user_id, started_at): it's this workout, so it goes
+        conn.execute(
+            "DELETE FROM workouts WHERE user_id = ? AND started_at = ? AND hevy_id IS NULL"
+            " AND id != ?",
+            (user_id, w.started_at, -1 if old is None else old["id"]),
+        )
+        return _save_workout(conn, old, w, "hevy")
+
+
+def delete_hevy_workout(conn: sqlite3.Connection, hevy_id: str) -> bool:
+    """Delete the user's workout with this Hevy id (deleted in Hevy); False if there's none."""
+    with transaction(conn):
+        gone = conn.execute(
+            "DELETE FROM workouts WHERE user_id = ? AND hevy_id = ?", (user_of(conn), hevy_id)
+        ).rowcount
+    return gone > 0
+
+
+def hevy_sync_state(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The user's Hevy sync cursor and last result, or None before the first run."""
+    return conn.execute(
+        "SELECT since, last_run_at, last_ok_at, last_error, added, updated, deleted"
+        " FROM hevy_sync WHERE user_id = ?",
+        (user_of(conn),),
+    ).fetchone()
+
+
+def record_hevy_sync(
+    conn: sqlite3.Connection,
+    ran_at: str,
+    *,
+    since: str | None = None,
+    error: str | None = None,
+    added: int = 0,
+    updated: int = 0,
+    deleted: int = 0,
+) -> None:
+    """Note how a sync run went. A run with an error keeps the cursor and the last good
+    run's counts, so the next run asks for the same events again."""
+    user_id = user_of(conn)
+    with transaction(conn):
+        conn.execute("INSERT OR IGNORE INTO hevy_sync (user_id) VALUES (?)", (user_id,))
+        if error is not None:
+            conn.execute(
+                "UPDATE hevy_sync SET last_run_at = ?, last_error = ? WHERE user_id = ?",
+                (ran_at, error, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE hevy_sync SET since = ?, last_run_at = ?, last_ok_at = ?,"
+                " last_error = NULL, added = ?, updated = ?, deleted = ? WHERE user_id = ?",
+                (since, ran_at, ran_at, added, updated, deleted, user_id),
+            )
+
+
+def reset_hevy_sync(conn: sqlite3.Connection) -> None:
+    """Forget the cursor, so the next run pulls every workout again."""
+    conn.execute("UPDATE hevy_sync SET since = NULL WHERE user_id = ?", (user_of(conn),))
 
 
 def workouts_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:

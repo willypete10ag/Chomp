@@ -41,6 +41,11 @@ class Settings:
     backup_at: str = "03:30"
     # Food photos (#74); blank = a photos/ folder next to the database
     photos_dir: str = ""
+    # Hevy API sync (#113); blank key = off. HEVY_USER is whose workouts they are (blank =
+    # the owner); HEVY_SYNC_MINUTES is how often the server asks Hevy for changes.
+    hevy_api_key: str = field(default="", repr=False)
+    hevy_user: str = ""
+    hevy_sync_minutes: int = 15
 
     @property
     def photos_path(self) -> Path:
@@ -66,4 +71,7 @@ class Settings:
             backup_keep=int(os.environ.get("BACKUP_KEEP", "14")),
             backup_at=os.environ.get("BACKUP_AT", "03:30"),
             photos_dir=os.environ.get("PHOTOS_DIR", ""),
+            hevy_api_key=os.environ.get("HEVY_API_KEY", "").strip(),
+            hevy_user=os.environ.get("HEVY_USER", "").strip(),
+            hevy_sync_minutes=max(1, int(os.environ.get("HEVY_SYNC_MINUTES") or "15")),
         )
