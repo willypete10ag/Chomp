@@ -186,3 +186,14 @@ def test_edit_and_delete_a_weigh_in(http, conn):
     r = http.post(f"/app/weight/{row['id']}/delete", data={"back": back}, headers=ORIGIN)
     assert "Weigh-in deleted." in follow(http, r) and store.latest_weight(conn) is None
     assert http.get(f"/app/weight/{row['id']}").status_code == 303  # gone: back it goes
+
+
+def test_unchanged_time_keeps_a_weigh_in_in_the_repeated_dst_hour(http, conn):
+    # 2025-11-02 01:30 EST, the second 1:30 that night (06:30 UTC); 05:30 UTC is the first
+    row = store.add_weight(conn, "2025-11-02T06:30:00Z", logic.to_kg(182.5, "lb"), "health")
+    sign_in(http)
+    data = {"lb": "181.0", "date": "2025-11-02", "time": "01:30", "back": "/app"}
+    http.post(f"/app/weight/{row['id']}", data=data, headers=ORIGIN)
+    saved = store.get_weight(conn, row["id"])
+    assert saved["measured_at"] == "2025-11-02T06:30:00Z"
+    assert logic.weight_out(saved["kg"])["lb"] == 181.0

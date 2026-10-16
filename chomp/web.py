@@ -5670,8 +5670,10 @@ def add_routes(
             with connect(request) as conn:
                 try:
                     was = store.get_weight(conn, weight_id)["measured_at"]
-                    # the form shows minutes: the same minute keeps the reading's own time
-                    at = was if was[:16] == when[:16] else when
+                    # the form shows local minutes: the same wall minute keeps the reading's
+                    # own time (seconds, and which side of a DST fall-back hour it was on)
+                    typed = f"{form.get('date', '')}T{form.get('time', '')}"
+                    at = was if logic.local_iso(was, tz)[:16] == typed[:16] else when
                     row = store.update_weight(conn, weight_id, at, kg)
                 except store.NotFound:
                     return go(with_params(back, problem="gone"))
