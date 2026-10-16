@@ -160,7 +160,7 @@ def test_connect_iphone_makes_a_token_shown_once(public_settings, owner, conn):
     assert "Share your Shortcut" in page  # the owner's
     page = owner.post("/app/you/integrations/ingest-token", headers=ORIGIN).text
     token = re.search(r'id="ingest-token" value="([^"]+)"', page).group(1)
-    assert "README, step 9" in page  # no shared Shortcut yet
+    assert "docs/apple-health.md" in page  # no shared Shortcut yet
     r = owner.post(
         health.PATH,
         json={"weight": {"date": "2026-10-13T07:00", "value": 80, "unit": "kg"}},

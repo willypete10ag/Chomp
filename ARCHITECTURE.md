@@ -355,7 +355,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   `apple_exercise_time`, `flights_climbed`; names compared without punctuation; dates like
   `2026-10-13 07:02:11 -0400`). Simple lists, `{"weight": [{"date", "value", "unit"}],
   "steps": [{"date": "2026-10-13", "value": 8123}]}` (ISO 8601, no offset = `TZ`; a bare
-  date is that day's total). Or the flat fields of the iOS Shortcut in README step 9:
+  date is that day's total). Or the flat fields of the iOS Shortcut in docs/apple-health.md:
   `date` (the day) with `steps`, `active_kcal`, `resting_kcal`, `exercise_min`,
   `distance_mi`/`distance_km`, `flights`, and `weight_lb`/`weight_kg` with `weight_date`;
   empty fields (nothing in Health) are skipped. A flat field may be a number or text such
@@ -398,7 +398,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
 
 ## Security
-- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, `/ingest/health` (phones), and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (README, step 7).
+- Cloudflare Tunnel (cloudflared in Compose, outbound only) exposes Chomp's hostname; Chomp answers only `/mcp`, `/consent`, the OAuth routes and metadata, `/ingest/health` (phones), and the `/app` dashboard. `/health` answers loopback only (the container health check). Zero Trust Access browser login would block Claude's servers, so no interactive SSO sits in front of `/mcp` or the OAuth routes; Access may cover the `/app` path only (docs/setup.md, step 7).
 - Dashboard sign-in: a password page (the person's own password, sharing the consent page's lockout) starts a 30-day session for that user. The cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/app`) holds a random token stored as a SHA-256 hash in `web_sessions` (migration 0004). Every POST must carry the public origin (CSRF check). Pages send a strict CSP: scripts and styles from Chomp itself only, nothing inline (the ZXing barcode reader is vendored for this); media may come from the camera (`mediastream:`). Label photos (20 MB at most) are read in memory, one at a time, and never stored. Food photos are served only to signed-in people. In local-only mode the dashboard, like `/mcp`, needs no sign-in.
 - Auth (`chomp/auth.py`, decided on #24): Chomp is its own minimal OAuth 2.1 server; the password typed on the consent page picks the user (#46). One pre-registered client (ID and secret entered in Claude or ChatGPT's connector dialog; exact callback allowlist includes both Claude domains and the configured ChatGPT connector), PKCE S256, a password-protected consent page (5 wrong tries lock it for 15 min), 1 h access tokens, 90-day rotating refresh tokens. Tokens are stored as SHA-256 hashes in `oauth_tokens` (migration 0003), so restarts keep the connector signed in. Dynamic client registration is off. An optional static `BEARER_TOKEN` is also accepted (Inspector, or the connector's Request headers beta).
 - Health ingest tokens (decided on #101): one per person, made with Connect iPhone on You ›
