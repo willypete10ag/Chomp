@@ -69,12 +69,17 @@ def test_every_progress_area_has_the_same_ranges(http):
     for area in ("nutrition", "weight", "activity", "training"):
         page = http.get(f"/app/progress/{area}", params={"days": "0"}).text
         assert 'aria-label="Time range"' in page, area
-        for n, short in ((7, "7D"), (30, "30D"), (60, "60D"), (365, "1Y")):
+        for n, short in ((1, "Today"), (7, "7D"), (30, "30D"), (182, "6M"), (365, "1Y")):
             assert f'href="/app/progress/{area}?days={n}"' in page and f">{short}<" in page
-        assert "?days=90" not in page
-        assert ('?days=1"' in page) == (area == "activity"), area  # only Activity has Today
+        assert "?days=90" not in page and "?days=60" not in page
         assert 'aria-label="all time" aria-current=page>All<' in page, area
         assert f'href="/app/progress/{area}" aria-current=page>' in page  # its pill
+        # Today and 6M open on every screen
+        for n in (1, 182):
+            page = http.get(f"/app/progress/{area}", params={"days": n}).text
+            assert f'href="/app/progress/{area}?days={n}" aria-label=' in page, (area, n)
+            assert "aria-current=page>" + ("Today" if n == 1 else "6M") + "<" in page, (area, n)
+    assert "aria-current=page>Today<" in http.get("/app/progress?days=1").text
 
 
 def test_you_page(http):

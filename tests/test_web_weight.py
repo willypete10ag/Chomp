@@ -50,7 +50,7 @@ def test_weight_page_shows_trend_change_chart_and_list(http, conn):
     assert ">Lowest<" in page and "182.4 lb</div>" in page and "184.0 lb</div>" in page
     assert page.count('class="swipe"') == 2 and "Apple Health" in page and "Claude" in page
     assert 'data-confirm="Delete the weigh-in from' in page
-    page = http.get("/app/progress/weight?days=60").text.replace("\xa0", " ")
+    page = http.get("/app/progress/weight?days=182").text.replace("\xa0", " ")
     assert page.count('<circle class="reading"') == 3
     assert http.get("/app/progress/weight?days=12345").status_code == 200  # falls back to 30
     # All: back to the first weigh-in, however long ago, labeled by month and year
@@ -76,10 +76,10 @@ def test_add_and_delete_a_weigh_in(http, conn):
     sign_in(http)
     r = http.post(
         "/app/weight",
-        data={"lb": "181.2", "date": today(), "time": "07:15", "days": "60"},
+        data={"lb": "181.2", "date": today(), "time": "07:15", "days": "182"},
         headers=ORIGIN,
     )
-    assert r.headers["location"].startswith("/app/progress/weight?days=60")
+    assert r.headers["location"].startswith("/app/progress/weight?days=182")
     page = follow(http, r)
     assert "Weigh-in saved." in page and "181.2 lb" in page
     row = store.latest_weight(conn)

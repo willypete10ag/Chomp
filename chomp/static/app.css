@@ -652,7 +652,7 @@ button.wide { width: 100%; margin-bottom: .75rem; }
   flex: 1; border-radius: 0; background: var(--over); color: #fff; font-weight: 600;
 }
 .swipe-action.confirm button { background: var(--accent); color: var(--on-accent); }
-.js .swipe-action.confirm { inset: 0 auto 0 0; }
+.js .swipe-action.confirm, .js .swipe-action.start { inset: 0 auto 0 0; }
 .js .swipe-body > details > summary, .js .food-link {
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none;
 }
@@ -1242,7 +1242,7 @@ a.day-tile:active { transform: scale(.97); }
 .meal + .meal { margin-top: 0; }
 a.entry { display: block; color: inherit; text-decoration: none; min-height: 2.75rem; border-radius: 10px; }
 a.entry:active { background: var(--track); }
-.entries li:has(> a.entry) { padding: .5rem 0; }
+.swipe-body:has(> a.entry) { padding: .5rem 0; }
 
 /* Sheets: a bar with back and close, half or full height, and the options inside */
 .sheet { overscroll-behavior: contain; }

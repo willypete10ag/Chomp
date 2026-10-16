@@ -64,9 +64,10 @@ SESSION_TTL_S = 30 * 86400
 # One range control on every Progress screen (#105): days, short label, what it reads as.
 # 0 is All: since the first record of that kind.
 RANGES = (
+    (1, "Today", "today"),
     (7, "7D", "7 days"),
     (30, "30D", "30 days"),
-    (60, "60D", "60 days"),
+    (182, "6M", "6 months"),
     (365, "1Y", "1 year"),
     (0, "All", "all time"),
 )
@@ -469,7 +470,9 @@ def ago_text(day: date, today: date) -> str:
 
 
 def prev_words(span: int) -> str:
-    """ "prev 30D" for a range's previous period."""
+    """ "prev 30D" for a range's previous period, "yesterday" for Today's."""
+    if span == 1:
+        return "yesterday"
     return "prev " + next(short for n, short, _ in RANGES if n == span)
 
 
@@ -760,30 +763,27 @@ def progress_pills(active: str) -> str:
     return f'<nav class="pills" aria-label="Progress">{links}</nav>'
 
 
-TODAY_RANGE = (1, "Today", "today")  # Activity's first choice: one day's numbers
-
-
-def range_control(url: str, span: int, with_today: bool = False) -> str:
-    """7D 30D 60D 1Y All, the same on every Progress screen (#105); Activity adds Today."""
-    choices = ((TODAY_RANGE,) if with_today else ()) + RANGES
+def range_control(url: str, span: int) -> str:
+    """Today 7D 30D 6M 1Y All, the same on every Progress screen (#105)."""
     links = "".join(
         f'<a href="{url}?days={n}" aria-label="{words}"'
         f"{' aria-current=page' if n == span else ''}>{short}</a>"
-        for n, short, words in choices
+        for n, short, words in RANGES
     )
     return f'<nav class="segment" aria-label="Time range">{links}</nav>'
 
 
-def pick_range(value: str | None, default: int, with_today: bool = False) -> int:
+def pick_range(value: str | None, default: int) -> int:
     span = int_param(value)
-    allowed = {n for n, *_ in RANGES} | ({TODAY_RANGE[0]} if with_today else set())
-    return span if span in allowed else default
+    return span if span in {n for n, *_ in RANGES} else default
 
 
 def range_words(span: int, first: date) -> str:
     """ "over 30 days", or for All "since Mar 2025"."""
     if span == 0:
         return f"since {first.strftime('%b')} {first.year}"
+    if span == 1:
+        return "today"
     return "over " + next(words for n, _, words in RANGES if n == span)
 
 
@@ -1254,15 +1254,22 @@ def with_thumb(src: str, name: str, inner: str) -> str:
 
 def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
     """One logged food on Today: its photo, name, amount, calories and macros. Tapping it
-    opens its edit sheet (#105), or the edit page without the script.
+    opens its edit sheet (#105), or the edit page without the script; with the script, swipe
+    it right to show Delete (no asking: Undo brings it back), or press and hold it to edit.
 
     In a one-item meal the meal header already carries the calories, so the row leaves them out.
     """
     n = logic.round_for_display(x.nutrients)
     brand = f' <span class="muted">{e(x.brand)}</span>' if x.brand else ""
     kcal = "" if single else f'<span class="kcal">{num(n["kcal"])}{NBSP}<small>kcal</small></span>'
+    url = f"{PREFIX}/entries/{x.id}"
+    delete = (
+        f'<form class="swipe-action start js-only" method="post" action="{url}/delete">'
+        f'<button type="submit" aria-label="Delete {e(x.name)}">Delete</button></form>'
+    )
     return (
-        f'<li id="entry-{x.id}"><a class="entry" href="{PREFIX}/entries/{x.id}" data-sheet>'
+        f'<li id="entry-{x.id}" class="swipe" data-sheet-hold="{url}">{delete}'
+        f'<div class="swipe-body" data-swipe><a class="entry food-link" href="{url}" data-sheet>'
         + with_thumb(
             photo,
             x.name,
@@ -1271,7 +1278,7 @@ def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
             f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
             f"<span>{macros_line(n)}</span></div>",
         )
-        + "</a></li>"
+        + "</a></div></li>"
     )
 
 
@@ -5780,11 +5787,11 @@ def add_routes(
     def lb_num(lb: float) -> str:
         return f"{lb:,.1f}{NBSP}lb"
 
-    def progress_head(active: str, url: str, span: int, with_today: bool = False) -> list[str]:
+    def progress_head(active: str, url: str, span: int) -> list[str]:
         return [
             page_head("Progress"),
             progress_pills(active),
-            range_control(url, span, with_today),
+            range_control(url, span),
         ]
 
     @server.custom_route(PROGRESS, methods=["GET"])
@@ -6095,9 +6102,14 @@ def add_routes(
             )
 
         unit = logic.chart_unit(len(days))
+        # Today is one bar: the tiles and the day's row say it, so no charts
         for key, kind, label, unit_word in (
-            ("kcal", "kcal", "Calories", "kcal"),
-            ("protein_g", "protein_g", "Protein", "g"),
+            ()
+            if span == 1
+            else (
+                ("kcal", "kcal", "Calories", "kcal"),
+                ("protein_g", "protein_g", "Protein", "g"),
+            )
         ):
             daily = [(d, (by_day.get(d) or {}).get(key)) for d in days]
             points = logic.bucket_days(daily, unit)
@@ -6396,7 +6408,7 @@ def add_routes(
         if not signed_in(request):
             return to_login(request)
         params = request.query_params
-        span = pick_range(params.get("days"), 1, with_today=True)
+        span = pick_range(params.get("days"), 1)
         pick = params.get("metric", "steps")
         chart = ACTIVITY_CHARTS.get(pick) or ACTIVITY_CHARTS["steps"]
         pick = next(k for k, v in ACTIVITY_CHARTS.items() if v is chart)
@@ -6408,7 +6420,7 @@ def add_routes(
             synced = store.last_activity_sync(conn)
             goals = store.get_body_goals(conn)
         by_day = {d: v for d, v in everything.items() if d >= first}
-        parts = progress_head("activity", ACTIVITY_PAGE, span, with_today=True)
+        parts = progress_head("activity", ACTIVITY_PAGE, span)
         if synced is None:
             parts.append(
                 '<section class="card empty"><p>No activity yet.</p><p class="muted small">'
