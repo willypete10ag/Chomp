@@ -221,18 +221,17 @@ def test_events_bring_edits_and_deletes(conn, fake):
         {"type": "deleted", "id": "w-gone", "deleted_at": "2026-10-16T14:10:00Z"},
         {"type": "deleted", "id": "never-synced", "deleted_at": "2026-10-16T14:10:00Z"},
         {"type": "updated", "workout": api_workout("w-late", start="2026-10-16T13:00:00Z")},
-        {"type": "updated", "workout": {"id": "w-broken", "updated_at": "2026-10-16T14:00:00Z"}},
     ]
     later = datetime(2026, 10, 16, 16, 0, tzinfo=UTC)
     with fake.client() as client:
         result = hevy_sync.sync(conn, client, now=later)
     assert fake.requests[-1][1]["since"] == "2026-10-16T13:50:00Z"
-    assert (result.full, result.added, result.updated, result.deleted, result.skipped) == (
+    assert (result.full, result.added, result.updated, result.deleted, result.error) == (
         False,
         1,
         1,
         1,
-        1,
+        None,
     )
     got = rows(conn)
     assert [(r["title"], r["hevy_id"]) for r in got] == [
@@ -251,6 +250,34 @@ def test_events_bring_edits_and_deletes(conn, fake):
     with fake.client() as client:
         result = hevy_sync.sync(conn, client, now=later)
     assert result.deleted == 1 and [r["hevy_id"] for r in rows(conn)] == ["w-push"]
+
+
+def test_a_workout_that_cant_be_saved_keeps_the_cursor(conn, fake):
+    fake.workouts = [api_workout()]
+    with fake.client() as client:
+        hevy_sync.sync(conn, client, now=NOW)
+    broken = {"id": "w-broken", "updated_at": "2026-10-16T14:00:00Z"}  # no start time
+    fake.events = [
+        {"type": "updated", "workout": api_workout("w-new", start="2026-10-16T12:00:00Z")},
+        {"type": "updated", "workout": broken},
+    ]
+    later = datetime(2026, 10, 16, 16, 0, tzinfo=UTC)
+    with fake.client() as client:
+        result = hevy_sync.sync(conn, client, now=later)
+    assert (result.added, result.skipped) == (1, 1)
+    assert (
+        result.error
+        == "1 workout from Hevy couldn't be saved (see the server log); the next sync tries again"
+    )
+    state = store.hevy_sync_state(conn)
+    assert state["since"] == "2026-10-16T13:50:00Z" and state["last_error"] == result.error
+    # Once Hevy sends it whole, the cursor moves on
+    broken.update(api_workout("w-broken", start="2026-10-16T13:00:00Z"))
+    with fake.client() as client:
+        result = hevy_sync.sync(conn, client, now=later)
+    assert fake.requests[-1][1]["since"] == "2026-10-16T13:50:00Z"
+    assert (result.added, result.unchanged, result.error) == (1, 1, None)
+    assert store.hevy_sync_state(conn)["since"] == "2026-10-16T15:50:00Z"
 
 
 def test_a_failed_run_keeps_the_cursor(conn, fake):

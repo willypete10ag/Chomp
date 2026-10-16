@@ -1690,11 +1690,6 @@ def record_hevy_sync(
             )
 
 
-def reset_hevy_sync(conn: sqlite3.Connection) -> None:
-    """Forget the cursor, so the next run pulls every workout again."""
-    conn.execute("UPDATE hevy_sync SET since = NULL WHERE user_id = ?", (user_of(conn),))
-
-
 def workouts_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqlite3.Row]:
     """The user's workouts starting in UTC [start, end), newest first."""
     return conn.execute(

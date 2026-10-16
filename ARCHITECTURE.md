@@ -310,8 +310,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   wins). Workouts carry Hevy's id in `workouts.hevy_id`; a workout without one (CSV) that
   started in the same minute is adopted. `hevy_sync` holds the cursor and the last run's
   result; the cursor moves only after a run without errors, to 10 minutes before that run
-  started, so events are re-read rather than missed. A workout Hevy sends that can't be read
-  is skipped and logged. The CSV import below stays as the fallback and leaves synced
+  started, so events are re-read rather than missed. A workout Hevy sends that can't be saved
+  is logged and fails the run, so the cursor stays put and the next run asks for it again. The CSV import below stays as the fallback and leaves synced
   workouts alone.
 - Workouts (#94, migration 0014, `chomp/hevy.py`): without the API, workouts
   come from Hevy's CSV export (one row per set; `weight_lbs`/`distance_miles` or the metric

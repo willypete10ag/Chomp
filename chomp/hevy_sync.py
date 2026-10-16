@@ -121,6 +121,17 @@ def sync(
         store.record_hevy_sync(conn, logic.format_utc(datetime.now(UTC)), error=result.error)
         log.warning("hevy: sync failed: %s", e)
         return result
+    if result.skipped:
+        # Keep the cursor, so the next run asks for those workouts again rather than moving
+        # past them for good; the ones saved this time come back unchanged
+        n = result.skipped
+        result.error = (
+            f"{n} workout{'' if n == 1 else 's'} from Hevy couldn't be saved (see the server"
+            " log); the next sync tries again"
+        )
+        store.record_hevy_sync(conn, logic.format_utc(datetime.now(UTC)), error=result.error)
+        log.warning("hevy: %s", result.summary())
+        return result
     store.record_hevy_sync(
         conn,
         logic.format_utc(datetime.now(UTC)),
@@ -129,7 +140,7 @@ def sync(
         updated=result.updated,
         deleted=result.deleted,
     )
-    if result.added or result.updated or result.deleted or result.skipped or result.full:
+    if result.added or result.updated or result.deleted or result.full:
         log.info("hevy: %s%s", "full pull, " if result.full else "", result.summary())
     return result
 
