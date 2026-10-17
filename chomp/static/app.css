@@ -1123,6 +1123,7 @@ details.table td + td, details.table th + th { text-align: right; }
 .heat { --h: var(--train); display: block; max-width: 100%; height: auto; margin: .25rem 0 .25rem; }
 .heat.weight { --h: var(--protein); }
 .heat rect { fill: var(--track); }
+.heat .tick { fill: var(--faint); font-size: 7.5px; } .heat .tick.mid { text-anchor: middle; }
 .heat .lv1 { fill: color-mix(in srgb, var(--h) 35%, var(--track)); }
 .heat .lv2 { fill: color-mix(in srgb, var(--h) 60%, var(--track)); }
 .heat .lv3 { fill: color-mix(in srgb, var(--h) 80%, var(--track)); }
