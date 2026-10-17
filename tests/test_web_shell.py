@@ -173,6 +173,9 @@ def test_progress_overview_cards(http, conn):
     assert strip.count("<rect") == 30 and strip.count('class="lv4"') == 2
     strip = http.get("/app/progress?days=7").text.split('class="heat weight"')[1]
     assert strip.split("</svg>")[0].count("<rect") == 7
+    # on Today an area with data but none today still gets its card
+    today = http.get("/app/progress?days=1").text
+    assert "Activity" in today and "No steps in this period" in today
     assert 'href="/app/progress/activity?days=30"' in page and "steps a day" in page
     assert "Energy balance" not in page  # no food logged to weigh against
     assert "Nothing to show yet." not in page

@@ -16,7 +16,7 @@ import math
 import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from html import escape as e
 
 W, H = 340, 172
@@ -445,31 +445,83 @@ def sparkline(
 
 
 def heat_strip(by_day: dict[date, float], days: Sequence[date], kind: str, title: str) -> str:
-    """One cell per day, a column per week (Monday on top), shaded by the day's amount in four
-    steps between the lightest and heaviest days shown. Empty days stay a faint cell."""
-    if not days:
+    """One cell per day, shaded by the day's amount in four steps between the lightest and
+    heaviest days shown; empty days stay a faint cell. A week or less is one row, each cell
+    with its weekday and date under it; up to six weeks is a calendar, a row per week;
+    longer is a column per week (Monday on top) with weekday letters down the side and
+    months along the top."""
+    if len(days) < 2:
         return ""
-    lead = days[0].weekday()
-    weeks = math.ceil((lead + len(days)) / 7)
     size, gap = 11, 3
-    w, h = weeks * (size + gap) - gap, 7 * (size + gap) - gap
+    step = size + gap
     amounts = sorted(v for d in days if (v := by_day.get(d)))
-    # drawn at a fixed cell size, so a short range is a few cells rather than a few huge ones
-    parts = [
-        f'<svg class="heat {kind}" viewBox="0 0 {w} {h}" width="{w * 1.4:.0f}"'
-        f' role="img" aria-label="{e(title)}">'
-    ]
-    for i, d in enumerate(days):
-        col, row = divmod(lead + i, 7)
+
+    def cell(d: date, x: float, y: float) -> str:
         v = by_day.get(d)
         level = 0
         if v and amounts:
             rank = sum(1 for a in amounts if a <= v) / len(amounts)
             level = min(4, max(1, math.ceil(rank * 4)))
-        label = f"{d.strftime('%a %b')} {d.day}" + ("" if level else ": rest")
-        parts.append(
-            f'<rect class="lv{level}" x="{col * (size + gap)}" y="{row * (size + gap)}"'
-            f' width="{size}" height="{size}" rx="3"><title>{e(label)}</title></rect>'
+        label = f"{d.strftime('%a %b')} {d.day}" + ("" if level else ": none")
+        return (
+            f'<rect class="lv{level}" x="{x}" y="{y}" width="{size}" height="{size}"'
+            f' rx="3"><title>{e(label)}</title></rect>'
         )
-    parts.append("</svg>")
-    return "".join(parts)
+
+    parts = []
+    if len(days) <= 7:
+        w, h = len(days) * step * 2 - gap, size + 22
+        for i, d in enumerate(days):
+            x = i * step * 2 + size / 2
+            parts.append(cell(d, x, 0))
+            mid = x + size / 2
+            parts.append(
+                f'<text class="tick mid" x="{mid}" y="{size + 9}">{d.strftime("%a")[0]}</text>'
+            )
+            parts.append(f'<text class="tick mid" x="{mid}" y="{size + 19}">{d.day}</text>')
+    elif len(days) <= 42:
+        # a calendar: a row per week, Monday first, each row's first date at its left
+        left, top = 22, 12
+        lead = days[0].weekday()
+        weeks = math.ceil((lead + len(days)) / 7)
+        w, h = left + 7 * step - gap, top + weeks * step - gap
+        for col, letter in enumerate("MTWTFSS"):
+            x = left + col * step + size / 2
+            parts.append(f'<text class="tick mid" x="{x}" y="8">{letter}</text>')
+        for row in range(weeks):
+            first = max(days[0] + timedelta(days=row * 7 - lead), days[0])
+            y = top + row * step + size - 2
+            parts.append(f'<text class="tick" x="0" y="{y}">{first.month}/{first.day}</text>')
+        for i, d in enumerate(days):
+            row, col = divmod(lead + i, 7)
+            parts.append(cell(d, left + col * step, top + row * step))
+    else:
+        left, top = 10, 12
+        lead = days[0].weekday()
+        weeks = math.ceil((lead + len(days)) / 7)
+        w, h = left + weeks * step - gap, top + 7 * step - gap
+        for row, letter in enumerate("MTWTFSS"):
+            if row % 2 == 0:
+                y = top + row * step + size - 2
+                parts.append(f'<text class="tick" x="0" y="{y}">{letter}</text>')
+        shown = None
+        for col in range(weeks):
+            first = max(days[0] + timedelta(days=col * 7 - lead), days[0])
+            x = left + col * step
+            if first.month != shown:
+                text = first.strftime("%b")
+                if col == 0 and (first + timedelta(days=21)).month != first.month:
+                    continue  # the next month's label would sit on top of it
+            else:
+                continue
+            shown = first.month
+            parts.append(f'<text class="tick" x="{x}" y="8">{e(text)}</text>')
+        for i, d in enumerate(days):
+            col, row = divmod(lead + i, 7)
+            parts.append(cell(d, left + col * step, top + row * step))
+    # drawn at a fixed cell size, so a short range is a few cells rather than a few huge ones
+    head = (
+        f'<svg class="heat {kind}" viewBox="0 0 {w} {h}" width="{w * 1.4:.0f}"'
+        f' role="img" aria-label="{e(title)}">'
+    )
+    return head + "".join(parts) + "</svg>"

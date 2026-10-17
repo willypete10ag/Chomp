@@ -130,3 +130,9 @@ def test_sparkline_and_heat_strip():
     strip = charts.heat_strip({span[0]: 100, span[3]: 400}, span, "train", "Training days")
     assert strip.count("<rect") == 14 and 'class="lv4"' in strip and "Mon Oct 5" in strip
     assert "style=" not in strip  # the page's CSP allows no inline styles
+    assert ">10/5<" in strip and ">10/12<" in strip and ">M<" in strip  # weeks and weekdays
+    year = [start + timedelta(days=i) for i in range(120)]
+    assert ">Oct<" in charts.heat_strip({}, year, "train", "Training days")  # months on top
+    week = charts.heat_strip({}, span[:7], "weight", "Weigh-in days")  # one row, dated
+    assert week.count("<rect") == 7 and ">5<" in week and ">11<" in week
+    assert charts.heat_strip({}, span[:1], "weight", "Weigh-in days") == ""

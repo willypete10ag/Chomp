@@ -6641,6 +6641,13 @@ def add_routes(
                 )
             )
 
+        elif started[1]:
+            cards.append(
+                empty_card(
+                    f"{ACTIVITY_PAGE}?days={span}", "footprints", "steps", "Activity", "steps"
+                )
+            )
+
         # Training: sessions a week and volume, vs the period before, and its days
         mine = [r for r in workouts if logic.local_date(r["started_at"], tz) >= first]
         if mine:
@@ -6671,6 +6678,13 @@ def add_routes(
                 )
             )
 
+        elif started[2]:
+            cards.append(
+                empty_card(
+                    f"{TRAINING_PAGE}?days={span}", "dumbbell", "train", "Training", "workouts"
+                )
+            )
+
         # Nutrition: calories and protein a day against the goals, days on target
         logged = [d for d in done if d in eaten] or ([last] if last in eaten else [])
         if logged:
@@ -6693,6 +6707,11 @@ def add_routes(
                     f" · {len(logged)} of {len(done) or 1} days logged",
                     spark,
                 )
+            )
+
+        elif started[0]:
+            cards.append(
+                empty_card(f"{NUTRITION_PAGE}?days={span}", "salad", "kcal", "Nutrition", "meals")
             )
 
         if cards:
@@ -6725,6 +6744,10 @@ def add_routes(
             f'<div class="ov-value"><span class="val">{value}</span> <span class="unit">'
             f'{e(unit)}</span></div><div class="sub">{sub}</div>{visual}</a>'
         )
+
+    def empty_card(href: str, glyph: str, tone: str, title: str, what: str) -> str:
+        """An overview card for an area with data, just none in the range."""
+        return overview_card(href, glyph, tone, title, "&ndash;", "", f"No {what} in this period")
 
     def strip_days(first: date, last: date) -> list[date]:
         """A heat strip's days: the selected range, at most a year, to today."""
