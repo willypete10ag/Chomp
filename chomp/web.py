@@ -759,7 +759,7 @@ def steps_text(day: Mapping[str, float]) -> str:
 @dataclass(frozen=True)
 class ActivityChart:
     """One of Activity's metrics for its switcher (#105): what it's called, the stored metric,
-    its bar color, and how a value reads."""
+    its bar color, and how a value reads. "burned" is active + resting (logic.burned_kcal)."""
 
     label: str
     metric: str
@@ -768,6 +768,8 @@ class ActivityChart:
     places: int = 0
 
     def value(self, day: Mapping[str, float]) -> float | None:
+        if self.metric == "burned":
+            return logic.burned_kcal(day)
         v = day.get(self.metric)
         if v is None:
             return None
@@ -779,7 +781,7 @@ class ActivityChart:
 
 ACTIVITY_CHARTS = {
     "steps": ActivityChart("Steps", "steps", "steps", "steps"),
-    "energy": ActivityChart("Energy", "active_kcal", "burn", "kcal"),
+    "energy": ActivityChart("Burned", "burned", "burn", "kcal"),
     "exercise": ActivityChart("Exercise", "exercise_min", "exercise", "min"),
     "distance": ActivityChart("Distance", "distance_m", "distance", "mi", 1),
 }
@@ -789,8 +791,8 @@ def activity_row(day: date, values: Mapping[str, float], today: date, href: str)
     """A day in Activity's list: the date and steps, and one line of energy and exercise. Tap
     opens the day's numbers in a sheet."""
     bits = []
-    if "active_kcal" in values:
-        bits.append(f"{num(values['active_kcal'])}{NBSP}kcal active")
+    if (burned := logic.burned_kcal(values)) is not None:
+        bits.append(f"{num(burned)}{NBSP}kcal burned")
     if "exercise_min" in values:
         bits.append(f"{num(values['exercise_min'])}{NBSP}min exercise")
     sub = f"<small>{' · '.join(bits)}</small>" if bits else ""
@@ -3070,13 +3072,10 @@ def add_routes(
                 )
             )
 
-        # Exercise: minutes, with the active energy under them
+        # Exercise: minutes, with the calories burned under them
         if "exercise_min" in values:
-            sub = (
-                f"{num(values['active_kcal'])}{NBSP}kcal active"
-                if "active_kcal" in values
-                else so_far.strip()
-            )
+            burned = logic.burned_kcal(values)
+            sub = f"{num(burned)}{NBSP}kcal burned" if burned is not None else so_far.strip()
             tiles_html.append(
                 day_tile(
                     f"{ACTIVITY_PAGE}?metric=exercise" if day == now else one_day,
@@ -6611,8 +6610,8 @@ def add_routes(
             avg = sum(steps) / len(steps)
             before = mean(moved.get(d, {}).get("steps") for d in prev_days)
             extra = []
-            if (a := mean(moved.get(d, {}).get("active_kcal") for d in done)) is not None:
-                extra.append(f"{num(a)}{NBSP}kcal active")
+            if (a := mean(logic.burned_kcal(moved.get(d, {})) for d in done)) is not None:
+                extra.append(f"{num(a)}{NBSP}kcal burned")
             if (x := mean(moved.get(d, {}).get("exercise_min") for d in done)) is not None:
                 extra.append(f"{num(x)}{NBSP}min exercise")
             unit = logic.chart_unit(len(days))
@@ -6928,7 +6927,7 @@ def add_routes(
                     kind="balance",
                 )
                 + f'<p class="muted small">Over {len(both)} day{"" if len(both) == 1 else "s"}'
-                " with both food logged and active plus resting energy from Apple Health.</p>"
+                " with both food logged and calories burned from Apple Health.</p>"
                 "</section>"
             )
 
@@ -7199,7 +7198,7 @@ def add_routes(
             best_day = max(values, key=lambda d: values[d])
             daily_word = {
                 "steps": "steps a day",
-                "energy": "active kcal a day",
+                "energy": "kcal burned a day",
                 "exercise": "min of exercise a day",
                 "distance": "miles a day",
             }[pick]
@@ -7267,7 +7266,10 @@ def add_routes(
         if done:
             parts.append(
                 '<section class="group"><h2>Averages</h2><div class="body">'
-                + activity_tiles(logic.activity_average(done))
+                + activity_tiles(
+                    logic.activity_average(done),
+                    burned=mean(logic.burned_kcal(v) for v in done.values()),
+                )
                 + "</div></section>"
             )
         if by_day:
@@ -7292,20 +7294,18 @@ def add_routes(
             parts.append('<section class="card empty"><p>No activity in this period.</p></section>')
         return progress_page(request, "Activity", "".join(parts), "steps")
 
-    def activity_tiles(values: Mapping[str, float], so_far: str = "") -> str:
-        """Active and resting energy, exercise and miles, and their sum burned."""
-        burned = logic.burned_kcal(values)
+    def activity_tiles(
+        values: Mapping[str, float], so_far: str = "", burned: float | None = None
+    ) -> str:
+        """Calories burned (active + resting as one number, or `burned` when given: an
+        average over the days that have both), exercise and miles."""
+        if burned is None:
+            burned = logic.burned_kcal(values)
         miles = num(logic.miles(values["distance_m"]), 1) if "distance_m" in values else num(None)
         return tiles(
-            tile(num(values.get("active_kcal")), "Active kcal", tone="burn"),
-            tile(num(values.get("resting_kcal")), "Resting kcal", tone="burn"),
+            tile(num(burned), "Kcal burned", so_far.strip(), tone="burn"),
             tile(num(values.get("exercise_min")), "Exercise min", tone="exercise"),
             tile(miles, "Miles", tone="steps"),
-        ) + (
-            f'<p class="small">{num(burned)}{NBSP}kcal burned{so_far}'
-            ' <span class="muted">(active + resting)</span></p>'
-            if burned is not None
-            else ""
         )
 
     @server.custom_route(ACTIVITY_PAGE + "/day", methods=["GET"])
@@ -7323,9 +7323,7 @@ def add_routes(
         last = today()
         rows = [
             ("Steps", num(found.get("steps"))),
-            ("Active energy", f"{num(found.get('active_kcal'))}{NBSP}kcal"),
-            ("Resting energy", f"{num(found.get('resting_kcal'))}{NBSP}kcal"),
-            ("Burned", f"{num(logic.burned_kcal(found))}{NBSP}kcal"),
+            ("Calories burned", f"{num(logic.burned_kcal(found))}{NBSP}kcal"),
             ("Exercise", f"{num(found.get('exercise_min'))}{NBSP}min"),
             (
                 "Distance",
