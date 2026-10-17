@@ -122,7 +122,7 @@ def test_training_stats_volume_heat_strip_bests_and_weeks(http, conn):
     assert ">Workouts<" in page and "▲" in page and "100% <span>vs prev 30D" in page
     assert ">Average length<" in page and "50 min" in page
     assert 'class="chart bars train"' in page and "Volume <small>by week</small>" in page
-    assert 'class="heat train"' in page and "of the last 91 days" in page
+    assert 'class="heat train"' in page and "2 of 30 days" in page
     # Bench's best is the newest, a record over the old one, so it's marked PR
     assert "Personal bests" in page and '<span class="badge pr">PR</span> Bench Press' in page
     assert "220.5 lb &times; 5" in page

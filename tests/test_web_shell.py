@@ -168,6 +168,11 @@ def test_progress_overview_cards(http, conn):
     assert 'class="ov-card tone-protein" href="/app/progress/weight?days=30"' in page
     assert "lb trend" in page and "over 30 days" in page
     assert 'class="heat weight" viewBox' in page and 'aria-label="Weigh-in days"' in page
+    # the strip follows the range: 30 days, both weigh-ins in it
+    strip = page.split('class="heat weight"')[1].split("</svg>")[0]
+    assert strip.count("<rect") == 30 and strip.count('class="lv4"') == 2
+    strip = http.get("/app/progress?days=7").text.split('class="heat weight"')[1]
+    assert strip.split("</svg>")[0].count("<rect") == 7
     assert 'href="/app/progress/activity?days=30"' in page and "steps a day" in page
     assert "Energy balance" not in page  # no food logged to weigh against
     assert "Nothing to show yet." not in page

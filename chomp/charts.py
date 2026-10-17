@@ -454,7 +454,11 @@ def heat_strip(by_day: dict[date, float], days: Sequence[date], kind: str, title
     size, gap = 11, 3
     w, h = weeks * (size + gap) - gap, 7 * (size + gap) - gap
     amounts = sorted(v for d in days if (v := by_day.get(d)))
-    parts = [f'<svg class="heat {kind}" viewBox="0 0 {w} {h}" role="img" aria-label="{e(title)}">']
+    # drawn at a fixed cell size, so a short range is a few cells rather than a few huge ones
+    parts = [
+        f'<svg class="heat {kind}" viewBox="0 0 {w} {h}" width="{w * 1.4:.0f}"'
+        f' role="img" aria-label="{e(title)}">'
+    ]
     for i, d in enumerate(days):
         col, row = divmod(lead + i, 7)
         v = by_day.get(d)

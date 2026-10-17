@@ -6727,9 +6727,8 @@ def add_routes(
         )
 
     def strip_days(first: date, last: date) -> list[date]:
-        """The training heat strip's days: at least 13 weeks, at most a year, to today."""
-        start = max(min(first, last - timedelta(days=13 * 7 - 1)), last - timedelta(days=370))
-        return logic.date_range(start, last)
+        """A heat strip's days: the selected range, at most a year, to today."""
+        return logic.date_range(max(first, last - timedelta(days=370)), last)
 
     def trend_change(trend: list[tuple[date, float]], first: date) -> tuple[float, float | None]:
         """How the weight trend moved over a range starting on first: from its value going
@@ -7489,9 +7488,9 @@ def add_routes(
         in_strip = sum(1 for d in strip if d in trained)
         parts.append(
             '<section class="card"><div class="chart-head"><h2>Training days</h2></div>'
-            f'<p class="inspect">{in_strip} of the last {len(strip)} days · darker is more'
-            " volume</p>"
-            + charts.heat_strip(trained, strip, "train", f"Training days, last {len(strip)} days")
+            f'<p class="inspect">{in_strip} of {len(strip)} day{"" if len(strip) == 1 else "s"}'
+            " · darker is more volume</p>"
+            + charts.heat_strip(trained, strip, "train", f"Training days, {len(strip)} days")
             + "</section>"
         )
 
