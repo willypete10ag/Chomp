@@ -1119,13 +1119,14 @@ details.table td + td, details.table th + th { text-align: right; }
 .spark circle { fill: var(--m, var(--hue)); }
 .spark rect { fill: var(--m, var(--hue)); opacity: .85; }
 .spark.kcal, .spark .kcal { --m: var(--kcal); } .spark.steps { --m: var(--steps); }
-.spark .burn { --m: var(--burn); } .spark.weight { --m: var(--accent); }
-.heat { display: block; width: 100%; max-width: 22rem; height: auto; margin: .25rem 0 .25rem; }
+.spark .burn { --m: var(--burn); }
+.heat { --h: var(--train); display: block; width: 100%; max-width: 22rem; height: auto; margin: .25rem 0 .25rem; }
+.heat.weight { --h: var(--protein); }
 .heat rect { fill: var(--track); }
-.heat .lv1 { fill: color-mix(in srgb, var(--train) 35%, var(--track)); }
-.heat .lv2 { fill: color-mix(in srgb, var(--train) 60%, var(--track)); }
-.heat .lv3 { fill: color-mix(in srgb, var(--train) 80%, var(--track)); }
-.heat .lv4 { fill: var(--train); }
+.heat .lv1 { fill: color-mix(in srgb, var(--h) 35%, var(--track)); }
+.heat .lv2 { fill: color-mix(in srgb, var(--h) 60%, var(--track)); }
+.heat .lv3 { fill: color-mix(in srgb, var(--h) 80%, var(--track)); }
+.heat .lv4 { fill: var(--h); }
 
 /* Progress overview: a card per area, each opening its screen */
 .overview { display: grid; gap: .75rem; margin-bottom: 1rem; }

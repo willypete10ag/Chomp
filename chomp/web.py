@@ -6579,7 +6579,7 @@ def add_routes(
                 )
             )
 
-        # Weight: the trend's level and how it moved over the range
+        # Weight: the trend's level and how it moved over the range, and its weigh-in days
         if weights:
             trend = logic.weight_trend(
                 (logic.local_date(r["measured_at"], tz), r["kg"]) for r in weights
@@ -6587,6 +6587,8 @@ def add_routes(
             change, rate = trend_change(trend, first)
             in_range = [(d, v) for d, v in trend if d >= first]
             spark = charts.sparkline([as_lb(v) for _, v in in_range], "weight")
+            weighed = {logic.local_date(r["measured_at"], tz): 1.0 for r in weights}
+            spark += charts.heat_strip(weighed, strip, "weight", "Weigh-in days")
             sub = f"{change_text(change)} {e(range_words(span, first))}" if in_range else ""
             if rate is not None and round(as_lb(rate), 1):
                 sign = "&minus;" if rate < 0 else "+"

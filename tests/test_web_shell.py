@@ -167,6 +167,7 @@ def test_progress_overview_cards(http, conn):
     page = http.get("/app/progress").text.replace("\xa0", " ")
     assert 'class="ov-card tone-protein" href="/app/progress/weight?days=30"' in page
     assert "lb trend" in page and "over 30 days" in page
+    assert 'class="heat weight" viewBox' in page and 'aria-label="Weigh-in days"' in page
     assert 'href="/app/progress/activity?days=30"' in page and "steps a day" in page
     assert "Energy balance" not in page  # no food logged to weigh against
     assert "Nothing to show yet." not in page
