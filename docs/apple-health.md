@@ -41,8 +41,11 @@ weight are enough to start; the rest are optional.
    *Include ISO 8601 Time*.
 3. **Find Health Samples** again, *Type* *Steps*. Tap *Add Filter*, set it to *Start Date*
    *is today*, and set *Group By* to *Day*.
-4. Repeat step 3 with *Active Energy*: another **Find Health Samples** (not *Filter Health
-   Samples*, which only sifts the Steps above and finds nothing). Optional, the same way:
+4. Repeat step 3 with *Active Energy*: another **Find Health Samples**. Placed right under
+   the Steps action, Shortcuts feeds it the Steps samples and renames it *Filter Health
+   Samples*, which only sifts those and finds nothing: tap the blue *Health Samples* bubble at
+   the start of its line and tap *Clear* so it reads *Find All Health Samples* again (or add
+   a **Nothing** action just above it). Do the same for each one below. Optional, the same way:
    *Resting Energy*, *Exercise Minutes* and *Walking + Running Distance* (set its *Unit* to
    *mi*). Each optional one also needs its row in step 6.
 5. **Format Date**. Leave *Date* as *Current Date*, set *Date Format* to *Custom* and type
