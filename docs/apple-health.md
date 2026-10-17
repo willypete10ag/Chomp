@@ -6,7 +6,8 @@ it to Health) and today's steps, active and resting energy, exercise minutes and
 running distance.
 
 **The quick way: Connect iPhone.** Once someone has shared the Shortcut (see "Share the
-Shortcut" below), each person signs in, goes to **You › Integrations › Apple Health** and taps
+Shortcut" below), each person signs in (the full walk-through is
+[Add another person, part 4](people.md#part-4-them-connect-their-iphone-on-their-iphone)), goes to **You › Integrations › Apple Health** and taps
 **Connect iPhone**. Chomp shows their token once with a **Copy** button and a link to the
 Shortcut: they add it, paste the token when it asks, run it once to allow Health access, and
 set up the automation ("Then make it run by itself" under "Building it by hand"; iPhone doesn't share automations).
@@ -85,20 +86,9 @@ iPhone keeps Health data locked while the phone is locked, so a time-of-day auto
 fail at night; one that runs when you open an app always finds it unlocked. Each run sends
 today's totals so far and replaces what it sent before, so running it often is harmless.
 
-**Share the Shortcut** (once, so nobody else builds it by hand). Shortcuts can leave a value
-out of a shared copy and ask for it when someone adds it (an Import Question), so your token
-stays yours:
-
-1. In your Send to Chomp, add a **Text** action at the very top and paste your token into it.
-2. In **Get Contents of URL**, change the `Authorization` header's *Text* to `Bearer ` (one
-   space) followed by the Text action's output (*Select Variable*, then tap *Text*). Run it
-   once to check it still sends.
-3. Tap the Shortcut's name at the top › **Details** (the ⓘ on older iPhones) › **Setup** ›
-   **Add Question**, pick the Text action's text, and type the question `Paste your Chomp
-   token (You › Integrations › Connect iPhone)`.
-4. Back in the Shortcuts list, press and hold Send to Chomp › **Share** › **Copy iCloud Link**.
-5. On the dashboard, as the owner: **You › Integrations › Apple Health › Share your
-   Shortcut**, paste the link and tap **Save link**. Connect iPhone now offers it to everyone.
+**Share the Shortcut** (once, so nobody else builds it by hand): Shortcuts can leave your
+token out of a shared copy and ask each person for theirs when they add it. The tap-by-tap
+steps are in [Add another person, part 1](people.md#part-1-you-share-the-shortcut-once-on-your-iphone).
 
 **Instead, with Health Auto Export** (an App Store app; its automations are a paid upgrade):
 add a REST API automation with the URL above, JSON format, a header `Authorization` =
