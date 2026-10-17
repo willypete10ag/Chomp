@@ -347,7 +347,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   not), so switching between the two never adds them up. One reading per person, metric,
   period and bucket start: the phone resends today's growing total and it replaces the last
   one. Averages leave out today, which isn't over.
-  Burned is active + resting, only when both arrived. The numbers are Apple Health's.
+  Burned is active + resting, only when both arrived; the dashboard shows only that one
+  number (calories burned), not the two parts. The numbers are Apple Health's.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
   iPhone posts readings to `POST /ingest/health`, in one of three shapes. Health Auto Export's
   REST automation JSON (`data.metrics[]`, weight as `weight_&_body_mass` in lb or kg, activity
