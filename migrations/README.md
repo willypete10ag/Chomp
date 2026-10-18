@@ -29,3 +29,4 @@ commit when a migration changes the design.
 | `0018_weight_edits.sql` | `weights.edited`: weigh-ins changed on the dashboard, which the phone's resends leave as edited (#105) |
 | `0019_hevy_sync.sql` | `workouts.hevy_id` (Hevy's workout id, unique per person) and `hevy_sync`: each person's Hevy API sync cursor and last result (#113) |
 | `0020_people.sql` | `user_invites` (hashed one-time invite links), `hevy_keys` (each person's Hevy API key) and `app_settings` (the shared Shortcut's link) (#109) |
+| `0021_gym_goal.sql` | `targets.gym_days_goal`: each person's weekly gym-day goal (1-7), tracked on Training, Today and `get_workouts` |

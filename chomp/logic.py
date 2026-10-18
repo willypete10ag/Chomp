@@ -925,3 +925,69 @@ def last_time(earlier: Iterable[tuple[date, Iterable[Mapping]]], exercise: str) 
             working = [s for s in mine if s["set_type"] != "warmup"]
             return LastTime(day, len(working), best_set(mine), workout_volume_kg(mine))
     return None
+
+
+@dataclass(frozen=True)
+class GymWeek:
+    """One Monday-to-Sunday week against the gym-day goal."""
+
+    monday: date
+    days: int
+    met: bool
+
+
+@dataclass(frozen=True)
+class GymGoal:
+    """Progress on the weekly gym-day goal on a day: this week's gym days and how many more
+    it needs, whether the days left in the week can still get there, the streak of weeks in
+    a row that met it, and the weeks since the first workout (newest first, this week first)."""
+
+    goal: int
+    this_week: int
+    left: int
+    days_left: int
+    reachable: bool
+    streak: int
+    weeks: list[GymWeek]
+
+    @property
+    def met_weeks(self) -> int:
+        """Finished weeks (this one left out until it's met) that met the goal."""
+        return sum(w.met for w in self.weeks)
+
+    @property
+    def counted_weeks(self) -> int:
+        """Finished weeks, plus this one once it's met."""
+        return len(self.weeks) - (0 if self.weeks and self.weeks[0].met else 1)
+
+
+def gym_goal(trained: Iterable[date], goal: int, day: date, weeks: int = 12) -> GymGoal:
+    """The gym-day goal on `day` from the days with a workout: a day counts once however
+    many workouts it has, and days after `day` don't count. `weeks` caps the history; the
+    streak looks back as far as it goes. A week still under way breaks no streak: it adds
+    to it once met."""
+    if not 1 <= goal <= 7:
+        raise ValueError(f"goal {goal} isn't 1 to 7 days a week")
+    days = {d for d in trained if d <= day}
+    per_week: dict[date, int] = {}
+    for d in days:
+        monday = d - timedelta(days=d.weekday())
+        per_week[monday] = per_week.get(monday, 0) + 1
+    this_monday = day - timedelta(days=day.weekday())
+    this_week = per_week.get(this_monday, 0)
+    left = max(goal - this_week, 0)
+    # Days still open in the week: the rest of it, and today too unless it's already counted
+    days_left = 6 - day.weekday() + (0 if day in days else 1)
+    streak = 1 if this_week >= goal else 0
+    monday = this_monday - timedelta(days=7)
+    while per_week.get(monday, 0) >= goal:
+        streak += 1
+        monday -= timedelta(days=7)
+    first = min(per_week, default=this_monday)
+    history = []
+    monday = this_monday
+    while monday >= first and len(history) < weeks:
+        count = per_week.get(monday, 0)
+        history.append(GymWeek(monday, count, count >= goal))
+        monday -= timedelta(days=7)
+    return GymGoal(goal, this_week, left, days_left, left <= days_left, streak, history)

@@ -1213,6 +1213,27 @@ def set_body_goals(conn: sqlite3.Connection, values: Mapping[str, float | None])
     return get_body_goals(conn)
 
 
+def get_gym_goal(conn: sqlite3.Connection) -> int | None:
+    """How many days a week the user means to train, 1 to 7; None when not set."""
+    row = conn.execute(
+        "SELECT gym_days_goal FROM targets WHERE user_id = ?", (user_of(conn),)
+    ).fetchone()
+    return row["gym_days_goal"] if row else None
+
+
+def set_gym_goal(conn: sqlite3.Connection, days: int | None) -> int | None:
+    """Set the weekly gym-day goal (None clears it); the other goals stay as they are."""
+    if days is not None and not 1 <= days <= 7:
+        raise ValueError("a gym-day goal is 1 to 7 days a week")
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO targets (user_id, gym_days_goal) VALUES (?, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET gym_days_goal = excluded.gym_days_goal",
+            (user_of(conn), days),
+        )
+    return get_gym_goal(conn)
+
+
 # --- Undo (dashboard edits) -----------------------------------------------------------------
 
 # The columns an undo restores, per table. Foods only ever change name from the dashboard.
@@ -1722,6 +1743,17 @@ def workouts_summary(conn: sqlite3.Connection) -> sqlite3.Row:
         "SELECT count(*) AS count, max(started_at) AS latest FROM workouts WHERE user_id = ?",
         (user_of(conn),),
     ).fetchone()
+
+
+def workout_starts(conn: sqlite3.Connection, before: str) -> list[str]:
+    """When each of the user's workouts before a UTC time started (UTC), for gym days."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT started_at FROM workouts WHERE user_id = ? AND started_at < ?",
+            (user_of(conn), before),
+        )
+    ]
 
 
 def get_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:

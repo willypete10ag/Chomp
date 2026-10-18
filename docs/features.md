@@ -23,6 +23,9 @@
 - **Log and edit:** Add food in servings or grams with your portions as chips; change, move
   or delete entries; rename, retime, combine or delete meals. Every change has Undo.
 - **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
+- **Gym days:** a goal for how many days a week you train (You > Gym days, or tell Claude).
+  Any day with a workout counts; Training shows this week against it, how many more you need,
+  your streak of weeks that hit it and past weeks, and Today's Training tile shows the count.
 - **Progress:** Nutrition, Weight, Activity and Training, each over today, 7 or 30 days, 6 months, a
   year or all time, with averages and charts.
 - **Log (+):** the button in the middle of the tab bar logs food, scans a barcode, logs a
