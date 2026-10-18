@@ -346,7 +346,10 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   sum of its parts, whichever was sent last (`updated_at`, bumped on every send, changed or
   not), so switching between the two never adds them up. One reading per person, metric,
   period and bucket start: the phone resends today's growing total and it replaces the last
-  one. Averages leave out today, which isn't over.
+  one. A day that is over keeps the larger of the phone's totals for it (the route passes
+  the start of today to `store.add_activity`), since each Shortcut run resends the last week
+  and its first day can be cut short; a day the history import brought in takes the
+  phone's figure either way. Averages leave out today, which isn't over.
   Burned is active + resting, only when both arrived; the dashboard shows only that one
   number (calories burned), not the two parts. The numbers are Apple Health's.
 - Health ingest (#94, decided on #101, `chomp/health.py`): Apple Health has no web API, so the
@@ -363,7 +366,10 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   as the Health samples themselves, one per line (`"9,898 count\n0 count"`, or `"9.898"`
   where the region writes numbers that way): activity lines are added up (grouping by day
   adds an empty tomorrow), weight takes the first (latest), and a unit in the text wins
-  over the field name's. Bad readings are skipped and reported; metrics Chomp doesn't keep
+  over the field name's. An activity field with a matching `<field>_dates` (`steps_dates`)
+  holds several days: the samples grouped by day and their Start Dates line for line (ISO
+  8601, or the phone's "Oct 17, 2026 at 12:00 AM"), each line that day's total; days after
+  today are left out. Bad readings are skipped and reported; metrics Chomp doesn't keep
   are counted under `ignored`. The reply gives added, updated and unchanged counts for
   weights and activity, and echoes the flat fields as they arrived under `received`.
 - History from Apple Health's own export (`chomp/health_export.py`): Health > your picture >

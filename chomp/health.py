@@ -17,17 +17,24 @@ These payload shapes are accepted:
                            "weight_date": "2026-10-13T07:02:11-04:00"}
                          (a flat field may also be the Health samples as text, one per line:
                            "9,898 count\n0 count" adds up to 9898 steps)
+    Several days:        {"steps": "8,000 count\n9,898 count", "steps_dates":
+                           "2026-10-12T00:00:00-04:00\n2026-10-13T00:00:00-04:00"}
+                         (a flat activity field with "<field>_dates": samples grouped by day
+                           and their Start Dates, line for line; replaces "date")
 
 Weight is kept per weigh-in. Activity (steps, active and resting energy, walking + running
 distance, exercise minutes, flights) is kept per time bucket: Health Auto Export with Summarize
 Data sends one reading per day (or hour) of the metric, and a simple date with no time is that
-day's total. Readings are de-duplicated by person, metric, bucket size (a day or part of
+day's total. A day that is over keeps the larger of the totals the phone sent for it, so the
+Shortcut can resend the last week every run without a cut-short first day undoing it.
+Readings are de-duplicated by person, metric, bucket size (a day or part of
 one) and time, so the phone may resend overlapping windows. Metrics Chomp doesn't keep are
 counted and ignored.
 """
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import json
 import logging
@@ -52,7 +59,7 @@ PATH = "/ingest/health"
 TOKEN_PREFIX = "chomp_ingest_"
 MAX_BODY = 10 * 1024 * 1024  # a long history backfill is still well under this
 MAX_PROBLEMS = 5
-MAX_ECHO = 80
+MAX_ECHO = 400  # a week of samples, one per line
 # Health Auto Export calls weight "weight_&_body_mass"; names are compared without punctuation
 WEIGHT_METRICS = {"weight_body_mass", "weight", "body_mass"}
 # Health Auto Export's names (and the simple shape's keys) for the activity Chomp keeps
@@ -294,6 +301,70 @@ def _flat_amount(value: Any, *, first: bool) -> dict[str, Any]:
     return {"value": total} | ({"unit": units.pop()} if units else {})
 
 
+# A day as a Shortcut writes a Health sample's Start Date: ISO 8601 ("2026-10-17",
+# "2026-10-17T00:00:00-04:00"), or the phone's medium style ("Oct 17, 2026 at 12:00 AM",
+# "17 Oct 2026 at 00:00")
+LONG_DAY = re.compile(r"([a-z]{3,9})\.? (\d{1,2}), (\d{4})\b", re.IGNORECASE)
+DAY_FIRST = re.compile(r"(\d{1,2}) ([a-z]{3,9})\.? (\d{4})\b", re.IGNORECASE)
+MONTHS = {m: i for i, m in enumerate(calendar.month_abbr) if m}
+
+
+def _dates_field(payload: dict, key: str) -> tuple[str, Any] | None:
+    """A flat activity field's per-day dates ("steps_dates"), as (name, value), or None."""
+    for name, value in payload.items():
+        if metric_key(str(name)) == key + "_dates" and not _blank(value):
+            if isinstance(value, list):
+                value = "\n".join(str(v) for v in value)
+            return str(name), value
+    return None
+
+
+def _sample_day(text: str) -> date:
+    """The day a Health sample's Start Date names, as the phone wrote it (the phone's day,
+    which is how Health grouped the samples)."""
+    text = text.strip()
+    try:
+        if match := DAY_RE.match(text):
+            return date.fromisoformat(match[0])
+        if (match := LONG_DAY.match(text)) and (month := MONTHS.get(match[1][:3].title())):
+            return date(int(match[3]), month, int(match[2]))
+        if (match := DAY_FIRST.match(text)) and (month := MONTHS.get(match[2][:3].title())):
+            return date(int(match[3]), month, int(match[1]))
+    except ValueError:
+        pass
+    raise ValueError(f"not a date: {text[:40]!r} (use ISO 8601)")
+
+
+def _flat_days(
+    parsed: Parsed, metric: str, unit: str | None, values: Any, dates: Any, tz: str
+) -> None:
+    """A Shortcut's several days of one metric: Health samples grouped by day, one per line,
+    with their Start Dates one per line in "<field>_dates". Lines on the same day add up, and
+    a day after today (grouping by day adds an empty one for tomorrow) is left out."""
+    lines = [v.strip() for v in str(values).splitlines() if v.strip()]
+    days = [d for d in str(dates).splitlines() if d.strip()]
+    if len(lines) != len(days):
+        parsed.reject(f"{metric}: {len(lines)} values but {len(days)} dates")
+        return
+    today = logic.parse_local_date(None, tz)
+    totals: dict[date, float] = {}
+    for line, day_text in zip(lines, days, strict=True):
+        try:
+            day = _sample_day(day_text)
+            amount = _flat_amount(line, first=True)
+            qty = logic.to_activity(metric, amount["value"], amount.get("unit", unit))
+        except ValueError as e:
+            parsed.reject(f"{metric}: {e}")
+            continue
+        if day <= today:
+            totals[day] = totals.get(day, 0.0) + qty
+    for day, qty in totals.items():
+        if qty > logic.ACTIVITY_MAX[metric]:
+            parsed.reject(f"{metric}: {qty:g} is too much for one day")
+            continue
+        parsed.activity[(metric, "day", logic.local_day_bounds(day, tz)[0])] = qty
+
+
 def _items(value: Any) -> list:
     if isinstance(value, list):
         return value
@@ -355,6 +426,11 @@ def parse(payload: Any, tz: str) -> Parsed:
                         parsed.reject(f"weight: {e}")
                     else:
                         _weight(parsed, item, None, tz)
+                elif (dates := _dates_field(payload, key)) is not None:
+                    parsed.received[dates[0]] = (
+                        dates[1][:MAX_ECHO] if isinstance(dates[1], str) else dates[1]
+                    )
+                    _flat_days(parsed, *FLAT_ACTIVITY[key], value, dates[1], tz)
                 else:
                     metric, unit = FLAT_ACTIVITY[key]
                     item = {"date": payload.get("date"), "unit": unit}
@@ -410,8 +486,11 @@ def add_routes(server: MCPServer, settings: Settings) -> None:
             return _error(str(e) if isinstance(e, PayloadError) else "body is not JSON", 400)
         with closing(db.connect(settings.db_path, user_id)) as conn:
             weights = store.add_weights(conn, parsed.weights.items(), "health")
+            today = logic.local_day_bounds(logic.parse_local_date(None, settings.tz), settings.tz)
             activity = store.add_activity(
-                conn, ((*key, qty) for key, qty in parsed.activity.items())
+                conn,
+                ((*key, qty) for key, qty in parsed.activity.items()),
+                finished_before=today[0],
             )
         log.info(
             "ingest for user %d: weights %d added, %d updated, %d unchanged;"

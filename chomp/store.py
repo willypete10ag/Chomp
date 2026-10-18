@@ -1764,20 +1764,25 @@ def delete_workout(conn: sqlite3.Connection, workout_id: int) -> sqlite3.Row:
 
 
 def add_activity(
-    conn: sqlite3.Connection, readings: Iterable[tuple[str, str, str, float]]
+    conn: sqlite3.Connection,
+    readings: Iterable[tuple[str, str, str, float]],
+    finished_before: str | None = None,
 ) -> ImportCounts:
     """Save (metric, period, UTC start_at, qty) activity readings for the connection's user;
     period is "day" for a whole day's total, "part" for an hour or so. The phone resends a
     bucket as it fills up (today's steps so far), so a reading for a bucket already saved
-    replaces it. Every reading sent is marked as just sent, changed or not, which dates the
-    phone's last send and picks between a day's whole total and its parts."""
+    replaces it. A day starting before `finished_before` (UTC start of today) is over and
+    only grows: a smaller total for it than the phone sent before is a partial one (a
+    Shortcut's "last 7 days" starts partway into its first day) and is not saved. Every
+    reading sent is marked as just sent, changed or not, which dates the phone's last send
+    and picks between a day's whole total and its parts."""
     user_id = user_of(conn)
     counts = ImportCounts()
     with transaction(conn):
         for metric, period, start_at, qty in readings:
             row = conn.execute(
-                "SELECT id, qty FROM activity WHERE user_id = ? AND metric = ? AND period = ?"
-                " AND start_at = ?",
+                "SELECT id, qty, source FROM activity WHERE user_id = ? AND metric = ?"
+                " AND period = ? AND start_at = ?",
                 (user_id, metric, period, start_at),
             ).fetchone()
             if row is None:
@@ -1788,6 +1793,9 @@ def add_activity(
                 )
                 counts.added += 1
                 continue
+            over = finished_before is not None and start_at < finished_before
+            if over and period == "day" and row["source"] == "phone" and qty < row["qty"]:
+                qty = row["qty"]
             if abs(row["qty"] - qty) > 1e-6:
                 counts.updated += 1
             else:

@@ -254,6 +254,48 @@ def test_flat_fields_read_health_samples_inserted_as_text():
     ]
 
 
+def test_flat_fields_with_dates_send_several_days():
+    # A Shortcut finding the last 7 days grouped by day sends each field's samples one per
+    # line and their Start Dates, in the same order, in "<field>_dates"
+    days = [local_day(n) for n in (2, 1, 0, -1)]  # ...and grouping adds tomorrow
+    parsed = health.parse(
+        {
+            "steps": "8,000 count\n9,898 count\n1,200 count\n0 count",
+            "steps_dates": "\n".join(logic.local_iso(midnight(n), TZ) for n in (2, 1, 0, -1)),
+            "active_kcal": "400 Cal\n500 Cal",
+            "active_kcal_dates": [f"{d:%b} {d.day}, {d.year} at 12:00\u202fAM" for d in days[:2]],
+            "flights": [3, 4],
+            "flights_dates": [str(days[0]), str(days[0])],  # ungrouped: the day adds up
+        },
+        TZ,
+    )
+    assert parsed.activity == {
+        ("steps", "day", midnight(2)): 8000,
+        ("steps", "day", midnight(1)): 9898,
+        ("steps", "day", midnight(0)): 1200,
+        ("active_kcal", "day", midnight(2)): 400,
+        ("active_kcal", "day", midnight(1)): 500,
+        ("flights", "day", midnight(2)): 7,
+    }
+    assert parsed.rejected == 0
+    for text in ("17 Oct 2026 at 00:00", "October 17, 2026", "2026-10-17 00:00:00 -0400"):
+        assert health._sample_day(text) == date(2026, 10, 17), text
+    assert parsed.received["steps_dates"].startswith(str(days[0]))
+    bad = health.parse(
+        {
+            "steps": "1\n2",
+            "steps_dates": "2026-10-13",
+            "flights": "3",
+            "flights_dates": "Tuesday",
+        },
+        TZ,
+    )
+    assert bad.activity == {} and bad.problems == [
+        "steps: 2 values but 1 dates",
+        "flights: not a date: 'Tuesday' (use ISO 8601)",
+    ]
+
+
 def test_bad_activity_readings_are_rejected_not_fatal():
     parsed = health.parse(
         {
@@ -318,6 +360,27 @@ def test_ingest_saves_activity_and_replaces_a_filling_bucket(ingest, conn):
     r = ingest.post(health.PATH, json={"date": "2026-10-13", "flights": 3}, headers=auth)
     assert r.json()["activity"]["added"] == 1
     assert r.json()["received"] == {"date": "2026-10-13", "flights": 3}
+
+
+def test_ingest_keeps_a_finished_days_larger_total(ingest, conn):
+    """Each run resends the last week; a day that is over keeps its larger total, since a
+    smaller one is the first day of the week cut short. Today is replaced as it fills."""
+    token = health.new_token(conn, users.OWNER_ID)
+    auth = {"Authorization": f"Bearer {token}"}
+    dates = f"{local_day(1)}\n{local_day(0)}"
+    ingest.post(health.PATH, json={"steps": "9000\n500", "steps_dates": dates}, headers=auth)
+    r = ingest.post(health.PATH, json={"steps": "6000\n400", "steps_dates": dates}, headers=auth)
+    assert r.json()["activity"] == {"added": 0, "updated": 1, "unchanged": 1}
+    r = ingest.post(health.PATH, json={"steps": "9500\n800", "steps_dates": dates}, headers=auth)
+    assert r.json()["activity"] == {"added": 0, "updated": 2, "unchanged": 0}
+    rows = store.activity_between(conn, midnight(1), midnight(-1))
+    assert [r["qty"] for r in rows] == [9500, 800]
+    # A day the history import brought in takes the phone's figure, smaller or not
+    store.import_activity_days(conn, [("flights", midnight(3), midnight(2), 12)])
+    r = ingest.post(
+        health.PATH, json={"flights": "10", "flights_dates": str(local_day(3))}, headers=auth
+    )
+    assert r.json()["activity"]["updated"] == 1
 
 
 # --- tool -----------------------------------------------------------------------------------
