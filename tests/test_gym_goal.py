@@ -105,6 +105,8 @@ def test_set_on_you_and_tracked_on_training_and_today(http, conn):
     assert r.status_code == 400
     assert http.post("/app/you/gym-goal", data={"days": "5"}).status_code == 403
 
+    page = http.get("/app/progress/training").text
+    assert "<b>0</b> of 6 this week" in page and "No workouts yet." in page
     add_workouts(conn, [0])
     page = http.get("/app/progress/training").text
     assert "Gym days" in page and "<b>1</b> of 6 this week" in page and "This week" in page

@@ -131,7 +131,7 @@ def test_json_holds_everything(conn, logged):
     assert first["entries"][0]["estimated"] is False
     assert data["meal_templates"][0]["name"] == "usual breakfast"
     assert len(data["meal_templates"][0]["items"]) == 2
-    assert data["targets"]["protein_g"] == 180
+    assert data["targets"]["protein_g"] == 180 and data["targets"]["gym_days_goal"] is None
     assert data["weights"] == []
 
 

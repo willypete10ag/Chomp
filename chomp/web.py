@@ -7493,6 +7493,8 @@ def add_routes(
                     f"latest workout {short_date(logic.local_date(summary['latest'], tz), last)}",
                 )
             )
+        with connect(request) as conn:
+            parts.append(gym_card(gym_progress(conn, last), last))
         if not summary["count"]:
             parts.append(
                 '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
@@ -7513,8 +7515,6 @@ def add_routes(
             ]
             return sum(spans) / len(spans) if spans else None
 
-        with connect(request) as conn:
-            parts.append(gym_card(gym_progress(conn, today()), today()))
         days = logic.date_range(first, last)
         weeks = max(len(days) / 7, 1)
         prior = bool(prev)
