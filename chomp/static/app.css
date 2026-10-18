@@ -1317,6 +1317,9 @@ details.opt > form { padding: 0 1rem 1rem; margin: 0; }
 .dest-menu a { display: block; padding: .7rem 1rem; color: var(--text); text-decoration: none; }
 .dest-menu a + a { border-top: 1px solid var(--line); }
 .dest-menu a[aria-current] { color: var(--accent); font-weight: 600; }
+.dest-day { display: flex; align-items: end; gap: .5rem; padding: .7rem 1rem; border-top: 1px solid var(--line); }
+.dest-day label { flex: 1; }
+.dest-day button { width: auto; }
 .logsearch { position: relative; margin: 0 0 .75rem; }
 .logsearch input { padding-left: 2.6rem; padding-right: 3rem; min-height: 3rem; border-radius: 999px; }
 .logsearch .field-icon { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: var(--muted); display: flex; pointer-events: none; }

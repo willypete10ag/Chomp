@@ -39,6 +39,16 @@ def test_food_log_sheet_starts_at_one_serving_and_logs(http, conn):
     assert '<h2 id="food-log-title">Log Rolled oats</h2>' in sheet
     assert 'name="by" value="servings" checked' in sheet and 'value="1"' in sheet
     assert 'action="/app/log"' in sheet and "A new meal" in sheet
+    assert 'type="date" name="date"' in sheet and "To today" not in sheet
+
+
+def test_food_log_sheet_picks_another_day(http, conn):
+    oats = add_food(conn, "Rolled oats", 380, 13, 68, 7, verified=1)
+    sign_in(http)
+    sheet = http.get(f"/app/foods/{oats}/log", params={"part": "1", "date": "2026-10-01"}).text
+    assert 'type="date" name="date" value="2026-10-01"' in sheet and 'value="12:00"' in sheet
+    sheet = http.get(f"/app/foods/{oats}/log", params={"part": "1", "date": "2999-01-01"}).text
+    assert 'name="date" value="2999-01-01"' not in sheet  # a future date falls back to today
 
 
 def test_swiping_a_saved_meal_right_logs_it_now(http, conn):

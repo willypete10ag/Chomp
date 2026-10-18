@@ -1368,15 +1368,15 @@ def preview(per_100g: logic.Nutrients, grams: float, ctx: DayContext | None, bas
         total = base + n["kcal"]
         goal = f" of {num(ctx.goal)}" if ctx.goal else ""
         warn = ' class="warn"' if ctx.goal and total > ctx.goal else ""
+        # Only true for that day, so the script hides it while another date is picked
         day = (
-            f'<span class="muted">{e(day_title(ctx.day, ctx.today))} after this:'
+            f'<span class="muted" data-today="{ctx.day.isoformat()}"><br>'
+            f"{e(day_title(ctx.day, ctx.today))} after this:"
             f" <span data-day{warn}>{num(total)}{goal} kcal</span></span>"
         )
     return (
         f'<p class="preview small" aria-live="polite"><span class="kcal">'
-        f'<span data-n="kcal">{num(n["kcal"])}</span>{NBSP}kcal</span> {macros}'
-        + (f"<br>{day}" if day else "")
-        + "</p>"
+        f'<span data-n="kcal">{num(n["kcal"])}</span>{NBSP}kcal</span> {macros}' + day + "</p>"
     )
 
 
@@ -2314,8 +2314,9 @@ def pick_item(
     meta.append("per 100 g")
     where = (
         f'<input type="hidden" name="meal" value="{meal_id}">'
+        f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         if meal_id is not None
-        else meal_menu(ctx, None, "Add to", default_time, with_name=True)
+        else meal_menu(ctx, None, "Add to", default_time, with_name=True, with_date=True)
     )
     again = ""
     if quick:
@@ -2351,7 +2352,6 @@ def pick_item(
         f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
         f'<input type="hidden" name="food_id" value="{row["id"]}">'
         f'<input type="hidden" name="estimated" value="{int(estimated)}">'
-        f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         f'<input type="hidden" name="q" value="{e(q)}">'
         + (f'<p class="muted small">{e(row["name"])}</p>' if len(row["name"]) > LONG_NAME else "")
         + amount_picker(row, grams, slider_top(grams, row["serving_g"]))
@@ -2432,8 +2432,9 @@ def template_pick(t, items, ctx: DayContext, meal_id: int | None, default_time: 
     )
     where = (
         f'<input type="hidden" name="meal" value="{meal_id}">'
+        f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         if meal_id is not None
-        else meal_menu(ctx, None, "Add to", default_time)
+        else meal_menu(ctx, None, "Add to", default_time, with_date=True)
     )
     after = ctx.kcal + totals["kcal"]
     goal = f" of {num(ctx.goal)}" if ctx.goal else ""
@@ -2445,10 +2446,9 @@ def template_pick(t, items, ctx: DayContext, meal_id: int | None, default_time: 
         f"<span>{macros_line(totals)}</span></div></summary>"
         f'<form class="stack edit" method="post" action="{PREFIX}/log-template">'
         f'<ul class="plain">{lis}</ul>'
-        f'<p class="preview small muted">{e(day_title(ctx.day, ctx.today))} after this:'
-        f" {num(after)}{goal} kcal</p>"
+        f'<p class="preview small muted" data-today="{ctx.day.isoformat()}">'
+        f"{e(day_title(ctx.day, ctx.today))} after this: {num(after)}{goal} kcal</p>"
         f'<input type="hidden" name="template_id" value="{t["id"]}">'
-        f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
         + where
         + '<button type="submit">Log this meal</button></form></details></li>'
     )
@@ -3696,10 +3696,20 @@ def add_routes(
         )
         dest_title = meal_title(meal) if meal is not None else new_meal
         when = "" if day == ctx.today else f"{day_title(day, ctx.today)} · "
+        # Or another day: the sheet reloads on it, with that day's meals to pick from
+        other_day = (
+            f'<form class="dest-day" method="get" action="{PREFIX}/add">'
+            + (f'<input type="hidden" name="view" value="{e(view)}">' if view and not q else "")
+            + (f'<input type="hidden" name="q" value="{e(q)}">' if q else "")
+            + f'<label>Another day<input type="date" name="date" value="{day.isoformat()}"'
+            f' max="{ctx.today.isoformat()}" required></label>'
+            '<button type="submit">Go</button></form>'
+        )
         dest = (
             f'<details class="dest"><summary class="chip">{icon("utensils")}'
             f'<span>{e(when)}{e(dest_title)}</span><span aria-hidden="true">&#9662;</span>'
-            f'</summary><nav class="dest-menu" aria-label="Log to">{menu}</nav></details>'
+            f'</summary><nav class="dest-menu" aria-label="Log to">{menu}{other_day}</nav>'
+            "</details>"
         )
         hidden = (
             f'<input type="hidden" name="date" value="{day.isoformat()}">'
@@ -5069,12 +5079,14 @@ def add_routes(
     async def food_log(request: Request) -> Response:
         """Log it (#105), from a food's or recipe's page or its … menu: the amount (servings
         when it has a serving size), a live preview, and a new meal now or a meal already
-        logged today."""
+        logged that day. ?date= starts it on a past day; its Date box picks another (up to
+        today)."""
         if not signed_in(request):
             return to_login(request)
         food_id = request.path_params["food_id"]
         back = came_from(request, food_url(food_id, f"{PREFIX}/foods"))
-        day = today()
+        now = today()
+        day = optional_day(request.query_params.get("date")) or now
         with connect(request) as conn:
             try:
                 food = store.get_food(conn, food_id, live=True)
@@ -5087,23 +5099,19 @@ def add_routes(
         serving = food["serving_g"]
         grams = serving or last or 100.0
         estimated = bool(not serving and last and estimated)
-        now_local = datetime.now(ZoneInfo(tz))
+        default_time = datetime.now(ZoneInfo(tz)).strftime("%H:%M") if day == now else "12:00"
         form = (
             f'<form class="stack edit" method="post" action="{PREFIX}/log"'
             f' data-per100="{per100_attr(per_100g)}"{day_attrs(ctx, ctx.kcal)}>'
             f'<input type="hidden" name="food_id" value="{food["id"]}">'
-            f'<input type="hidden" name="date" value="{day.isoformat()}">'
             f'<input type="hidden" name="estimated" value="{int(estimated)}">'
             + amount_picker(food, grams, slider_top(grams, serving))
             + grams_chips(food, portions, None if serving else last)
             + preview(per_100g, grams, ctx, ctx.kcal)
-            + meal_menu(ctx, None, "Add to", now_local.strftime("%H:%M"), with_name=True)
+            + meal_menu(ctx, None, "Add to", default_time, with_name=True, with_date=True)
             + '<button type="submit">Log it</button></form>'
         )
-        sheet = (
-            f'<h2 id="food-log-title">Log {e(food["name"])}</h2>'
-            f'<p class="sheet-sub muted small">To today</p>{form}'
-        )
+        sheet = f'<h2 id="food-log-title">Log {e(food["name"])}</h2>{form}'
         return sheet_or_page(request, f"Log {food['name']}", sheet, back, "foods")
 
     @server.custom_route(f"{PREFIX}/foods/sort", methods=["GET"])
