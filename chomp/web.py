@@ -1387,6 +1387,15 @@ def day_attrs(ctx: DayContext | None, base: float) -> str:
     return f' data-base="{round(base, 1)}"{goal}'
 
 
+DAY_MEALS = f"{PREFIX}/day-meals"
+
+
+def meal_options(meals: list[tuple[int, str]], exclude: int | None = None) -> str:
+    return "".join(
+        f'<option value="{mid}">{e(title)}</option>' for mid, title in meals if mid != exclude
+    )
+
+
 def meal_menu(
     ctx: DayContext,
     exclude: int | None,
@@ -1396,11 +1405,10 @@ def meal_menu(
     with_name: bool = False,
     with_date: bool = False,
 ) -> str:
-    """'Add to' / 'Move to': another meal that day, or a new meal at a time (and name, and
-    with_date another day up to today)."""
-    options = "".join(
-        f'<option value="{mid}">{e(title)}</option>' for mid, title in ctx.meals if mid != exclude
-    )
+    """'Add to' / 'Move to': another meal that day, or a new meal at a time (and name).
+    with_date puts a Date box (up to today) first; picking a day refills the menu with that
+    day's meals (the script asks DAY_MEALS)."""
+    options = meal_options(ctx.meals, exclude)
     name = (
         f'<label>Meal name<input name="label" maxlength="{LABEL_MAX}"'
         ' placeholder="Optional, like Post-workout"></label>'
@@ -1408,13 +1416,14 @@ def meal_menu(
         else ""
     )
     when = f'<label>Time<input type="time" name="time" value="{time}"></label>'
-    if with_date:
-        when = (
-            f'<div class="pair">{when}<label>Date<input type="date" name="date"'
-            f' value="{ctx.day.isoformat()}" max="{ctx.today.isoformat()}"></label></div>'
-        )
+    day = (
+        f'<label>Date<input type="date" name="date" value="{ctx.day.isoformat()}"'
+        f' max="{ctx.today.isoformat()}" data-day-meals="{DAY_MEALS}"></label>'
+        if with_date
+        else ""
+    )
     return (
-        f'<label>{prompt}<select name="to" data-new-meal>'
+        f'{day}<label>{prompt}<select name="to" data-new-meal>'
         f'<option value="new">A new meal</option>{options}</select></label>'
         f'<div class="new-meal">{when}{name}</div>'
     )
@@ -3846,6 +3855,21 @@ def add_routes(
             user=account(request),
             log_date=day if day != today() else None,
         )
+
+    @server.custom_route(DAY_MEALS, methods=["GET"])
+    async def day_meals(request: Request) -> Response:
+        """A day's meals as <option>s, for an Add to menu whose Date box changed."""
+        if not signed_in(request):
+            return HTMLResponse("", status_code=401, headers=SECURITY_HEADERS)
+        try:
+            day = parse_day(request.query_params.get("date"))
+        except ValueError:
+            return HTMLResponse("", status_code=400, headers=SECURITY_HEADERS)
+        start, end = logic.local_day_bounds(day, tz)
+        with connect(request) as conn:
+            meals = store.meals_between(conn, start, end)
+        options = meal_options([(m["id"], meal_title(m)) for m in meals])
+        return HTMLResponse(options, headers=SECURITY_HEADERS)
 
     @server.custom_route(f"{PREFIX}/log", methods=["POST"])
     async def log_food(request: Request) -> Response:

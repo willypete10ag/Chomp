@@ -617,7 +617,7 @@ def test_log_food_to_another_day_from_the_log_sheet(http, conn, logged):
     day = (logic.parse_local_date(None, TZ) - timedelta(days=3)).isoformat()
     text = http.get("/app/add", params={"date": today(), "q": "egg"}).text
     # each food's new meal has its own Date box, and the dest menu jumps to another day
-    assert f'<input type="date" name="date" value="{today()}" max="{today()}">' in text
+    assert f'name="date" value="{today()}" max="{today()}" data-day-meals="/app/day-meals"' in text
     assert 'class="dest-day" method="get" action="/app/add"' in text
     assert f'data-today="{today()}"' in text  # "Today after this" hides on another date
     r = http.post(
@@ -631,3 +631,15 @@ def test_log_food_to_another_day_from_the_log_sheet(http, conn, logged):
     # the dest menu's day loads that day's Log sheet, keeping the search
     text = http.get("/app/add", params={"date": day, "q": "egg"}).text
     assert f'value="{day}" max="{today()}"' in text and 'name="q" value="egg"' in text
+
+
+def test_day_meals_lists_a_days_meals_for_the_add_to_menu(http, conn, logged):
+    _, _, entries = logged
+    meal = entries[0].meal_id
+    assert http.get("/app/day-meals", params={"date": today()}).status_code == 401
+    sign_in(http)
+    options = http.get("/app/day-meals", params={"date": today()}).text
+    assert options.startswith(f'<option value="{meal}">') and "Breakfast" in options
+    day = (logic.parse_local_date(None, TZ) - timedelta(days=3)).isoformat()
+    assert http.get("/app/day-meals", params={"date": day}).text == ""
+    assert http.get("/app/day-meals", params={"date": "2999-01-01"}).status_code == 400
