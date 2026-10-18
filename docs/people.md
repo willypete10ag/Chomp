@@ -98,7 +98,7 @@ their Health data as it is.
 
 ## Part 5. Them: bring in their past Health data (optional)
 
-The Shortcut sends today from now on. For everything before:
+The Shortcut sends the last week each time it runs, from now on. For everything before:
 
 1. In the **Health** app, tap their picture (top right) › **Export All Health Data** ›
    **Export**, then **Save to Files**. It takes a minute or two.
@@ -143,7 +143,7 @@ of URL*. Run it and read the answer:
   them. Check Health permissions: **Settings › Privacy & Security › Health › Shortcuts**, and
   turn everything on (a "Don't Allow" on one type leaves that field empty). Also check nobody
   added a filter to the Find Health Samples actions; the Steps one should just be *Type is
-  Steps*, *Start Date is today*, *Group By Day*.
+  Steps*, *Start Date is in the last 7 days*, *Group By Day*.
 - **Active calories equal steps**: a field points at the wrong action. In **Get Contents of
   URL**, check each row's blue bubble is the right one.
 
