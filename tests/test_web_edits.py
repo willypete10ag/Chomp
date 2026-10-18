@@ -609,3 +609,25 @@ def test_script_is_served_and_versioned(http):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
     assert "data-amount" in r.text
     assert len(web.JS_VERSION) == 10
+
+
+def test_log_food_to_another_day_from_the_log_sheet(http, conn, logged):
+    _, whites, _ = logged
+    sign_in(http)
+    day = (logic.parse_local_date(None, TZ) - timedelta(days=3)).isoformat()
+    text = http.get("/app/add", params={"date": today(), "q": "egg"}).text
+    # each food's new meal has its own Date box, and the dest menu jumps to another day
+    assert f'<input type="date" name="date" value="{today()}" max="{today()}">' in text
+    assert 'class="dest-day" method="get" action="/app/add"' in text
+    assert f'data-today="{today()}"' in text  # "Today after this" hides on another date
+    r = http.post(
+        "/app/log",
+        data={"food_id": whites, "grams": "100", "date": day, "to": "new", "time": "19:00"},
+        headers=ORIGIN,
+    )
+    assert r.status_code == 303 and f"date={day}" in r.headers["location"]
+    meal = conn.execute("SELECT eaten_at FROM meals ORDER BY id DESC").fetchone()
+    assert logic.local_iso(meal["eaten_at"], TZ)[:16] == f"{day}T19:00"
+    # the dest menu's day loads that day's Log sheet, keeping the search
+    text = http.get("/app/add", params={"date": day, "q": "egg"}).text
+    assert f'value="{day}" max="{today()}"' in text and 'name="q" value="egg"' in text
