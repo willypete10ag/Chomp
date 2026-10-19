@@ -305,6 +305,34 @@
       select.addEventListener("change", sync);
       sync();
     });
+    // A Date box above Add to: the menu lists the meals of the day picked
+    root.querySelectorAll("input[data-day-meals]").forEach(function (date) {
+      var select = date.form.querySelector("select[data-new-meal]");
+      if (!select || !window.fetch) return;
+      var asked = 0;
+      date.addEventListener("change", function () {
+        // The old day's meals go at once: a meal picked there would ignore the new date
+        while (select.options.length > 1) select.remove(1);
+        select.value = "new";
+        select.dispatchEvent(new Event("change"));
+        if (!date.value) return;
+        var mine = ++asked;
+        fetch(date.dataset.dayMeals + "?date=" + encodeURIComponent(date.value), {
+          credentials: "same-origin",
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error(r.status);
+            return r.text();
+          })
+          .then(function (html) {
+            if (mine !== asked || select.value !== "new") return;
+            select.insertAdjacentHTML("beforeend", html);
+          })
+          .catch(function () {
+            // only A new meal is left, which goes to the date picked
+          });
+      });
+    });
 
     root.querySelectorAll("form").forEach(changed);
     root.querySelectorAll("form[data-live-results]").forEach(liveResults);

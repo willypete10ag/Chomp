@@ -158,7 +158,8 @@ link (`sheet_or_page`).
 
 It also works without Claude (#54): Log food (`/app/add`, a tall sheet: a chip picks a new
 meal at a time or one of the day's meals, or another day to log to; a new meal from a food,
-recipe or saved meal also has its own Date box, up to today; a live search as you type (prefix matching, USDA only
+recipe or saved meal also has its own Date box, up to today, and picking a day refills Add to
+with that day's meals (`/app/day-meals`); a live search as you type (prefix matching, USDA only
 on submit), and Recent / Frequent / Saved meals / Recipes pills; each food row has a + that logs
 it again at the amount it was last logged (`store.last_amounts`), or opens to pick an amount;
 search covers your foods, portions and saved meals, or
