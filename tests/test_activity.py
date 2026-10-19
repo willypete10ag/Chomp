@@ -296,6 +296,38 @@ def test_flat_fields_with_dates_send_several_days():
     ]
 
 
+def test_weight_with_dates_sends_several_days():
+    # The weight search set up like the activity ones (last 7 days, grouped by day, Fill
+    # Missing): a 0 is a day without a weigh-in, and grouping adds tomorrow
+    parsed = health.parse(
+        {
+            "weight_lb": "0 lb\n170.4 lb\n0 lb\n169.2 lb\n0 lb",
+            "weight_lb_dates": "\n".join(
+                f"{d:%b} {d.day}, {d.year} at 12:00\u202fAM"
+                for d in map(local_day, (3, 2, 1, 0, -1))
+            ),
+        },
+        TZ,
+    )
+    assert {t: logic.weight_out(kg)["lb"] for t, kg in parsed.weights.items()} == {
+        midnight(2): 170.4,
+        midnight(0): 169.2,
+    }
+    assert parsed.rejected == 0 and "weight_lb_dates" in parsed.received
+    # Ungrouped samples keep the time they were taken
+    timed = health.parse(
+        {
+            "weight_lb": "169.2 lb\n170.4",
+            "weight_lb_dates": "Oct 13, 2026 at 12:43\u202fPM\n2026-10-12T07:02:00-04:00",
+        },
+        TZ,
+    )
+    assert list(timed.weights) == ["2026-10-13T16:43:00Z", "2026-10-12T11:02:00Z"]
+    assert health._sample_time("13 Oct 2026 at 07:02", TZ) == "2026-10-13T11:02:00Z"
+    bad = health.parse({"weight_lb": "1\n2", "weight_lb_dates": "2026-10-13"}, TZ)
+    assert bad.weights == {} and bad.problems == ["weight: 2 values but 1 dates"]
+
+
 def test_bad_activity_readings_are_rejected_not_fatal():
     parsed = health.parse(
         {

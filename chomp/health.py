@@ -365,6 +365,54 @@ def _flat_days(
         parsed.activity[(metric, "day", logic.local_day_bounds(day, tz)[0])] = qty
 
 
+CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?m\.?)?", re.IGNORECASE)
+
+
+def _sample_time(text: str, tz: str) -> str:
+    """When a weigh-in's Start Date says it was taken: ISO 8601, or the phone's "Oct 17,
+    2026 at 7:02 AM" read in `tz`. A bare day (a sample grouped by day) is its midnight."""
+    try:
+        return parse_date(text, tz, day_ok=True)
+    except ValueError:
+        pass
+    day = _sample_day(text)
+    hour = minute = second = 0
+    if match := CLOCK.search(text[text.find(str(day.year)) + 4 :]):
+        hour, minute, second = int(match[1]), int(match[2]), int(match[3] or 0)
+        if match[4]:
+            if not 1 <= hour <= 12:
+                raise ValueError(f"not a time: {text[:40]!r}")
+            hour = hour % 12 + (12 if match[4][0].lower() == "p" else 0)
+    try:
+        local = datetime(day.year, day.month, day.day, hour, minute, second)
+    except ValueError as e:
+        raise ValueError(f"not a time: {text[:40]!r}") from e
+    return logic.parse_time(local.isoformat(), tz, field="date")
+
+
+def _flat_weights(parsed: Parsed, unit: str, values: Any, dates: Any, tz: str) -> None:
+    """A Shortcut's weigh-ins over several days: Health samples one per line, with their
+    Start Dates one per line in "weight_lb_dates". A 0 is a day with no weigh-in (Fill
+    Missing on a search grouped by day), and a day after today is left out."""
+    lines = [v.strip() for v in str(values).splitlines() if v.strip()]
+    days = [d for d in str(dates).splitlines() if d.strip()]
+    if len(lines) != len(days):
+        parsed.reject(f"weight: {len(lines)} values but {len(days)} dates")
+        return
+    today = logic.parse_local_date(None, tz)
+    for line, day_text in zip(lines, days, strict=True):
+        try:
+            amount = _flat_amount(line, first=True)
+            if amount["value"] == 0:
+                continue
+            if _sample_day(day_text) > today:
+                continue
+            kg = logic.to_kg(amount["value"], amount.get("unit", unit))
+            parsed.weights[_sample_time(day_text, tz)] = kg
+        except ValueError as e:
+            parsed.reject(f"weight: {e}")
+
+
 def _items(value: Any) -> list:
     if isinstance(value, list):
         return value
@@ -418,7 +466,12 @@ def parse(payload: Any, tz: str) -> Parsed:
                 if _blank(value):  # a Shortcut sends "" when Health has none today
                     found = True
                     continue
-                if key in FLAT_WEIGHT:
+                if key in FLAT_WEIGHT and (dates := _dates_field(payload, key)) is not None:
+                    parsed.received[dates[0]] = (
+                        dates[1][:MAX_ECHO] if isinstance(dates[1], str) else dates[1]
+                    )
+                    _flat_weights(parsed, FLAT_WEIGHT[key], value, dates[1], tz)
+                elif key in FLAT_WEIGHT:
                     item = {"date": payload.get("weight_date"), "unit": FLAT_WEIGHT[key]}
                     try:
                         item |= _flat_amount(value, first=True)
