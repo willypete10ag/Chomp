@@ -373,6 +373,7 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
   today are left out. Bad readings are skipped and reported; metrics Chomp doesn't keep
   are counted under `ignored`. The reply gives added, updated and unchanged counts for
   weights and activity, and echoes the flat fields as they arrived under `received`.
+  `weight_lb` with `weight_lb_dates` carries several days of weigh-ins (a 0 is a day without one).
 - History from Apple Health's own export (`chomp/health_export.py`): Health > your picture >
   Export All Health Data gives `export.zip` (`apple_health_export/export.xml`, one `<Record>`
   per sample, streamed with its inline DTD dropped). Weigh-ins (`HKQuantityTypeIdentifierBodyMass`)

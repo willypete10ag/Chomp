@@ -36,7 +36,8 @@ weight are enough to start; the rest are optional.
 1. **Find Health Samples**. Tap *Type* and pick *Weight*. Turn on *Sort by* *Start Date*,
    *Order* *Latest First*, and *Limit* on with *Get 1 Health Sample*. If Shortcuts added a
    filter *Start Date is in the last 7 days*, tap *days* and pick *years*, so a weigh-in from
-   more than a week ago is still found.
+   more than a week ago is still found. Leave out any *Source* filter: a smart scale writes
+   weight under its own app's name, not *Health*, so that filter finds nothing.
 2. **Format Date**. Shortcuts fills *Date* with the *Health Samples* from step 1; tap that
    bubble and choose *Start Date*. Tap *Date Format* and pick *ISO 8601*, then turn on
    *Include ISO 8601 Time*.
@@ -76,6 +77,7 @@ weight are enough to start; the rest are optional.
    | `active_kcal_dates` | the same, as its *Start Date* |
    | `weight_lb` | the *Health Samples* of step 1 (Weight) |
    | `weight_date` | the *Formatted Date* of step 2 |
+   | or `weight_lb_dates` | with step 1 set up like step 3 (last 7 days, no *Limit*): the same *Health Samples* as its *Start Date*, and `weight_date` isn't needed. Days without a weigh-in (0 with *Fill Missing*) are skipped, and grouped by day each day's weigh-in is stored at midnight |
    | `resting_kcal`, `resting_kcal_dates` | optional: Resting Energy |
    | `exercise_min`, `exercise_min_dates` | optional: Exercise Minutes |
    | `distance_mi`, `distance_mi_dates` | optional: Walking + Running Distance |
