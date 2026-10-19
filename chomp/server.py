@@ -469,11 +469,50 @@ class WorkoutOut(BaseModel):
     exercises: list[ExerciseOut]
 
 
+class GymWeekOut(BaseModel):
+    week_of: str = Field(description="The week's Monday, YYYY-MM-DD")
+    gym_days: int
+    met: bool
+
+
+class GymGoalOut(BaseModel):
+    goal_days_per_week: int
+    this_week: int = Field(description="Days with a workout this week (Monday to Sunday)")
+    days_needed: int = Field(description="More gym days this week to meet the goal; 0 when met")
+    days_left_in_week: int = Field(description="Days still open this week, today included")
+    reachable: bool = Field(description="Whether the days left can still meet the goal")
+    streak_weeks: int = Field(description="Weeks in a row that met the goal")
+    weeks: list[GymWeekOut] = Field(description="Up to 12 weeks, this week first")
+
+
 class WorkoutHistory(BaseModel):
     start: str
     end: str
     workouts: list[WorkoutOut] = Field(description="Newest first")
     total_workouts: int
+    gym_goal: GymGoalOut | None = Field(
+        None, description="The weekly gym-day goal as of the range's last day; null when unset"
+    )
+
+
+class GymGoalSet(BaseModel):
+    gym_goal: GymGoalOut | None = Field(description="This week's progress; null when removed")
+
+
+def _gym_goal(g: logic.GymGoal | None) -> GymGoalOut | None:
+    if g is None:
+        return None
+    return GymGoalOut(
+        goal_days_per_week=g.goal,
+        this_week=g.this_week,
+        days_needed=g.left,
+        days_left_in_week=g.days_left,
+        reachable=g.reachable,
+        streak_weeks=g.streak,
+        weeks=[
+            GymWeekOut(week_of=w.monday.isoformat(), gym_days=w.days, met=w.met) for w in g.weeks
+        ],
+    )
 
 
 class ActivityAmounts(BaseModel):
@@ -1603,12 +1642,14 @@ def build_server(
     ) -> WorkoutHistory:
         """The user's strength workouts (from Hevy) over a date range, newest first:
         title, time, duration, volume, and each exercise's sets (weight in lb and kg, reps,
-        set type, RPE).
+        set type, RPE). With a weekly gym-day goal set, also this week's gym days against it,
+        how many more are needed, the streak, and recent weeks.
 
         Use for "what did I do at the gym this week?", "what did I bench last time?" (pass
-        exercise and a wide range), or progress on a lift. Workouts sync from Hevy on their
-        own every few minutes after the user finishes one (or come from a CSV import on
-        the dashboard); if one isn't there yet, say so rather than guessing.
+        exercise and a wide range), progress on a lift, or "am I on track for my gym days?".
+        Workouts sync from Hevy on their own every few minutes after the user finishes one
+        (or come from a CSV import on the dashboard); if one isn't there yet, say so rather
+        than guessing.
         """
         with tool_errors(), connect() as conn:
             last = logic.parse_local_date(end, tz)
@@ -1623,11 +1664,16 @@ def build_server(
             out = [_workout(r, sets[r["id"]], tz, exercise) for r in rows]
             if exercise:
                 out = [w for w in out if w.exercises]
+            gym = None
+            if goal := store.get_gym_goal(conn):
+                starts = store.workout_starts(conn, hi)
+                gym = logic.gym_goal((logic.local_date(s, tz) for s in starts), goal, last)
             return WorkoutHistory(
                 start=first.isoformat(),
                 end=last.isoformat(),
                 workouts=out[:WORKOUTS_MAX],
                 total_workouts=len(out),
+                gym_goal=_gym_goal(gym),
             )
 
     @server.tool(annotations=READ_ONLY)
@@ -1759,6 +1805,27 @@ def build_server(
             raise ToolError("give at least one target to set or clear")
         with connect() as conn:
             return Targets(**store.set_targets(conn, changes))
+
+    @server.tool(annotations=CHANGES)
+    def set_gym_goal(
+        days_per_week: Annotated[
+            int | None,
+            Field(ge=1, le=7, description="Gym days a week, 1 to 7; null removes the goal"),
+        ],
+    ) -> GymGoalSet:
+        """Set or remove the user's weekly gym-day goal ("I want to go to the gym 6 days a
+        week"). A day with at least one workout counts; weeks run Monday to Sunday. Returns
+        this week's progress against it; get_workouts reports it too.
+        """
+        with connect() as conn:
+            goal = store.set_gym_goal(conn, days_per_week)
+            if goal is None:
+                return GymGoalSet(gym_goal=None)
+            day = logic.parse_local_date(None, tz)
+            _, hi = logic.local_day_bounds(day, tz)
+            starts = store.workout_starts(conn, hi)
+            g = logic.gym_goal((logic.local_date(s, tz) for s in starts), goal, day)
+            return GymGoalSet(gym_goal=_gym_goal(g))
 
     return server
 

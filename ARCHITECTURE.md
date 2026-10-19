@@ -74,7 +74,11 @@ neutral), `rolling_average`, `bucket_days(how="sum")` for weekly volume, and `ex
 (best set per exercise by Epley estimated one-rep max, up to 12 reps; a record has to beat, not
 tie). Optional body goals (migration 0017, `store.get_body_goals`, set at `/app/you/body-goals`)
 draw the goal weight on Weight and the step goal on Activity; they aren't macro targets, so the
-tools don't report them. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
+tools don't report them. A weekly gym-day goal (migration 0021, `store.get_gym_goal`, set at
+`/app/you/gym-goal` or with `set_gym_goal`) counts days with at least one workout, Monday to
+Sunday (`logic.gym_goal`: this week, days still needed and whether they fit, the streak of weeks
+that met it, the weeks since the first workout); Training shows it as a Gym days card, Today's
+Training tile as "n of goal days this week", and `get_workouts` reports it. Icons are Lucide (ISC, `static/LICENSE-lucide.txt`) inlined from `static/icons.svg`.
 Screens: Today
 (any day via arrows, a seven-day strip, or the month view at `/app/calendar` that tapping the
 day's title opens as a sheet, with a dot on logged days and a ring around days within 10% of
@@ -110,7 +114,7 @@ the weigh-ins by month with where they came from, swiped left to delete after as
 held) to open the weigh-in sheet (`/app/weight/{id}`: change its weight, time or date, or
 delete it); the + in the header and the Log sheet open Add a weigh-in (`/app/weight/new`,
 prefilled with the last weight), which goes back where it came from (`back`)),
-Training (#94, `/app/progress/training`: workouts, volume, average length and sessions a week
+Training (#94, `/app/progress/training`: the Gym days card against the weekly goal, workouts, volume, average length and sessions a week
 against the period before, volume by week (by month past 400 days) with ghosts, a heat strip of
 at least 13 weeks, personal bests newest first with a PR mark on records set in the range, and
 the range's workouts grouped by week with their count and volume; tap opens its sets per exercise, numbered, with warm-up, failure and drop sets marked W,
@@ -274,7 +278,8 @@ local-only mode everything is the owner's.
 | `save_portion` / `forget_portion` | Remember (or forget) what one of the user's portions of a food weighs ("my handful of Cheez-Its = 30 g") | `food_id`, `name`, `grams`, `count?`, `estimated?` / `food_id`, `name` |
 | `save_meal_template` / `log_meal_template` | One-phrase repeat meals ("log my usual breakfast") | `name`, `items` / `name`, `eaten_at` |
 | `save_recipe` / `get_recipe` / `delete_recipe` | The user's homemade recipes (#82): ingredients from foods with grams, steps, servings it makes; returns nutrition per serving and the recipe's `food_id` for `log_entries` | `name`, `servings`, `ingredients`, `steps?` / `name?` (omit to list) / `recipe_id` |
-| `get_workouts` | Strength workouts imported from Hevy (#94) over a range (default the last 30 days, at most 60 listed), newest first, each with its exercises and sets (lb and kg, reps, set type, RPE) and volume; `exercise` narrows to workouts with a matching exercise and lists only its sets | `start?`, `end?`, `exercise?` |
+| `get_workouts` | Strength workouts imported from Hevy (#94) over a range (default the last 30 days, at most 60 listed), newest first, each with its exercises and sets (lb and kg, reps, set type, RPE) and volume; `exercise` narrows to workouts with a matching exercise and lists only its sets; with a gym-day goal set, `gym_goal` has the week's progress, streak and recent weeks | `start?`, `end?`, `exercise?` |
+| `set_gym_goal` | Set or remove the weekly gym-day goal (1–7 days); returns this week's progress | `days_per_week` (null removes) |
 | `get_activity` | Daily activity from Apple Health (#94) over a range (default the last 7 days): steps, active and resting energy and their sum, exercise minutes, walking + running distance (mi and km), flights; each metric's daily average over full days; when the phone last sent | `start?`, `end?` |
 | `log_weight` / `get_weight` / `delete_weight` | Body weight (#94): record a weigh-in the user mentions; read weigh-ins over a range (default the last 30 days) with each day's last, the change, the average and the latest; delete a wrong one. Values in kg and lb | `weight`, `unit`, `measured_at?` / `start?`, `end?` / `weight_id` |
 

@@ -144,7 +144,8 @@ def to_json(
         steps = (r["steps"] or "").splitlines()
         recipes.append({**r, "steps": steps, "ingredients": ingredients})
     targets = conn.execute(
-        "SELECT kcal, protein_g, carbs_g, fat_g FROM targets WHERE user_id = ?", (user_id,)
+        "SELECT kcal, protein_g, carbs_g, fat_g, gym_days_goal FROM targets WHERE user_id = ?",
+        (user_id,),
     ).fetchone()
     return {
         "chomp_version": __version__,

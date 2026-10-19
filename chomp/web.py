@@ -94,6 +94,7 @@ YOU = f"{PREFIX}/you"
 INTEGRATIONS = f"{YOU}/integrations"
 GOALS_PAGE = f"{PREFIX}/targets"  # the daily nutrition goals
 BODY_GOALS = f"{YOU}/body-goals"  # goal weight and step goal (#105)
+GYM_GOAL = f"{YOU}/gym-goal"  # gym days a week
 PEOPLE = f"{YOU}/people"  # the owner adds and removes people (#109)
 INVITE = f"{PREFIX}/invite"  # an invite link: pick your password (#109)
 SHORTCUT_LINK = "health_shortcut_url"  # app_settings key: the shared Send to Chomp Shortcut
@@ -3026,6 +3027,7 @@ def add_routes(
         workouts = store.workouts_between(conn, *bounds(day, day))
         last_workout = workouts[0] if workouts else store.latest_workout(conn, end)
         sets = store.workout_sets(conn, [last_workout["id"]]) if last_workout else {}
+        gym = gym_progress(conn, day)
 
         values = moved.get(day, {})
         so_far = " so far" if day == now else ""
@@ -3157,6 +3159,8 @@ def add_routes(
                 sub = " · ".join(bits)
             else:
                 sub = f"Last workout, {ago_text(started, day)}"
+            if gym is not None:
+                sub += f" · {gym.this_week} of {gym.goal} days this week"
             tiles_html.append(
                 day_tile(
                     f"{WORKOUTS}/{last_workout['id']}" if started == day else TRAINING_PAGE,
@@ -6500,6 +6504,71 @@ def add_routes(
         _, hi = logic.local_day_bounds(last, tz)
         return lo, hi
 
+    def gym_progress(conn, day: date) -> logic.GymGoal | None:
+        """The weekly gym-day goal on a day, from the days with a workout; None without a goal."""
+        goal = store.get_gym_goal(conn)
+        if not goal:
+            return None
+        starts = store.workout_starts(conn, bounds(day, day)[1])
+        return logic.gym_goal((logic.local_date(s, tz) for s in starts), goal, day)
+
+    def gym_card(g: logic.GymGoal | None, day: date) -> str:
+        """Training's Gym days card: this week against the goal, the streak and the weeks
+        since the first workout; without a goal, a link to set one."""
+        if g is None:
+            return (
+                '<section class="card"><div class="chart-head"><h2>Gym days</h2></div>'
+                f'<p class="muted small"><a href="{GYM_GOAL}">Set a weekly gym-day goal</a>'
+                " to track how many days a week you train.</p></section>"
+            )
+        if g.left == 0:
+            status = "Goal met this week"
+        elif not g.reachable:
+            status = (
+                f"{g.left} more needed, {g.days_left} day{'' if g.days_left == 1 else 's'}"
+                " left: out of reach this week"
+            )
+        else:
+            status = (
+                f"{g.left} more by Sunday · {g.days_left} day{'' if g.days_left == 1 else 's'} left"
+            )
+        streak = f"{g.streak}-week streak" if g.streak else "No streak yet"
+        record = (
+            f" · goal met {g.met_weeks} of {g.counted_weeks} week"
+            f"{'' if g.counted_weeks == 1 else 's'}"
+            if g.counted_weeks
+            else ""
+        )
+        this_monday = day - timedelta(days=day.weekday())
+        rows = []
+        for w in g.weeks:
+            if w.monday == this_monday:
+                name = "This week"
+            elif w.monday == this_monday - timedelta(days=7):
+                name = "Last week"
+            else:
+                name = f"Week of {w.monday.strftime('%b')} {w.monday.day}"
+            if w.met:
+                mark = '<span class="badge pr">Met</span>'
+            elif w.monday == this_monday:
+                mark = '<span class="muted small">so far</span>'
+            else:
+                mark = '<span class="muted small">missed</span>'
+            rows.append(
+                f'<li class="item"><span class="grow">{name}</span>'
+                f'<span class="kcal">{w.days}<small> / {g.goal}</small></span> {mark}</li>'
+            )
+        return (
+            '<section class="card gym-goal"><div class="chart-head"><h2>Gym days'
+            f" <small>goal {g.goal} a week</small></h2>"
+            f'<a class="link small" href="{GYM_GOAL}">Change</a></div>'
+            f'<p class="big"><b>{g.this_week}</b> of {g.goal} this week</p>'
+            f'<p class="inspect">{e(status)} · {e(streak)}{e(record)}</p>'
+            f'<ul class="entries">{"".join(rows)}</ul>'
+            '<p class="muted small">A day with at least one workout counts; weeks run Monday'
+            " to Sunday.</p></section>"
+        )
+
     def previous(span: int, first: date, last: date) -> tuple[date, date] | None:
         """The period before the range, the same length; All has none."""
         return None if span == 0 else logic.previous_period(first, last)
@@ -7424,6 +7493,8 @@ def add_routes(
                     f"latest workout {short_date(logic.local_date(summary['latest'], tz), last)}",
                 )
             )
+        with connect(request) as conn:
+            parts.append(gym_card(gym_progress(conn, last), last))
         if not summary["count"]:
             parts.append(
                 '<section class="card empty"><p>No workouts yet.</p><p class="muted small">'
@@ -7593,6 +7664,7 @@ def add_routes(
         with connect(request) as conn:
             targets = store.get_targets(conn)
             body = store.get_body_goals(conn)
+            gym = store.get_gym_goal(conn)
             synced = store.last_activity_sync(conn)
             workouts = store.workouts_summary(conn)
             name = users.name_of(conn, store.user_of(conn)) if provider is not None else None
@@ -7647,10 +7719,11 @@ def add_routes(
             else '<div class="body"><p class="muted small">Local mode: this dashboard needs no'
             " sign-in.</p></div>"
         )
-        saved = request.query_params.get("saved") == "body"
+        saved = request.query_params.get("saved")
+        saved_text = {"body": "Weight and step goals saved.", "gym": "Gym-day goal saved."}
         body = (
             page_head("You")
-            + (toast("<span>Weight and step goals saved.</span>", "status") if saved else "")
+            + (toast(f"<span>{saved_text[saved]}</span>", "status") if saved in saved_text else "")
             + '<section class="group"><h2>Goals</h2>'
             + item(
                 f"{PREFIX}/targets?{urlencode({'back': YOU})}",
@@ -7665,6 +7738,15 @@ def add_routes(
                 "steps",
                 "Weight and steps",
                 e(body_goal or "Optional: a goal weight and a step goal"),
+            )
+            + item(
+                GYM_GOAL,
+                "dumbbell",
+                "train",
+                "Gym days",
+                f"{gym} day{'' if gym == 1 else 's'} a week"
+                if gym
+                else "Optional: how many days a week you train",
             )
             + "</section>"
             + '<section class="group"><h2>Integrations</h2>'
@@ -7796,6 +7878,57 @@ def add_routes(
         )
         return render(
             "Weight and steps",
+            body,
+            "you",
+            signed_in=provider is not None,
+            user=account(request),
+            status=400 if error else 200,
+            hue="you",
+        )
+
+    @server.custom_route(GYM_GOAL, methods=["GET", "POST"])
+    async def gym_goal(request: Request) -> Response:
+        """The weekly gym-day goal, 1 to 7 days, tracked on Training and Today. A blank box
+        clears it."""
+        error = ""
+        if request.method == "POST":
+            if (no := refused(request, "Change goals")) is not None:
+                return no
+            form = await request.form()
+            typed = str(form.get("days", "")).strip()[:4]
+            days = None
+            if typed:
+                try:
+                    days = int(typed)
+                    if not 1 <= days <= 7:
+                        raise ValueError(days)
+                except ValueError:
+                    error = "Gym days must be a whole number of days a week, 1 to 7."
+            if not error:
+                with connect(request) as conn:
+                    store.set_gym_goal(conn, days)
+                log.info("dashboard: updated gym-day goal")
+                return go(f"{YOU}?saved=gym")
+        else:
+            if not signed_in(request):
+                return to_login(request)
+            with connect(request) as conn:
+                goal = store.get_gym_goal(conn)
+            typed = str(goal) if goal else ""
+        problem = f'<p class="error" role="alert">{e(error)}</p>' if error else ""
+        body = (
+            back_head(YOU, "You", "Gym days")
+            + f'<form class="card stack" method="post" action="{GYM_GOAL}">{problem}'
+            '<label>Days a week at the gym<input name="days" type="number" min="1" max="7"'
+            f' inputmode="numeric" autocomplete="off" placeholder="6" value="{e(typed)}">'
+            "</label>"
+            '<p class="muted small">A day with at least one workout (from Hevy) counts. Training'
+            " shows this week against the goal, your streak and past weeks. Leave it empty for"
+            " no goal.</p>"
+            '<button type="submit">Save</button></form>'
+        )
+        return render(
+            "Gym days",
             body,
             "you",
             signed_in=provider is not None,
