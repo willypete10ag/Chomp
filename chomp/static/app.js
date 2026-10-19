@@ -311,6 +311,10 @@
       if (!select || !window.fetch) return;
       var asked = 0;
       date.addEventListener("change", function () {
+        // The old day's meals go at once: a meal picked there would ignore the new date
+        while (select.options.length > 1) select.remove(1);
+        select.value = "new";
+        select.dispatchEvent(new Event("change"));
         if (!date.value) return;
         var mine = ++asked;
         fetch(date.dataset.dayMeals + "?date=" + encodeURIComponent(date.value), {
@@ -321,16 +325,11 @@
             return r.text();
           })
           .then(function (html) {
-            if (mine !== asked) return;
-            var picked = select.value;
-            while (select.options.length > 1) select.remove(1);
+            if (mine !== asked || select.value !== "new") return;
             select.insertAdjacentHTML("beforeend", html);
-            select.value = picked;
-            if (select.value !== picked) select.value = "new";
-            select.dispatchEvent(new Event("change"));
           })
           .catch(function () {
-            // the menu keeps the meals it had; a new meal still goes to the date picked
+            // only A new meal is left, which goes to the date picked
           });
       });
     });
