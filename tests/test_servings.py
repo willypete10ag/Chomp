@@ -36,6 +36,33 @@ def test_whole_servings():
             web.parse_servings(bad, 85.4)
 
 
+def test_serving_names():
+    assert web.serving_name("1 bottle (354 ml)") == "bottle"
+    assert web.serving_name("1 Bottle") == "bottle"
+    assert web.serving_name("1 fl oz, prepared") == "fl oz"
+    for none in ("12 OZA (354 ml)", "3 Tbsp (46 g)", "1 large (50 g)", "1 serving", "", None):
+        assert web.serving_name(none) is None
+    assert web.servings_text(1, "bottle") == "1 bottle"
+    assert web.servings_text(0.5, "bottle") == "0.5 bottle"
+    assert web.servings_text(2, "bottle") == "2 bottles"
+    assert web.servings_text(2, "pouch") == "2 pouches"
+    assert web.servings_text(2, "patty") == "2 patties"
+    assert web.servings_text(3, "fl oz") == "3 fl oz"
+
+
+def test_named_serving_counts_in_its_name(http, conn, logged, pizza):
+    conn.execute("UPDATE foods SET serving_desc = '1 bottle (85.4 ml)' WHERE id = ?", (pizza,))
+    food = store.get_food(conn, pizza)
+    html = web.amount_picker(food, 85.4, 500)
+    assert ">Bottles</label>" in html and 'aria-label="One bottle more"' in html
+    sign_in(http)
+    data = {"food_id": pizza, "by": "servings", "servings": "0.5", "grams": "42.7",
+            "date": today(), "to": "new", "time": "12:00"}  # fmt: skip
+    page = follow(http, http.post("/app/log", data=data, headers=ORIGIN))
+    assert "Added 0.5 bottle of Pizza (42.7 g)." in page
+    assert "0.5 bottle · 42.7" in page  # the entry on Today
+
+
 def test_add_food_starts_on_one_serving(http, conn, logged, pizza):
     sign_in(http)
     page = http.get("/app/add", params={"date": today(), "q": "pizza"}).text
@@ -74,7 +101,7 @@ def test_log_by_servings(http, conn, logged, pizza):
         "time": "12:00",
     }
     page = follow(http, http.post("/app/log", data=data, headers=ORIGIN))
-    assert "Added 4 servings of Pizza (341.6 g)." in page
+    assert "Added 4 slices of Pizza (341.6 g)." in page
     assert meal_count(conn) == before + 1
     meal = conn.execute("SELECT id FROM meals ORDER BY id DESC").fetchone()["id"]
     entry = store.meal_entries(conn, meal)[0]

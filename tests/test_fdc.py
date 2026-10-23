@@ -75,17 +75,15 @@ def test_branded_record_fields():
     assert rec.serving_desc == "3 Tbsp (46 g)"
 
 
-def test_serving_in_ml_has_no_grams():
-    rec = fdcmod.to_record(
-        {
-            **fixture_json("fdc/search_egg_white_branded.json")["foods"][0],
-            "servingSize": 240,
-            "servingSizeUnit": "MLT",
-            "householdServingFullText": "1 cup",
-        }
-    )
-    assert rec.serving_g is None
-    assert rec.serving_desc == "1 cup (240 mlt)"
+def test_serving_in_ml_is_the_serving():
+    # Branded values for a mL serving are per 100 mL, so the mL count is the serving's size
+    branded = fixture_json("fdc/search_egg_white_branded.json")["foods"][0]
+    bottle = {"servingSize": 354, "servingSizeUnit": "MLT", "householdServingFullText": "12 OZA"}
+    rec = fdcmod.to_record(branded | bottle)
+    assert rec.serving_g == 354
+    assert rec.serving_desc == "12 OZA (354 ml)"
+    rec = fdcmod.to_record(branded | {"servingSize": 240, "servingSizeUnit": "IU"})
+    assert rec.serving_g is None and rec.serving_desc == "3 Tbsp (240 iu)"
 
 
 @pytest.mark.anyio

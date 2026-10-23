@@ -115,7 +115,8 @@ def to_record(product: Mapping[str, Any], gtin14: str | None) -> FoodRecord | No
     brand = (product.get("brands") or "").split(",")[0].strip() or None
     serving_g = None
     unit = (product.get("serving_quantity_unit") or "g").lower()
-    if unit == "g" and (q := _num(product, "serving_quantity")) and q > 0:
+    # OFF's _100g values are per 100 ml for drinks, so a ml serving works as its grams
+    if unit in ("g", "ml") and (q := _num(product, "serving_quantity")) and q > 0:
         serving_g = q
     return FoodRecord(
         source="off",

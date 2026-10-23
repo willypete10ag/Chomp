@@ -149,6 +149,10 @@ offers your portions as chips ("1 handful · 30 g") next to the gram chips. For 
 size, Log food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
 stepper in whole servings (a typed 1.5 still counts) and the server logs servings × the serving size; it is picked when the
 amount is a whole or half number of servings, and a food without a serving size shows grams only.
+A serving printed as one of something (`serving_desc` "1 bottle (354 ml)", not a size or
+weight like "1 large" or "3 Tbsp") names it (#139): the toggle and stepper say Bottles, the
+Undo note "Added 0.5 bottle", and a Today entry of a whole or half number of them
+"1 bottle · 354 g".
 
 Sheets (#105): a link with `data-sheet` opens its page's `?part=1` fragment in a bottom sheet
 (`app.js` keeps a stack with back and close, Escape, a tap outside or a drag down closes it, and
@@ -407,7 +411,8 @@ Tool descriptions matter: they are Claude's only documentation. Each should say 
 ## Gotchas
 - **UPC normalization:** UPC-A (12 digits) vs EAN-13 (leading 0) vs FDC's GTIN padding. Normalize to 14-digit GTIN for storage and try variants on lookup.
 - **FDC Branded data** is per serving in `labelNutrients` and per 100 g in `foodNutrients`; prefer per-100 g, but when a core value differs from the label by more than 10% (and past a small rounding floor), use the label values and flag it.
-- **FDC generic foods** (Foundation, SR Legacy) have no label serving. Their household measures (`foodMeasures` on search hits, `foodPortions` in details) give one: one of a thing ("1 large", medium before large) is preferred, else the first single measure ("1 cup"); bare weights never. A cached food without a serving gains one when its record comes back, and `serving_fill.py` (at most every 10 minutes, each food once per process) fetches details for the used FDC foods still missing one.
+- **FDC generic foods** (Foundation, SR Legacy) have no label serving. Their household measures (`foodMeasures` on search hits, `foodPortions` in details) give one: one of a thing ("1 large", medium before large) is preferred, else the first single measure ("1 cup"); bare weights never. A cached food without a serving gains one when its record comes back, and `serving_fill.py` (at most every 10 minutes, each food once per process) fetches details for the used or saved FDC foods still missing one.
+- **Servings in mL** (branded drinks, FDC `servingSizeUnit` MLT/ml and OFF `serving_quantity_unit` ml) count as the serving size, 1 ml as 1 g: both sources give drinks' values per 100 ml, so a 354 ml bottle at 54 kcal/100 ml logs as 190 kcal, the label's number.
 - **FDC carbs "by difference"** can be slightly negative (seen: -0.104 g). Carbs down to -1 are stored as 0; any other negative value drops the record.
 - **Open Food Facts** quality varies; mark OFF-sourced foods unverified until I confirm one.
 - **Rate limits:** FDC key allows ~1,000 req/hr; cache aggressively.
