@@ -928,12 +928,15 @@ class EntryRow:
     grams: float
     nutrients: logic.Nutrients
     estimated: bool = False  # grams estimated from a count, not weighed (#75)
+    serving_g: float | None = None  # the food's, to show the amount in servings
+    serving_desc: str | None = None
 
 
 # Callers add "AND ..." conditions and pass the user id first
 ENTRY_NUTRIENTS = ", ".join(f"e.{k}" for k in logic.NUTRIENTS)
 ENTRY_SELECT = (
-    f"SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.estimated, {ENTRY_NUTRIENTS}"
+    "SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.estimated,"
+    f" f.serving_g, f.serving_desc, {ENTRY_NUTRIENTS}"
     " FROM entries e JOIN foods f ON f.id = e.food_id JOIN meals m ON m.id = e.meal_id"
     " WHERE m.user_id = ?"
 )
@@ -949,6 +952,8 @@ def _entry(row: sqlite3.Row) -> EntryRow:
         grams=row["grams"],
         nutrients=nutrients_of(row),
         estimated=bool(row["estimated"]),
+        serving_g=row["serving_g"],
+        serving_desc=row["serving_desc"],
     )
 
 

@@ -20,7 +20,9 @@
   or a month calendar (dots on logged days, a ring around days within 10% of every goal) move
   between days. Tap a number for that day's Breakdown: calories by macro and meal, top foods,
   full nutrition facts.
-- **Log and edit:** Add food in servings or grams with your portions as chips; change, move
+- **Log and edit:** Add food in servings or grams with your portions as chips. A food whose
+  serving is printed as one of something ("1 bottle", set in its edit form) counts in those:
+  0.5 bottle, 2 bottles, shown on Today as "1 bottle · 354 g". Change, move
   or delete entries; rename, retime, combine or delete meals. Every change has Undo.
 - **Goals:** daily calories split between protein, carbs and fat on one draggable bar.
 - **Gym days:** a goal for how many days a week you train (You > Gym days, or tell Claude).

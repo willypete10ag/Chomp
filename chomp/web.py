@@ -1270,8 +1270,44 @@ def count_text(count: float) -> str:
     return num(count, 2).rstrip("0").rstrip(".")
 
 
-def servings_text(count: float) -> str:
-    return f"{count_text(count)} serving" + ("" if count_text(count) == "1" else "s")
+def servings_text(count: float, name: str | None = None) -> str:
+    """A number of servings, by the serving's name when it has one: "1 bottle", "0.5 bottle",
+    "2 bottles", else "2 servings"."""
+    text = count_text(count)
+    name = name or "serving"
+    return f"{text} {name if text == '1' or count < 1 else plural(name)}"
+
+
+# A serving's name is the thing it's printed as one of ("1 bottle (354 ml)"); sizes and bare
+# weights aren't one, and abbreviations stay as they are when there are more of them
+NOT_A_NAME = {"small", "medium", "large", "extra", "jumbo", "serving", "servings", "g", "gram"}
+SAME_PLURAL = {"tbsp", "tsp", "oz", "oza", "fl", "ml", "lb", "each"}
+SERVING_NAME = re.compile(r"\s*1(?:\.0+)?\s+([a-z][a-z -]*?)\s*(?:[(,]|$)", re.IGNORECASE)
+
+
+def serving_name(desc: str | None) -> str | None:
+    """What one serving is, from its printed description: "1 bottle (354 ml)" and "1 bottle"
+    are a bottle, "3 Tbsp (46 g)" and "1 large (50 g)" have no name (it's just a serving)."""
+    m = SERVING_NAME.match(desc or "")
+    if not m:
+        return None
+    name = " ".join(m.group(1).lower().split())
+    words = name.split()
+    if not words or len(words) > 3 or words[0] in NOT_A_NAME:
+        return None
+    return name
+
+
+def plural(name: str) -> str:
+    """'bottle' -> 'bottles', 'pouch' -> 'pouches', 'patty' -> 'patties', 'fl oz' stays."""
+    last = name.rsplit(" ", 1)[-1]
+    if last in SAME_PLURAL or last.endswith("s"):
+        return name
+    if last.endswith(("ch", "sh", "x")):
+        return name + "es"
+    if last.endswith("y") and last[-2:-1] not in ("a", "e", "i", "o", "u"):
+        return name[:-1] + "ies"
+    return name + "s"
 
 
 def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = "") -> str:
@@ -1297,19 +1333,21 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
         return f'<label><input type="radio" name="by" value="{name}"{checked}>{label}</label>'
 
     size = repr(float(serving))  # unrounded: the script's math must match the server's
+    name = serving_name(food["serving_desc"]) or "serving"
+    many = e(capitalized(plural(name)))
     return (
         '<div class="by" role="radiogroup" aria-label="Amount in">'
-        + option("servings", "Servings")
+        + option("servings", many)
         + option("grams", "Grams")
         + "</div>"
         f'<div class="amount servings" data-serving="{size}">'
-        '<span class="lead">Servings</span><span class="field">'
+        f'<span class="lead">{many}</span><span class="field">'
         '<button type="button" class="stepper js-only" data-step="-1"'
-        ' aria-label="One serving less">&minus;</button>'
+        f' aria-label="One {e(name)} less">&minus;</button>'
         f'<input name="servings" data-servings inputmode="decimal" autocomplete="off"'
-        f' aria-label="Servings" value="{e(servings)}">'
+        f' aria-label="{many}" value="{e(servings)}">'
         '<button type="button" class="stepper js-only" data-step="1"'
-        ' aria-label="One serving more">+</button>'
+        f' aria-label="One {e(name)} more">+</button>'
         f'<span class="unit">&times; {num(serving, 1)}{NBSP}g</span></span></div>'
         + amount_field("grams", value, label="Grams", unit="g", top=top, required=False)
     )
@@ -1459,6 +1497,16 @@ def with_thumb(src: str, name: str, inner: str, tone: str = "") -> str:
     return f'<div class="with-thumb">{thumb(src, name, tone)}<div class="grow">{inner}</div></div>'
 
 
+def entry_amount(x: store.EntryRow) -> str:
+    """How much of a food an entry is: for a food with a named serving (a bottle), that many
+    of them with the grams when it's a whole or half number; else the grams."""
+    grams = grams_text(x.grams, x.estimated)
+    name = serving_name(x.serving_desc)
+    if name and x.serving_g and (count := whole_servings(x.grams, x.serving_g)):
+        return f"{servings_text(count, name)} · {grams}"
+    return grams
+
+
 def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
     """One logged food on Today: its photo, name, amount, calories and macros. Tapping it
     opens its edit sheet (#105), or the edit page without the script; with the script, swipe
@@ -1482,7 +1530,7 @@ def entry_row(x: store.EntryRow, single: bool, photo: str = "") -> str:
             x.name,
             f'<div class="row"><span class="name clamp"><span class="sr">Edit </span>{e(x.name)}'
             f"{brand}</span>{kcal}</div>"
-            f'<div class="row small muted"><span>{grams_text(x.grams, x.estimated)}</span>'
+            f'<div class="row small muted"><span>{entry_amount(x)}</span>'
             f"<span>{macros_line(n)}</span></div>",
         )
         + "</a></div></li>"
@@ -2154,9 +2202,10 @@ def food_form(f: FoodForm) -> str:
             else '<div class="vhead small muted"><span>Per serving</span></div>'
         ),
         row("serving_g"),
-        f'<label class="desc">Serving as printed <small>(optional)</small><input'
-        f' name="serving_desc" value="{e(f.serving_desc)}" maxlength="{SERVING_DESC_MAX}"'
-        ' placeholder="2/3 cup (55g)" autocomplete="off"></label>',
+        f'<label class="desc">Serving as printed <small>(optional; "1 bottle" logs it in'
+        f' bottles)</small><input name="serving_desc" value="{e(f.serving_desc)}"'
+        f' maxlength="{SERVING_DESC_MAX}" placeholder="1 bottle (354 ml)" autocomplete="off">'
+        "</label>",
         *(row(k) for k in FORM_MAIN),
         "</div>",
         f'<details class="extras"{" open" if open_micros else ""}><summary>Vitamins and'
@@ -2674,7 +2723,7 @@ def item_amount(item) -> str:
     them, with the grams; else grams. An estimated amount gets the muted "~"."""
     grams = grams_text(item["grams"], bool(item["estimated"]))
     if item["serving_g"] and (count := whole_servings(item["grams"], item["serving_g"])):
-        return f"{servings_text(count)} · {grams}"
+        return f"{servings_text(count, serving_name(item['serving_desc']))} · {grams}"
     return grams
 
 
@@ -3925,7 +3974,8 @@ def add_routes(
             summary = f"Added {num(grams, 1)} g {food['name']}"
             if by_servings:
                 count = grams / food["serving_g"]
-                summary = f"Added {servings_text(count)} of {food['name']} ({num(grams, 1)} g)"
+                amount = servings_text(count, serving_name(food["serving_desc"]))
+                summary = f"Added {amount} of {food['name']} ({num(grams, 1)} g)"
             undo_id = store.record_undo(conn, summary, before, meals=created)
             meal = store.get_meal(conn, into)
         log.info("dashboard: logged food %d into meal %d", food["id"], into)

@@ -149,6 +149,10 @@ offers your portions as chips ("1 handful · 30 g") next to the gram chips. For 
 size, Log food and entry edits also have a Servings / Grams toggle (#80): Servings is a − / +
 stepper in whole servings (a typed 1.5 still counts) and the server logs servings × the serving size; it is picked when the
 amount is a whole or half number of servings, and a food without a serving size shows grams only.
+A serving printed as one of something (`serving_desc` "1 bottle (354 ml)", not a size or
+weight like "1 large" or "3 Tbsp") names it (#139): the toggle and stepper say Bottles, the
+Undo note "Added 0.5 bottle", and a Today entry of a whole or half number of them
+"1 bottle · 354 g".
 
 Sheets (#105): a link with `data-sheet` opens its page's `?part=1` fragment in a bottom sheet
 (`app.js` keeps a stack with back and close, Escape, a tap outside or a drag down closes it, and
