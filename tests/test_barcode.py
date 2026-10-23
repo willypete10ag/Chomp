@@ -325,6 +325,17 @@ def test_off_parse_kj_only_and_missing_core():
     assert offmod.parse_nutrients({"energy-kcal_100g": 1, "proteins_100g": 1}) is None
 
 
+def test_off_serving_in_ml_is_the_serving():
+    # OFF's _100g values are per 100 ml for drinks, so a ml serving is the serving's size
+    nutriments = {"energy-kcal_100g": 54, "proteins_100g": 8.5, "carbohydrates_100g": 3.4,
+                  "fat_100g": 1.3}  # fmt: skip
+    product = {"code": "1", "product_name": "Shake", "nutriments": nutriments,
+               "serving_size": "1 bottle (354 ml)", "serving_quantity": 354}  # fmt: skip
+    rec = offmod.to_record(product | {"serving_quantity_unit": "ml"}, None)
+    assert rec.serving_g == 354 and rec.serving_desc == "1 bottle (354 ml)"
+    assert offmod.to_record(product | {"serving_quantity_unit": "oz"}, None).serving_g is None
+
+
 @pytest.mark.anyio
 async def test_fdc_tries_upc_a_first_then_other_forms(upstream, fdc):
     upstream.add(SEARCH, {"foods": []})

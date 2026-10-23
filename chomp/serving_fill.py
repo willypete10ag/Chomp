@@ -1,8 +1,10 @@
-"""Serving sizes for used generic USDA foods, from their details' household measures.
+"""Serving sizes for used USDA foods, from their details: household measures for generic
+foods, and the label serving in mL for branded drinks.
 
 Generic foods (Foundation, SR Legacy) have no label serving, so they were cached with none
 and the dashboard offered grams only. Their USDA details list household measures ("1 large"
-= 50 g); the foods someone has used get one as their serving size, checked again every few
+= 50 g). Branded drinks were cached without their mL serving before it counted as one. The
+foods someone has used or saved get one as their serving size, checked again every few
 minutes for foods used since. Each food is asked about once per process.
 """
 
@@ -30,7 +32,8 @@ _tasks: set[asyncio.Task] = set()
 USED_WITHOUT_SERVING = """
     SELECT id, source_id FROM foods
     WHERE source = 'fdc' AND serving_g IS NULL AND deleted = 0 AND (
-        id IN (SELECT food_id FROM entries)
+        saved = 1 OR verified = 1
+        OR id IN (SELECT food_id FROM entries)
         OR id IN (SELECT food_id FROM portions)
         OR id IN (SELECT food_id FROM meal_template_items)
     )

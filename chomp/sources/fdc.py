@@ -83,6 +83,9 @@ LABEL_KEYS = {
     "potassium": "potassium_mg",
 }
 GRAM_UNITS = {"g", "grm", "gram", "grams"}
+# Branded values for a serving in mL are per 100 mL, so a mL count works as the serving's
+# grams in the per-100 math (a 354 mL bottle at 54 kcal/100 mL is 190 kcal)
+ML_UNITS = {"ml", "mlt", "milliliter", "milliliters"}
 FDC_GTIN_ORDER = {12: 0, 13: 1, 14: 2, 8: 3}
 
 
@@ -199,12 +202,13 @@ def _serving(food: Mapping[str, Any]) -> tuple[float | None, str | None]:
             return household
     size, unit = food.get("servingSize"), (food.get("servingSizeUnit") or "").strip()
     household = (food.get("householdServingFullText") or "").strip()
-    serving_g = float(size) if size and unit.lower() in GRAM_UNITS else None
+    ml = unit.lower() in ML_UNITS
+    serving_g = float(size) if size and (ml or unit.lower() in GRAM_UNITS) else None
     parts = []
     if household:
         parts.append(household)
     if size:
-        amount = f"{float(size):g} {'g' if serving_g else unit.lower()}"
+        amount = f"{float(size):g} {'ml' if ml else 'g' if serving_g else unit.lower()}"
         parts.append(f"({amount})" if household else amount)
     return serving_g, " ".join(parts) or None
 

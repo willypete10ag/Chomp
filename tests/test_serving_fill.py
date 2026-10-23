@@ -118,3 +118,23 @@ async def test_later_scans_take_newly_used_foods_and_skip_tried_ones(settings, c
     assert store.get_food(conn, later["id"])["serving_g"] == 50
     paths = [r.url.path for r in upstream.requests]
     assert paths == [f"/fdc/v1/food/{bare['source_id']}", "/fdc/v1/food/999"]
+
+
+@pytest.mark.anyio
+async def test_backfill_gives_saved_drinks_their_ml_serving(settings, conn, fdc, upstream):
+    # Cached before a mL serving counted as one; saved, never logged
+    shake = fixture_json("fdc/search_egg_white_branded.json")["foods"][0] | {
+        "fdcId": 4242,
+        "description": "SHAMROCK SHAKE",
+        "servingSize": None,
+        "servingSizeUnit": None,
+        "householdServingFullText": None,
+    }
+    row, _ = store.cache_record(conn, fdcmod.to_record(shake))
+    assert row["serving_g"] is None
+    conn.execute("UPDATE foods SET saved = 1 WHERE id = ?", (row["id"],))
+    bottle = {"servingSize": 354, "servingSizeUnit": "MLT", "householdServingFullText": "12 OZA"}
+    upstream.add("/fdc/v1/food/4242", shake | bottle)
+    assert await serving_fill.backfill(settings.db_path, fdc, pause_s=0) == 1
+    row = store.get_food(conn, row["id"])
+    assert row["serving_g"] == 354 and row["serving_desc"] == "12 OZA (354 ml)"
