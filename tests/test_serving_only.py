@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 
 import pytest
 import test_web
@@ -162,6 +163,13 @@ def test_dashboard_types_in_a_food_without_a_weight(http, conn, logged):
     picks = http.get("/app/add", params={"date": today(), "q": "fajitas"}).text
     item = picks[picks.index("Chicken Fajitas") :]
     assert "per order" in item and "Log 0.5 order of" in item and "50 g" not in item
+    # Its quick + logs the same half order again
+    quick = item[item.index('<form class="quick"') :]
+    quick = quick[: quick.index("</form>")]
+    again = dict(re.findall(r'name="(\w+)" value="([^"]*)"', quick))
+    assert again["servings"] == "0.5" and "grams" not in again
+    page = follow(http, http.post("/app/log", data=again, headers=ORIGIN))
+    assert "Added 0.5 order of Chicken Fajitas (Custom)." in page
     # Editing it keeps it weightless; a weight is refused
     edit = http.get(f"/app/foods/{food_id}/edit").text
     assert 'name="serving_g"' not in edit

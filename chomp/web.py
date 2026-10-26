@@ -2440,9 +2440,14 @@ def pick_item(
     )
     again = ""
     if quick:
-        if serving_only(row):
+        amount = f'<input type="hidden" name="grams" value="{round(quick, 1)}">'
+        if serving_only(row):  # logged in servings (#141), the only amount it takes
             shown = serving_amount(row, quick)
             shown_html = e(shown)
+            amount = (
+                '<input type="hidden" name="by" value="servings"><input type="hidden"'
+                f' name="servings" value="{round(quick / row["serving_g"], 3)}">'
+            )
         else:
             shown, shown_html = f"{num(quick, 1)} g", grams_text(quick, quick_estimated)
         target = (
@@ -2454,8 +2459,8 @@ def pick_item(
         again = (
             f'<form class="quick" method="post" action="{PREFIX}/log">'
             f'<input type="hidden" name="food_id" value="{row["id"]}">'
-            f'<input type="hidden" name="grams" value="{round(quick, 1)}">'
-            f'<input type="hidden" name="estimated" value="{int(quick_estimated)}">'
+            + amount
+            + f'<input type="hidden" name="estimated" value="{int(quick_estimated)}">'
             f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
             f'<input type="hidden" name="q" value="{e(q)}">{target}'
             f'<button type="submit" aria-label="Log {e(shown)} of {e(row["name"])}'
