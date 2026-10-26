@@ -370,6 +370,7 @@ h2.section small { font-size: .8rem; font-weight: 400; color: var(--muted); floa
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer;
   font-size: .9rem; font-weight: 600; color: var(--muted);
 }
+.by[hidden] { display: none; }
 .by input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .by label:has(input:checked) {
   background: var(--accent); color: var(--on-accent); border-color: var(--accent);

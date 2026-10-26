@@ -39,7 +39,8 @@ invent nutrition values; if a food can't be found, say so and ask for a barcode 
 For a restaurant dish, look up the restaurant's published nutrition (or use numbers the user
 gives) and save it with save_food. For home cooking, check the user's recipes (get_recipe);
 a recipe is logged like a food by its food_id, one serving being its serving_g. Otherwise ask
-for the numbers and serving weight.
+for the numbers and serving weight. A restaurant that publishes nutrition per order without
+a weight is fine: save_food without serving_g saves a serving_only food, logged in servings.
 Typical flow: search_food for each item, pick the best match (prefer portion and saved
 matches), log_entries with food_ids, amounts and the time they ate (ask if they haven't said;
 don't label meals breakfast/lunch/dinner unless they do), then show the user the per-item
@@ -132,22 +133,47 @@ class Food(BaseModel):
     brand: str | None
     source: Literal["fdc", "off", "label", "manual"]
     verified: bool
-    per_100g: Nutrients
-    serving_g: float | None
+    per_100g: Nutrients | None = Field(description="Null for a serving_only food")
+    per_serving: Nutrients | None = Field(
+        description="One serving's values; null for a food with no serving size"
+    )
+    serving_g: float | None = Field(
+        description="Weight of one serving in grams; null when unknown (always for serving_only)"
+    )
     serving_desc: str | None
+    serving_only: bool = Field(
+        False,
+        description="The food has no serving weight (e.g. a restaurant dish published per "
+        "order): log it with servings, never grams",
+    )
 
 
 def _food(row) -> Food:
+    per_100g = store.nutrients_of(row)
+    only = bool(row["serving_only"])
+    serving = row["serving_g"]
     return Food(
         food_id=row["id"],
         name=row["name"],
         brand=row["brand"],
         source=row["source"],
         verified=bool(row["verified"]),
-        per_100g=_nutrients(store.nutrients_of(row)),
-        serving_g=row["serving_g"],
+        per_100g=None if only else _nutrients(per_100g),
+        per_serving=_nutrients(logic.scale(per_100g, serving)) if serving else None,
+        serving_g=None if only else serving,
         serving_desc=row["serving_desc"],
+        serving_only=only,
     )
+
+
+def _grams(grams: float, serving_only: bool) -> float | None:
+    """Grams as shown to Claude: none for a food with no serving weight (#141), whose
+    stored grams only stand in for servings."""
+    return None if serving_only else round(grams, 1)
+
+
+def _servings(grams: float, serving_g: float | None) -> float | None:
+    return round(grams / serving_g, 3) if serving_g else None
 
 
 ADD_PHOTO = (
@@ -197,7 +223,10 @@ class Entry(BaseModel):
     food_id: int
     name: str
     brand: str | None
-    grams: float
+    grams: float | None = Field(description="Null for a serving_only food (no weight)")
+    servings: float | None = Field(
+        description="The amount in servings of the food; null if it has no serving size"
+    )
     estimated: bool = Field(description="The grams were estimated from a count, not weighed")
     nutrients: Nutrients
 
@@ -209,7 +238,8 @@ def _entry(e: store.EntryRow) -> Entry:
         food_id=e.food_id,
         name=e.name,
         brand=e.brand,
-        grams=e.grams,
+        grams=_grams(e.grams, e.serving_only),
+        servings=_servings(e.grams, e.serving_g),
         estimated=e.estimated,
         nutrients=_nutrients(e.nutrients),
     )
@@ -301,7 +331,8 @@ class PortionResult(BaseModel):
 class TemplateItem(BaseModel):
     food_id: int
     name: str
-    grams: float
+    grams: float | None = Field(description="Null for a serving_only food (no weight)")
+    servings: float | None
     nutrients: Nutrients
 
 
@@ -389,7 +420,13 @@ class ServerInfo(TypedDict):
 class LogItem(BaseModel):
     food_id: int = Field(description="food_id from search_food or lookup_barcode")
     grams: float | None = Field(
-        None, gt=0, description="Weight eaten in grams; give this or portion"
+        None, gt=0, description="Weight eaten in grams; give this, servings or portion"
+    )
+    servings: float | None = Field(
+        None,
+        gt=0,
+        description="How many of the food's servings, e.g. 0.5; the only amount a "
+        "serving_only food takes",
     )
     portion: str | None = Field(
         None, description="One of the food's portions from search_food, e.g. 'handful'"
@@ -630,16 +667,38 @@ def _activity(day: dict[str, float]) -> ActivityAmounts:
     )
 
 
+def _serving_grams(food, grams: float | None, servings: float | None) -> float:
+    """The grams to store for an amount given in grams or in servings of the food. A food
+    with no serving weight (#141) only takes servings."""
+    if (grams is None) == (servings is None):
+        raise ValueError(f"food {food['id']}: give grams or servings, not both")
+    if grams is not None:
+        if food["serving_only"]:
+            raise ValueError(
+                f"{food['name']} (food {food['id']}) has no serving weight: give servings, "
+                "not grams"
+            )
+        return grams
+    if not food["serving_g"]:
+        raise ValueError(
+            f"{food['name']} (food {food['id']}) has no serving size: give grams instead"
+        )
+    return servings * food["serving_g"]
+
+
 def _amounts(conn, items: list[LogItem]) -> list[tuple[int, float, bool]]:
-    """(food_id, grams, estimated) per item, a portion times its count turned into grams."""
+    """(food_id, grams, estimated) per item, servings or a portion times its count turned
+    into grams."""
     out = []
     for i in items:
-        if (i.grams is None) == (i.portion is None):
-            raise ValueError(f"food {i.food_id}: give grams or a portion, not both or neither")
+        amounts = [a for a in (i.grams, i.servings, i.portion) if a is not None]
+        if len(amounts) != 1:
+            raise ValueError(f"food {i.food_id}: give one of grams, servings or a portion")
         if i.portion is None:
             if i.count != 1:
                 raise ValueError(f"food {i.food_id}: count only applies with a portion")
-            out.append((i.food_id, i.grams, i.estimated))
+            food = store.get_food(conn, i.food_id)
+            out.append((i.food_id, _serving_grams(food, i.grams, i.servings), i.estimated))
         else:
             p = store.get_portion(conn, i.food_id, i.portion)
             out.append((i.food_id, p["grams"] * i.count, i.estimated or bool(p["estimated"])))
@@ -907,8 +966,9 @@ def build_server(
     ) -> LogResult:
         """Log one meal: one or more foods with the grams eaten.
 
-        Use food_ids from search_food or lookup_barcode. Give each item's grams, or one of
-        the food's portions with a count (3 handfuls: portion='handful', count=3). For a
+        Use food_ids from search_food or lookup_barcode. Give each item's grams, its
+        servings (half an order: servings=0.5; a serving_only food takes only servings), or
+        one of the food's portions with a count (3 handfuls: portion='handful', count=3). For a
         count with no portion, ask whether the user will give an exact weight or wants an
         estimate; an estimate is the food's serving_g x your count of servings, logged with
         estimated=true (then save_portion so you needn't ask next time). Every new meal
@@ -940,6 +1000,10 @@ def build_server(
     def update_entry(
         entry_id: Annotated[int, Field(description="entry_id from log_entries or get_day")],
         grams: Annotated[float | None, Field(gt=0, description="Corrected grams")] = None,
+        servings: Annotated[
+            float | None,
+            Field(gt=0, description="Corrected amount in servings (serving_only foods take this)"),
+        ] = None,
         food_id: Annotated[
             int | None, Field(description="Swap to this food (from search_food)")
         ] = None,
@@ -947,7 +1011,8 @@ def build_server(
             bool, Field(description="True if the new grams are still your estimate")
         ] = False,
     ) -> UpdateResult:
-        """Correct a logged item: change its grams, swap it to a different food, or both.
+        """Correct a logged item: change its amount (grams or servings), swap it to a
+        different food, or both.
 
         Use when the user corrects something ("the eggs were 220 g", "that was whole milk").
         New grams count as exact, clearing the entry's estimated mark, unless estimated=true.
@@ -956,9 +1021,12 @@ def build_server(
         Nutrients are recomputed from the food's current values. Returns the updated entry,
         its meal's new totals, and the day's totals.
         """
-        if grams is None and food_id is None:
-            raise ToolError("give grams, food_id, or both")
+        if grams is None and servings is None and food_id is None:
+            raise ToolError("give grams or servings, food_id, or both")
         with tool_errors(), connect() as conn:
+            if grams is not None or servings is not None:
+                target = food_id if food_id is not None else store.get_entry(conn, entry_id).food_id
+                grams = _serving_grams(store.get_food(conn, target), grams, servings)
             entry = store.update_entry(conn, entry_id, grams, food_id, estimated)
             meal = meal_out(conn, entry.meal_id)
             day = day_summary(conn, store.get_meal(conn, entry.meal_id)["eaten_at"])
@@ -1185,10 +1253,6 @@ def build_server(
         name: Annotated[
             str, Field(min_length=1, description="What the food is, e.g. 'Chipotle chicken bowl'")
         ],
-        serving_g: Annotated[
-            float,
-            Field(gt=0, description="Weight of one serving in grams, as published or weighed"),
-        ],
         kcal: Annotated[NutrientArg, Field(description="Calories per serving")],
         protein_g: Annotated[NutrientArg, Field(description="Protein per serving, g")],
         carbs_g: Annotated[NutrientArg, Field(description="Total carbohydrate per serving, g")],
@@ -1210,8 +1274,20 @@ def build_server(
         brand: Annotated[
             str | None, Field(description="Restaurant or maker, if any (e.g. 'Chipotle')")
         ] = None,
+        serving_g: Annotated[
+            float | None,
+            Field(
+                gt=0,
+                description="Weight of one serving in grams, as published or weighed. Omit "
+                "when the restaurant publishes no weight: the food is saved serving_only",
+            ),
+        ] = None,
         serving_desc: Annotated[
-            str | None, Field(description="The serving in words, e.g. '1 bowl' or '1 cup'")
+            str | None,
+            Field(
+                description="The serving in words, e.g. '1 bowl', '1 order' or '1 appetizer'; "
+                "a food with no serving_g is counted in these"
+            ),
         ] = None,
     ) -> SavedFood:
         """Save a food that has no package label or barcode: a restaurant dish from the
@@ -1224,11 +1300,13 @@ def build_server(
         nutrition page or PDF, then a site that republishes it. Copy the published numbers
         exactly, tell the user where they came from, and don't swap in a generic USDA food
         for a specific restaurant item. Every number must be published or given by the
-        user, never estimated; if the serving weight in grams isn't published, ask the user
-        for it. Pass confirmed=True only when the user says the numbers are right; web
-        numbers stay unconfirmed (amber on the dashboard) until they approve them. Returns
-        the saved food with a food_id ready for log_entries; to approve it later, use
-        confirm_food.
+        user, never estimated. Restaurants often publish nutrition per order with no
+        weight: then leave out serving_g (never make one up) and describe the serving
+        ("1 order", "1 appetizer"); the food is saved serving_only and logged with
+        servings (half an appetizer: servings=0.5). Pass confirmed=True only when the user
+        says the numbers are right; web numbers stay unconfirmed (amber on the dashboard)
+        until they approve them. Returns the saved food with a food_id ready for
+        log_entries; to approve it later, use confirm_food.
         """
         with tool_errors(), connect() as conn:
             if not name.strip():
@@ -1251,9 +1329,11 @@ def build_server(
                 name=name.strip(),
                 brand=(brand or "").strip() or None,
                 gtin=None,
-                per_100g=logic.per_serving_to_per_100g(per_serving, serving_g),
+                per_100g=logic.per_serving_to_per_100g(
+                    per_serving, serving_g or logic.SERVING_ONLY_G
+                ),
                 serving_g=serving_g,
-                serving_desc=(serving_desc or "").strip() or None,
+                serving_desc=(serving_desc or "").strip() or (None if serving_g else "1 serving"),
                 source="manual",
                 verified=confirmed,
             )
@@ -1290,7 +1370,8 @@ def build_server(
             Field(
                 gt=0,
                 description="If the corrected values are per serving (as on a label), the "
-                "serving size in grams. Omit when the values are per 100 g.",
+                "serving size in grams. Omit when the values are per 100 g, and for a "
+                "serving_only food, whose values are always per serving.",
             ),
         ] = None,
     ) -> ConfirmResult:
@@ -1327,6 +1408,16 @@ def build_server(
             if v is not None
         }
         with tool_errors(), connect() as conn:
+            if store.get_food(conn, food_id)["serving_only"]:
+                # Its values are per serving already (#141), stored per its stand-in serving
+                if per_serving_g is not None:
+                    raise ValueError(
+                        f"food {food_id} has no serving weight and its values are per serving; "
+                        "leave out per_serving_g"
+                    )
+                given |= _micros(micronutrients, micronutrients_percent_dv)
+                row, changed = store.confirm_food(conn, food_id, given, confirmed=confirmed)
+                return ConfirmResult(food=_food(row), changed=changed)
             if micronutrients_percent_dv and per_serving_g is None:
                 # % DV is always per serving, so it can't be read as per 100 g
                 raise ValueError(
@@ -1405,7 +1496,8 @@ def build_server(
             TemplateItem(
                 food_id=i["food_id"],
                 name=foods[i["food_id"]]["name"],
-                grams=i["grams"],
+                grams=_grams(i["grams"], bool(foods[i["food_id"]]["serving_only"])),
+                servings=_servings(i["grams"], foods[i["food_id"]]["serving_g"]),
                 nutrients=_nutrients(
                     logic.snapshot(store.nutrients_of(foods[i["food_id"]]), i["grams"])
                 ),

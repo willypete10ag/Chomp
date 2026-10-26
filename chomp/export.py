@@ -30,6 +30,7 @@ CSV_COLUMNS = (
     "food",
     "brand",
     "grams",
+    "servings",
     "estimated",
     *NUTRIENTS,
 )
@@ -45,12 +46,20 @@ def _entries(conn: sqlite3.Connection, lo: str, hi: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT m.id AS meal_id, m.eaten_at, m.label AS meal_label, m.note AS meal_note,"
         " e.id AS entry_id, e.food_id, f.name AS food, f.brand, e.grams, e.estimated,"
+        " f.serving_g, f.serving_only,"
         f" {', '.join(f'e.{k}' for k in NUTRIENTS)}"
         " FROM entries e JOIN meals m ON m.id = e.meal_id JOIN foods f ON f.id = e.food_id"
         " WHERE m.user_id = ? AND m.eaten_at >= ? AND m.eaten_at < ?"
         " ORDER BY m.eaten_at, m.id, e.id",
         (user_of(conn), lo, hi),
     ).fetchall()
+
+
+def _amounts(r: sqlite3.Row) -> tuple[float | None, float | None]:
+    """An entry's (grams, servings). A food with no serving weight (#141) has no grams: its
+    stored grams only stand in for servings."""
+    servings = round(r["grams"] / r["serving_g"], 3) if r["serving_g"] else None
+    return (None if r["serving_only"] else r["grams"]), servings
 
 
 def write_csv(
@@ -66,6 +75,7 @@ def write_csv(
     rows = _entries(conn, *_bounds(start, end, tz))
     for r in rows:
         local = logic.parse_utc(r["eaten_at"]).astimezone(ZoneInfo(tz))
+        grams, servings = _amounts(r)
         writer.writerow(
             [
                 local.date().isoformat(),
@@ -76,7 +86,8 @@ def write_csv(
                 r["food_id"],
                 r["food"],
                 r["brand"] or "",
-                r["grams"],
+                "" if grams is None else grams,
+                "" if servings is None else servings,
                 r["estimated"],
                 *("" if r[k] is None else r[k] for k in NUTRIENTS),
             ]
@@ -113,7 +124,8 @@ def to_json(
                 "food_id": r["food_id"],
                 "food": r["food"],
                 "brand": r["brand"],
-                "grams": r["grams"],
+                "grams": _amounts(r)[0],
+                "servings": _amounts(r)[1],
                 "estimated": bool(r["estimated"]),
                 **{k: r[k] for k in NUTRIENTS},
             }
@@ -160,7 +172,8 @@ def to_json(
         "foods": _dicts(
             conn,
             "SELECT id AS food_id, name, brand, gtin, source, source_id, verified, saved,"
-            f" {', '.join(NUTRIENTS)}, serving_g, serving_desc, created_at, updated_at"
+            f" {', '.join(NUTRIENTS)}, serving_g, serving_desc, serving_only,"
+            " created_at, updated_at"
             " FROM foods ORDER BY id",
         ),
         "meals": list(meals.values()),

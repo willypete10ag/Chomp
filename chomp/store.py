@@ -27,7 +27,8 @@ from chomp.sources import FoodRecord
 NUTRIENT_COLS = ", ".join(logic.NUTRIENTS)
 NUTRIENT_MARKS = ", ".join("?" * len(logic.NUTRIENTS))
 FOOD_COLS = (
-    f"id, name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS}, serving_g, serving_desc"
+    f"id, name, brand, gtin, source, source_id, verified, {NUTRIENT_COLS}, serving_g, serving_desc,"
+    " serving_only"
 )
 
 
@@ -200,7 +201,7 @@ def save_label_food(
     brand: str | None,
     gtin: str | None,
     per_100g: logic.Nutrients,
-    serving_g: float,
+    serving_g: float | None,
     serving_desc: str | None,
     source: str = "label",
     verified: bool = True,
@@ -208,6 +209,9 @@ def save_label_food(
     """Insert a food read from a package label (verified: it is the user's own label), or,
     with source 'manual', one typed in by hand. The dashboard (#59) saves label foods
     unverified unless the person ticked every value, and typed-in foods always unverified.
+
+    A serving_g of None (#141) saves a food counted only in servings: its serving is the
+    stand-in logic.SERVING_ONLY_G and `per_100g` holds its values per serving.
 
     If another food already holds the barcode, the barcode moves to the new food so future
     scans find the label values; the old food keeps its id for past entries. Returns the
@@ -221,7 +225,7 @@ def save_label_food(
             conn.execute("UPDATE foods SET gtin = NULL WHERE id = ?", (previous,))
         cur = conn.execute(
             f"INSERT INTO foods (name, brand, gtin, source, verified, {NUTRIENT_COLS}, serving_g,"
-            f" serving_desc) VALUES (?, ?, ?, ?, ?, {NUTRIENT_MARKS}, ?, ?)",
+            f" serving_desc, serving_only) VALUES (?, ?, ?, ?, ?, {NUTRIENT_MARKS}, ?, ?, ?)",
             (
                 name,
                 brand,
@@ -229,8 +233,9 @@ def save_label_food(
                 source,
                 int(verified),
                 *(n[k] for k in logic.NUTRIENTS),
-                serving_g,
+                logic.SERVING_ONLY_G if serving_g is None else serving_g,
                 serving_desc,
+                int(serving_g is None),
             ),
         )
         return get_food(conn, cur.lastrowid), previous
@@ -258,7 +263,13 @@ def confirm_food(
     _not_a_recipe(conn, food_id)
     if unknown := set(details) - set(FOOD_DETAILS):
         raise ValueError(f"unknown food details: {sorted(unknown)}")
-    current = nutrients_of(get_food(conn, food_id))
+    row = get_food(conn, food_id)
+    if row["serving_only"] and details.get("serving_g", row["serving_g"]) != row["serving_g"]:
+        raise ValueError(
+            f"{row['name']} has no serving weight and is counted in servings; save a new food"
+            " with the weight instead"
+        )
+    current = nutrients_of(row)
     merged = logic.round_nutrients({**current, **corrections})
     changed = [k for k in logic.NUTRIENTS if merged[k] != current[k]]
     sets = ", ".join(f"{k} = ?" for k in (*logic.NUTRIENTS, *details))
@@ -536,7 +547,10 @@ def save_portion(
     if not grams > 0:
         raise ValueError("a portion weighs more than 0 g")
     name = portion_name(name)
-    get_food(conn, food_id, live=True)
+    if get_food(conn, food_id, live=True)["serving_only"]:
+        raise ValueError(
+            f"food {food_id} has no serving weight, so it has no portions; log it in servings"
+        )
     user_id = user_of(conn)
     with transaction(conn):
         existed = conn.execute(
@@ -750,6 +764,10 @@ def save_recipe(
     if not ingredients:
         raise ValueError("a recipe needs at least one ingredient")
     foods = get_foods(conn, (f for f, _ in ingredients))
+    if weightless := [foods[f]["name"] for f, _ in ingredients if foods[f]["serving_only"]]:
+        raise ValueError(
+            f"{', '.join(weightless)} has no serving weight, so it can't be weighed into a recipe"
+        )
     logic.recipe_nutrition(
         [(nutrients_of(foods[f]), g) for f, g in ingredients], servings
     )  # validates grams and servings before anything is written
@@ -930,13 +948,19 @@ class EntryRow:
     estimated: bool = False  # grams estimated from a count, not weighed (#75)
     serving_g: float | None = None  # the food's, to show the amount in servings
     serving_desc: str | None = None
+    serving_only: bool = False  # the food has no weight; grams are servings x 100 (#141)
+
+    @property
+    def servings(self) -> float | None:
+        """The amount in servings, when the food has a serving."""
+        return self.grams / self.serving_g if self.serving_g else None
 
 
 # Callers add "AND ..." conditions and pass the user id first
 ENTRY_NUTRIENTS = ", ".join(f"e.{k}" for k in logic.NUTRIENTS)
 ENTRY_SELECT = (
     "SELECT e.id, e.meal_id, e.food_id, f.name, f.brand, e.grams, e.estimated,"
-    f" f.serving_g, f.serving_desc, {ENTRY_NUTRIENTS}"
+    f" f.serving_g, f.serving_desc, f.serving_only, {ENTRY_NUTRIENTS}"
     " FROM entries e JOIN foods f ON f.id = e.food_id JOIN meals m ON m.id = e.meal_id"
     " WHERE m.user_id = ?"
 )
@@ -954,6 +978,7 @@ def _entry(row: sqlite3.Row) -> EntryRow:
         estimated=bool(row["estimated"]),
         serving_g=row["serving_g"],
         serving_desc=row["serving_desc"],
+        serving_only=bool(row["serving_only"]),
     )
 
 
@@ -1039,7 +1064,11 @@ def update_entry(
     new_grams = grams if grams is not None else current.grams
     new_estimated = estimated if grams is not None else current.estimated
     swapped = food_id is not None and food_id != current.food_id
-    snap = logic.snapshot(nutrients_of(get_food(conn, new_food, live=swapped)), new_grams)
+    food = get_food(conn, new_food, live=swapped)
+    if grams is None and bool(food["serving_only"]) != current.serving_only:
+        # Grams of one are servings of the other (#141), so the amount can't carry over
+        raise ValueError(f"give the amount of {food['name']} too when swapping to it")
+    snap = logic.snapshot(nutrients_of(food), new_grams)
     with transaction(conn):
         conn.execute(
             f"UPDATE entries SET food_id = ?, grams = ?, estimated = ?, {SNAPSHOT_SETS}"

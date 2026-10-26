@@ -293,12 +293,8 @@ async def test_save_food_without_a_label(server):
 
 
 @pytest.mark.anyio
-async def test_save_food_needs_the_serving_weight(server):
+async def test_save_food_needs_a_name(server):
     async with Client(server) as client:
-        bad = await client.call_tool(
-            "save_food",
-            {"name": "Pad thai", "kcal": 900, "protein_g": 30, "carbs_g": 120, "fat_g": 30},
-        )
         blank = await call_error(
             client,
             "save_food",
@@ -309,7 +305,7 @@ async def test_save_food_needs_the_serving_weight(server):
             carbs_g=120,
             fat_g=30,
         )
-    assert bad.is_error and "needs a name" in blank
+    assert "needs a name" in blank
 
 
 def test_off_parse_kj_only_and_missing_core():

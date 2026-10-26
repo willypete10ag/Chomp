@@ -153,6 +153,16 @@ A serving printed as one of something (`serving_desc` "1 bottle (354 ml)", not a
 weight like "1 large" or "3 Tbsp") names it (#139): the toggle and stepper say Bottles, the
 Undo note "Added 0.5 bottle", and a Today entry of a whole or half number of them
 "1 bottle · 354 g".
+A food with no serving weight (#141, `foods.serving_only`, migration 0022), such as a
+restaurant dish published per order, has a stand-in `serving_g` of 100 (`logic.SERVING_ONLY_G`),
+so its per-100 g values are its per-serving values and an entry's grams are servings × 100.
+Nothing shows those grams: Log food and entry edits have the servings stepper only, entries,
+saved meals and Undo notes say "0.5 appetizer", its page is per serving, its edit form has no
+Serving size (adding one is refused: add a new food with the weight), and a typed-in food
+(New food, `save_food`) with Serving size left blank is saved this way. Portions and recipe
+ingredients are weights, so they refuse it; swapping an entry between it and a weighed food
+needs a new amount. Tools give `serving_g` and `per_100g` as null for it, with `per_serving`,
+and entries' `grams` as null with `servings`; exports give `servings` beside `grams` (blank).
 
 Sheets (#105): a link with `data-sheet` opens its page's `?part=1` fragment in a bottom sheet
 (`app.js` keeps a stack with back and close, Escape, a tap outside or a drag down closes it, and
@@ -271,9 +281,9 @@ local-only mode everything is the owner's.
 | `search_food` | Names any saved meal template the phrase matches (so "my protein shake" points to `log_meal_template`), then fuzzy search (SQLite FTS5): foods with a portion the phrase names → foods the user has used (verified, from a label, barcode-scanned (`foods.saved`, migration 0002), logged, with a portion or templated; verified first) → FDC (Foundation, SR Legacy, Survey (FNDDS) dishes as eaten (#88), and Branded; ranked by `sources/rank.py` (#97): query words matched, then how much of the name before its first comma the query names, then plain before processed, then generic before Branded unless the brand is named, then Foundation, SR Legacy, Survey, Branded; weak matches dropped, listings of one product grouped). FDC hits are cached into `foods` so every result has a `food_id`, but a cached hit only counts as used once logged. Every hit lists the user's `portions` of it | `query`, `limit` |
 | `lookup_barcode` | UPC/EAN lookup through the source chain; caches hits; a miss tells Claude to ask for a label photo | `barcode` |
 | `save_food_from_label` | Save a food from a label read; converts per-serving to per-100 g | `name`, `brand?`, `upc?`, `serving_g`, per-serving macros (fat subtypes, cholesterol, added sugars, sugar alcohols optional), `micronutrients?` (amounts), `micronutrients_percent_dv?` (label % DV, converted with FDA Daily Values) |
-| `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g`, per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
-| `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams or portion + count, estimated?}]`, `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
-| `update_entry` | Change grams or swap food; re-snapshots macros | `entry_id`, `grams?`, `food_id?`, `estimated?` (new grams count as exact unless set) |
+| `save_food` | Save a food with no label or barcode (restaurant dish from its published nutrition, which Claude may look up on the web; home cooking from the user's numbers); `source='manual'`, confirmed only when `confirmed` | `name`, `brand?`, `serving_g?` (left out when no weight is published: saved `serving_only`, counted in servings), per-serving macros (fiber, sugar, sodium, sat/trans fat, cholesterol, added sugars optional), `serving_desc?`, `confirmed?` |
+| `log_entries` | Log one or more items as a meal, or add them to a logged meal | `items[{food_id, grams, servings or portion + count, estimated?}]` (a `serving_only` food takes servings only), `eaten_at` (time or `now`; required for a new meal), `meal_label?`, `meal_id?` |
+| `update_entry` | Change the amount or swap food; re-snapshots macros | `entry_id`, `grams?` or `servings?`, `food_id?`, `estimated?` (new grams count as exact unless set) |
 | `update_meal` | Move a meal to a different time, or change its label or note | `meal_id`, `eaten_at?`, `meal_label?`, `note?` |
 | `delete_entry` | Remove a mistaken entry; deletes the meal when its last entry goes | `entry_id` |
 | `get_day` | All meals/entries + totals for a local date, with progress against targets | `date` |
