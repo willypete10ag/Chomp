@@ -34,7 +34,7 @@ import re
 import secrets
 import time
 from collections.abc import Mapping
-from contextlib import closing
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1278,6 +1278,17 @@ def servings_text(count: float, name: str | None = None) -> str:
     return f"{text} {name if text == '1' or count < 1 else plural(name)}"
 
 
+def serving_only(food) -> bool:
+    """A food with no serving weight (#141), counted only in servings: its serving_g is a
+    stand-in, so grams are never shown for it."""
+    return bool(food["serving_only"]) if "serving_only" in food.keys() else False  # noqa: SIM118 (a Row)
+
+
+def serving_amount(food, grams: float) -> str:
+    """Grams of a serving-only food (#141) as its servings: "0.5 appetizer", "2 orders"."""
+    return servings_text(grams / food["serving_g"], serving_name(food["serving_desc"]))
+
+
 # A serving's name is the thing it's printed as one of ("1 bottle (354 ml)"); sizes and bare
 # weights aren't one, and abbreviations stay as they are when there are more of them
 NOT_A_NAME = {"small", "medium", "large", "extra", "jumbo", "serving", "servings", "g", "gram"}
@@ -1320,8 +1331,17 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
     serving = food["serving_g"]
     if not serving:
         return amount_field("grams", typed if typed else value, label="Grams", unit="g", top=top)
+    only = serving_only(food)  # no weight (#141): servings only, the grams box stays hidden
     count = whole_servings(grams, serving)
-    by = by if by in ("servings", "grams") else "servings" if count else "grams"
+    by = (
+        "servings"
+        if only
+        else by
+        if by in ("servings", "grams")
+        else "servings"
+        if count
+        else "grams"
+    )
     servings = count_text(count or grams / serving).replace(",", "")
     if by == "servings" and typed:
         servings = typed
@@ -1335,12 +1355,17 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
     size = repr(float(serving))  # unrounded: the script's math must match the server's
     name = serving_name(food["serving_desc"]) or "serving"
     many = e(capitalized(plural(name)))
-    return (
+    toggle = (
         '<div class="by" role="radiogroup" aria-label="Amount in">'
         + option("servings", many)
         + option("grams", "Grams")
         + "</div>"
-        f'<div class="amount servings" data-serving="{size}">'
+    )
+    if only:
+        toggle = f'<div class="by" hidden>{option("servings", many)}</div>'
+    unit = "" if only else f'<span class="unit">&times; {num(serving, 1)}{NBSP}g</span>'
+    return (
+        toggle + f'<div class="amount servings" data-serving="{size}">'
         f'<span class="lead">{many}</span><span class="field">'
         '<button type="button" class="stepper js-only" data-step="-1"'
         f' aria-label="One {e(name)} less">&minus;</button>'
@@ -1348,7 +1373,7 @@ def amount_picker(food, grams: float, top: int, *, by: str = "", typed: str = ""
         f' aria-label="{many}" value="{e(servings)}">'
         '<button type="button" class="stepper js-only" data-step="1"'
         f' aria-label="One {e(name)} more">+</button>'
-        f'<span class="unit">&times; {num(serving, 1)}{NBSP}g</span></span></div>'
+        f"{unit}</span></div>"
         + amount_field("grams", value, label="Grams", unit="g", top=top, required=False)
     )
 
@@ -1382,6 +1407,10 @@ def grams_text(grams: float, estimated: bool) -> str:
 
 
 def grams_chips(food, portions=(), current: float | None = None) -> str:
+    if serving_only(food):  # in servings (#141): half or two of the current amount, or one
+        size = food["serving_g"]
+        amounts = [current / 2, current * 2] if current else [size / 2, size, size * 2]
+        return chips([(e(serving_amount(food, g)), g) for g in amounts])
     options = []
     if current:
         options += [(f"½ · {num(current / 2, 1)}{NBSP}g", current / 2)]
@@ -1500,6 +1529,8 @@ def with_thumb(src: str, name: str, inner: str, tone: str = "") -> str:
 def entry_amount(x: store.EntryRow) -> str:
     """How much of a food an entry is: for a food with a named serving (a bottle), that many
     of them with the grams when it's a whole or half number; else the grams."""
+    if x.serving_only and x.serving_g:
+        return e(servings_text(x.grams / x.serving_g, serving_name(x.serving_desc)))
     grams = grams_text(x.grams, x.estimated)
     name = serving_name(x.serving_desc)
     if name and x.serving_g and (count := whole_servings(x.grams, x.serving_g)):
@@ -1554,7 +1585,7 @@ def entry_editor(
     problem = ""
     if typed is not None:
         try:
-            if by == "servings" and food["serving_g"]:
+            if (by == "servings" or serving_only(food)) and food["serving_g"]:
                 parse_servings(typed, food["serving_g"])
             else:
                 parse_grams(typed)
@@ -1783,6 +1814,8 @@ def food_item(
     meta = []
     if per_serving and not row["serving_g"]:
         meta.append('<span class="badge">100 g</span>')
+    elif not per_serving and serving_only(row):  # no weight (#141): its values are per serving
+        meta.append('<span class="badge">1 serving</span>')
     if row["brand"]:
         meta.append(e(row["brand"]))
     if last_logged:
@@ -2085,7 +2118,9 @@ def scanned_values(row) -> dict[str, str]:
     form shows them. Saving compares against these to see what the person changed."""
     basis = row["serving_g"] or 100.0
     per = logic.scale(store.nutrients_of(row), basis)
-    return {"serving_g": field_text("serving_g", basis)} | {
+    # A food with no serving weight (#141) leaves Serving size blank
+    shown = None if serving_only(row) else basis
+    return {"serving_g": field_text("serving_g", shown)} | {
         k: field_text(k, per[k]) for k in FORM_KEYS[1:]
     }
 
@@ -2106,10 +2141,11 @@ def parse_value(key: str, text: str) -> float | None:
     return value
 
 
-def value_row(key: str, value: str, *, tick: bool | None) -> str:
+def value_row(key: str, value: str, *, tick: bool | None, optional: bool = False) -> str:
     """One value: its name, a number box, the unit, and (label photos only) a tick box the
-    person checks once the value matches the label."""
-    required = key in ("serving_g", *logic.CORE)
+    person checks once the value matches the label. `optional` lets a required value (the
+    serving size, #141) be left blank."""
+    required = key in ("serving_g", *logic.CORE) and not optional
     box = (
         f'<input id="f-{key}" name="{key}" type="number" step="any" min="0"'
         f' inputmode="decimal" autocomplete="off" value="{e(value)}"'
@@ -2145,6 +2181,7 @@ class FoodForm:
     serving_desc: str = ""
     food_id: int | None = None
     verified: bool = False  # typed in: the person ticked "Verified"
+    serving_only: bool = False  # edit: the food has no serving weight (#141)
     heading: str = ""
     note: str = ""  # shown above the values (e.g. what to check)
     error: str = ""
@@ -2168,7 +2205,26 @@ def food_form(f: FoodForm) -> str:
     ticking = f.mode == "label"
 
     def row(key: str) -> str:
-        return value_row(key, f.values.get(key, ""), tick=(key in f.ticks) if ticking else None)
+        return value_row(
+            key,
+            f.values.get(key, ""),
+            tick=(key in f.ticks) if ticking else None,
+            optional=key == "serving_g" and weightless,
+        )
+
+    # Typed in (a restaurant dish published per order, #141), the weight may be unknown
+    weightless = f.mode == "manual" or f.serving_only
+    weight_note = ""
+    if f.serving_only:
+        weight_note = (
+            '<p class="small muted">No serving weight on record: this food is counted in'
+            " servings. To give it one, add a new food with the weight.</p>"
+        )
+    elif f.mode == "manual":
+        weight_note = (
+            '<p class="small muted">No weight published (a restaurant dish per order)? Leave'
+            " Serving size blank and the food is counted in servings.</p>"
+        )
 
     open_micros = any(f.values.get(k) for k in logic.MICROS)
     barcode = (
@@ -2201,7 +2257,8 @@ def food_form(f: FoodForm) -> str:
             if ticking
             else '<div class="vhead small muted"><span>Per serving</span></div>'
         ),
-        row("serving_g"),
+        "" if f.serving_only else row("serving_g"),
+        weight_note,
         f'<label class="desc">Serving as printed <small>(optional; "1 bottle" logs it in'
         f' bottles)</small><input name="serving_desc" value="{e(f.serving_desc)}"'
         f' maxlength="{SERVING_DESC_MAX}" placeholder="1 bottle (354 ml)" autocomplete="off">'
@@ -2370,7 +2427,11 @@ def pick_item(
         meta.append(e(row["brand"]))
     if not row["verified"]:
         meta.append('<span class="badge unsure">Unconfirmed</span>')
-    meta.append("per 100 g")
+    meta.append(
+        f"per {e(serving_name(row['serving_desc']) or 'serving')}"
+        if serving_only(row)
+        else "per 100 g"
+    )
     where = (
         f'<input type="hidden" name="meal" value="{meal_id}">'
         f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
@@ -2379,6 +2440,16 @@ def pick_item(
     )
     again = ""
     if quick:
+        amount = f'<input type="hidden" name="grams" value="{round(quick, 1)}">'
+        if serving_only(row):  # logged in servings (#141), the only amount it takes
+            shown = serving_amount(row, quick)
+            shown_html = e(shown)
+            amount = (
+                '<input type="hidden" name="by" value="servings"><input type="hidden"'
+                f' name="servings" value="{round(quick / row["serving_g"], 3)}">'
+            )
+        else:
+            shown, shown_html = f"{num(quick, 1)} g", grams_text(quick, quick_estimated)
         target = (
             f'<input type="hidden" name="meal" value="{meal_id}">'
             if meal_id is not None
@@ -2388,12 +2459,12 @@ def pick_item(
         again = (
             f'<form class="quick" method="post" action="{PREFIX}/log">'
             f'<input type="hidden" name="food_id" value="{row["id"]}">'
-            f'<input type="hidden" name="grams" value="{round(quick, 1)}">'
-            f'<input type="hidden" name="estimated" value="{int(quick_estimated)}">'
+            + amount
+            + f'<input type="hidden" name="estimated" value="{int(quick_estimated)}">'
             f'<input type="hidden" name="date" value="{ctx.day.isoformat()}">'
             f'<input type="hidden" name="q" value="{e(q)}">{target}'
-            f'<button type="submit" aria-label="Log {num(quick, 1)} g of {e(row["name"])}'
-            f' again">{icon("plus")}<span>{grams_text(quick, quick_estimated)}</span></button>'
+            f'<button type="submit" aria-label="Log {e(shown)} of {e(row["name"])}'
+            f' again">{icon("plus")}<span>{shown_html}</span></button>'
             "</form>"
         )
     return (
@@ -2720,7 +2791,10 @@ def items_text(count: int) -> str:
 
 def item_amount(item) -> str:
     """How much of a food a saved meal has: servings when that's a whole or half number of
-    them, with the grams; else grams. An estimated amount gets the muted "~"."""
+    them, with the grams; else grams. An estimated amount gets the muted "~". A food with
+    no serving weight (#141) is only ever its servings."""
+    if serving_only(item):
+        return e(serving_amount(item, item["grams"]))
     grams = grams_text(item["grams"], bool(item["estimated"]))
     if item["serving_g"] and (count := whole_servings(item["grams"], item["serving_g"])):
         return f"{servings_text(count, serving_name(item['serving_desc']))} · {grams}"
@@ -2778,7 +2852,7 @@ class TemplateDraft:
 def draft_grams(food, amount: str, unit: str) -> float:
     """An editor item's grams: its servings times the food's serving size, or its grams."""
     raw = amount.replace(",", "").strip()
-    if unit == "servings" and food["serving_g"]:
+    if (unit == "servings" or serving_only(food)) and food["serving_g"]:
         return parse_servings(raw, food["serving_g"])
     return parse_grams(raw)
 
@@ -3946,7 +4020,7 @@ def add_routes(
                     store.get_meal(conn, into)
             except store.NotFound:
                 return go(with_params(retry, problem="gone"))
-            by_servings = form.get("by") == "servings" and food["serving_g"]
+            by_servings = (form.get("by") == "servings" or serving_only(food)) and food["serving_g"]
             try:
                 if by_servings:
                     raw = str(form.get("servings", "")).replace(",", "").strip()
@@ -3975,7 +4049,9 @@ def add_routes(
             if by_servings:
                 count = grams / food["serving_g"]
                 amount = servings_text(count, serving_name(food["serving_desc"]))
-                summary = f"Added {amount} of {food['name']} ({num(grams, 1)} g)"
+                summary = f"Added {amount} of {food['name']}"
+                if not serving_only(food):
+                    summary += f" ({num(grams, 1)} g)"
             undo_id = store.record_undo(conn, summary, before, meals=created)
             meal = store.get_meal(conn, into)
         log.info("dashboard: logged food %d into meal %d", food["id"], into)
@@ -4192,7 +4268,11 @@ def add_routes(
             except store.NotFound:
                 return message("Not found", "That entry no longer exists.", 404, signed_in=True)
             food = store.get_food(conn, entry.food_id)
-            by = "servings" if form.get("by") == "servings" and food["serving_g"] else "grams"
+            by = (
+                "servings"
+                if (form.get("by") == "servings" or serving_only(food)) and food["serving_g"]
+                else "grams"
+            )
             raw = str(form.get(by, "")).replace(",", "").strip()
             try:
                 if by == "servings":
@@ -4206,7 +4286,11 @@ def add_routes(
                 )
             before = store.capture(conn, entries=[entry_id])
             store.update_entry(conn, entry_id, grams, None)
-            summary = f"Changed {entry.name} from {num(entry.grams, 1)} g to {num(grams, 1)} g"
+            if serving_only(food):
+                was, now = serving_amount(food, entry.grams), serving_amount(food, grams)
+            else:
+                was, now = f"{num(entry.grams, 1)} g", f"{num(grams, 1)} g"
+            summary = f"Changed {entry.name} from {was} to {now}"
             undo_id = store.record_undo(conn, summary, before)
         log.info("dashboard: updated entry %d", entry_id)
         return back_to_day(day, anchor, done=undo_id)
@@ -4787,11 +4871,21 @@ def add_routes(
             return again(str(err))
         if not f.name:
             return again("A food needs a name.")
-        missing = [FORM_LABELS[k] for k in ("serving_g", *logic.CORE) if parsed[k] is None]
+        if mode == "edit" and f.food_id:
+            with connect(request) as conn, suppress(store.NotFound):
+                f.serving_only = serving_only(store.get_food(conn, f.food_id))
+        # Typed in, a blank serving size is a food counted in servings (#141)
+        weightless = mode == "manual" or f.serving_only
+        needed = logic.CORE if weightless else ("serving_g", *logic.CORE)
+        missing = [FORM_LABELS[k] for k in needed if parsed[k] is None]
         if missing:
             return again(f"Fill in {', '.join(missing)} from the label.")
         serving = parsed.pop("serving_g")
-        if sum(parsed[k] for k in ("protein_g", "carbs_g", "fat_g")) > serving * 1.05:
+        if f.serving_only and serving is not None:
+            return again("This food has no serving weight. To give it one, add a new food.")
+        if serving is not None and (
+            sum(parsed[k] for k in ("protein_g", "carbs_g", "fat_g")) > serving * 1.05
+        ):
             return again(
                 "Protein, carbs and fat add up to more than the serving weighs. Check the"
                 " serving size and those values."
@@ -4828,7 +4922,9 @@ def add_routes(
                     <= f.ticks
                 )
                 try:
-                    per_100g = logic.per_serving_to_per_100g(parsed, serving)
+                    per_100g = logic.per_serving_to_per_100g(
+                        parsed, serving or logic.SERVING_ONLY_G
+                    )
                 except ValueError as err:
                     return again(str(err))
                 row, _ = store.save_label_food(
@@ -4847,12 +4943,13 @@ def add_routes(
 
     # --- Food details and edits (#72) ---
 
-    def changed_values(row, parsed: dict, serving: float) -> tuple[dict, bool]:
+    def changed_values(row, parsed: dict, serving: float | None) -> tuple[dict, bool]:
         """Per-100 g corrections for the values the person changed on a food's form (the rest
         stay as stored, unrounded), and whether they gave a different serving size, which
-        restates every value."""
+        restates every value. A food with no serving weight (#141) has no serving size."""
         shown = scanned_values(row)
         restated = field_text("serving_g", serving) != shown["serving_g"]
+        serving = serving or row["serving_g"]
         changed = {k: v for k, v in parsed.items() if restated or field_text(k, v) != shown[k]}
         return {k: None if v is None else v * 100.0 / serving for k, v in changed.items()}, (
             restated
@@ -4872,7 +4969,7 @@ def add_routes(
             signed_in=True,
         )
 
-    async def save_edited_food(request: Request, f: FoodForm, parsed: dict, serving: float):
+    async def save_edited_food(request: Request, f: FoodForm, parsed: dict, serving: float | None):
         food_id = f.food_id or 0
         back = f.back or food_url(food_id, f"{PREFIX}/foods")
         with connect(request) as conn, db.transaction(conn):
@@ -4887,7 +4984,7 @@ def add_routes(
                 "serving_desc": f.serving_desc or None,
             }
             # A food with no serving size shows 100 g; describing that serving keeps it
-            if restated or row["serving_g"] or f.serving_desc:
+            if serving is not None and (restated or row["serving_g"] or f.serving_desc):
                 details["serving_g"] = serving
             before = store.capture(conn, foods=[food_id])
             store.confirm_food(conn, food_id, corrections, details, confirmed=f.verified)
@@ -4918,6 +5015,7 @@ def add_routes(
             serving_desc=row["serving_desc"] or "",
             food_id=food_id,
             verified=bool(row["verified"]),
+            serving_only=serving_only(row),
             back=back,
         )
         body = f'<section class="card">{food_form(f)}</section>'
@@ -4981,7 +5079,13 @@ def add_routes(
                 )
             )
 
-        if serving_g:
+        if serving_only(row):
+            values = (
+                '<p class="muted small basis-note">No serving weight on record, so this food'
+                " is counted in servings.</p>"
+                + basis(serving_g, f"Per serving · {e(row['serving_desc'] or '1 serving')}")
+            )
+        elif serving_g:
             grams = f"{num(serving_g, 1)}{NBSP}g"
             desc = row["serving_desc"]
             head = f"Per serving · {e(desc)}" if desc and desc != grams else f"Per {grams} serving"
@@ -5982,7 +6086,10 @@ def add_routes(
             except ValueError:
                 pass
             unit_field = ""
-            if food["serving_g"]:
+            if serving_only(food):  # no weight (#141): servings only
+                name = serving_name(food["serving_desc"]) or "serving"
+                unit_field = f'<input type="hidden" name="unit" value="servings">{e(plural(name))}'
+            elif food["serving_g"]:
                 options = "".join(
                     f'<option value="{v}"{" selected" if unit == v else ""}>{text}</option>'
                     for v, text in (
@@ -6115,6 +6222,8 @@ def add_routes(
                 grams = num(i["grams"], 1).replace(",", "")
                 est = grams if i["estimated"] else ""
                 count = whole_servings(i["grams"], i["serving_g"]) if i["serving_g"] else None
+                if serving_only(i):
+                    count = i["grams"] / i["serving_g"]
                 if count:
                     draft.items.append((i["id"], count_text(count), "servings", est))
                 else:

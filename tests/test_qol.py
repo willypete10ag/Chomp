@@ -105,7 +105,7 @@ async def test_log_items_need_grams_or_a_known_portion(server, foods):
             items=[{"food_id": eggs, "grams": 50, "portion": "egg"}],
             eaten_at="now",
         )
-        assert "grams or a portion" in both
+        assert "one of grams, servings or a portion" in both
         unknown = await call_error(
             client, "log_entries", items=[{"food_id": eggs, "portion": "egg"}], eaten_at="now"
         )

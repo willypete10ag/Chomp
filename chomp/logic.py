@@ -48,6 +48,10 @@ MICROS = (
 )
 NUTRIENTS = CORE + OPTIONAL + DETAILS + MICROS
 
+# A food with no serving weight (#141), such as a restaurant dish published per order, has
+# this stand-in serving: its per-100 g values are per serving and grams are servings x 100.
+SERVING_ONLY_G = 100.0
+
 # FDA Daily Values for adults and children 4 and over (21 CFR 101.9), in each nutrient's
 # unit. Used to read '% DV' off a label and to show a day's totals as a share of the DV.
 DAILY_VALUES = {

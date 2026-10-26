@@ -289,7 +289,7 @@ async def test_update_swaps_food(server, conn):
 async def test_update_needs_a_change(server, conn):
     async with Client(server) as client:
         msg = await call_error(client, "update_entry", entry_id=1)
-    assert "grams, food_id, or both" in msg
+    assert "food_id, or both" in msg
 
 
 @pytest.mark.anyio

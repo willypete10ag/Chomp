@@ -7,7 +7,9 @@
   Facts. Barcodes go through your saved foods, USDA Branded, then Open Food Facts; a miss asks
   for a label photo.
 - Save foods from a label, a restaurant's published nutrition, or your own numbers. Foods
-  from Open Food Facts or the web stay unconfirmed until you approve them.
+  from Open Food Facts or the web stay unconfirmed until you approve them. A restaurant dish
+  published per order with no weight is saved per serving ("1 appetizer") and logged in
+  servings (half an appetizer), never with made-up grams.
 - Remember your portions ("my handful of Cheez-Its is 30 g"), saved meals ("log my usual
   breakfast") and homemade recipes (logged by the serving).
 - Daily and range totals with averages, progress against calorie and macro goals, fiber,
