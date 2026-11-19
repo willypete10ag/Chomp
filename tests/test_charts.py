@@ -136,3 +136,8 @@ def test_sparkline_and_heat_strip():
     week = charts.heat_strip({}, span[:7], "weight", "Weigh-in days")  # one row, dated
     assert week.count("<rect") == 7 and ">5<" in week and ">11<" in week
     assert charts.heat_strip({}, span[:1], "weight", "Weigh-in days") == ""
+    marked = charts.heat_strip(
+        {span[0]: 1, span[1]: 1}, span, "kcal", "Days logged", {span[1]: "on target"}
+    )
+    assert marked.count('class="mark"') == 1 and marked.count('class="lv4"') == 1
+    assert "Tue Oct 6, on target" in marked

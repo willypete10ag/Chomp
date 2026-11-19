@@ -6952,9 +6952,10 @@ def add_routes(
             protein = mean(eaten[d]["protein_g"] for d in logged) or 0.0
             on = sum(1 for d in logged if logic.near_goals(eaten[d], targets))
             goal = f" of {num(targets['kcal'])}" if targets["kcal"] else ""
-            spark = charts.sparkline(
-                [(eaten.get(d) or {}).get("kcal") for d in done or days], "kcal", bars=True
-            )
+            # a box for each day with food logged; gold when calories and macros were on target
+            ate_on = {d: 1.0 for d in eaten if d >= first}
+            stars = {d: "on target" for d in ate_on if logic.near_goals(eaten[d], targets)}
+            heat = charts.heat_strip(ate_on, strip, "kcal", "Days logged", stars)
             cards.append(
                 overview_card(
                     f"{NUTRITION_PAGE}?days={span}",
@@ -6963,9 +6964,11 @@ def add_routes(
                     "Nutrition",
                     num(kcal),
                     f"kcal {per}{goal}",
-                    f"{num(protein)}{NBSP}g protein · on target {on} of {len(logged)} days"
-                    f" · {len(logged)} of {len(done) or 1} days logged",
-                    spark,
+                    # one span, so the flex row wraps it as text
+                    f"<span>{num(protein)}{NBSP}g protein · "
+                    f'<span class="on-target">on target {on} of {len(logged)} days</span>'
+                    f" · {len(logged)} of {len(done) or 1} days logged</span>",
+                    heat,
                 )
             )
 

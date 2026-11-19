@@ -261,3 +261,30 @@ def test_export_downloads(http, conn):
     assert r.status_code == 200 and r.json() is not None
     assert http.get("/app/you/export.xml").status_code == 404
     assert 'href="/app/you/export.csv" download' in http.get("/app/you").text
+
+
+def test_overview_nutrition_days_logged_and_on_target(http, conn):
+    """Nutrition's card on Overview has the training-style calendar: a box for each day with
+    food logged, gold for a day with calories and each macro within 10% of the goals."""
+    from datetime import UTC, datetime, timedelta
+
+    from test_tools import add_food
+
+    from chomp import logic, store
+
+    def ago(n: int) -> str:
+        return logic.format_utc(datetime.now(UTC) - timedelta(days=n))
+
+    store.set_targets(conn, {"kcal": 2000})  # macros default to a third of the calories each
+    day = add_food(conn, "Whole day", 2000, 2000 / 12, 2000 / 12, 2000 / 27)
+    store.log_meal(conn, [(day, 100)], ago(3), None)  # on target
+    store.log_meal(conn, [(day, 50)], ago(5), None)  # logged, half the goals
+    sign_in(http)
+    page = http.get("/app/progress").text.replace("\xa0", " ")
+    card = page.split('class="ov-card tone-kcal"')[1].split("</a>")[0]
+    assert "kcal a day of 2,000" in card  # the headline stays
+    strip = card.split('class="heat kcal"')[1].split("</svg>")[0]
+    assert strip.count("<rect") == 30 and 'aria-label="Days logged"' in card
+    assert strip.count('class="mark"') == 1 and strip.count('class="lv4"') == 1
+    assert ", on target</title>" in strip
+    assert "on target 1 of 2 days" in card and "2 of 29 days logged" in card
