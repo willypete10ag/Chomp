@@ -102,8 +102,9 @@ nutrition facts, where tapping a nutrient lists the foods that gave the most; a 
 value for a nutrient counts as none of it, and a nutrient no food that day reports is left
 out), the Progress overview (`/app/progress`, 30D by default: energy balance on full days with
 both food and burned energy, the weight trend and its weekly rate, steps a day against the
-period before, workouts a week with a heat strip, and calories and protein against the goals;
-each card opens its screen), Nutrition (tiles for calories and protein a day against the goals
+period before, workouts a week with a heat strip, and calories and protein against the goals
+with the same calendar of days logged, gold on days on target (calories and each macro within
+10%); each card opens its screen), Nutrition (tiles for calories and protein a day against the goals
 and the period before, days on target and days logged, averaged over full days; calories and
 protein charts with goal lines, the rolling average and Compare; energy balance when activity
 is here; each day with a slim macro bar links to that day and its Breakdown),

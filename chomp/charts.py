@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 import zlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape as e
@@ -444,9 +444,17 @@ def sparkline(
     return "".join(parts)
 
 
-def heat_strip(by_day: dict[date, float], days: Sequence[date], kind: str, title: str) -> str:
+def heat_strip(
+    by_day: dict[date, float],
+    days: Sequence[date],
+    kind: str,
+    title: str,
+    marks: Mapping[date, str] | None = None,
+) -> str:
     """One cell per day, shaded by the day's amount in four steps between the lightest and
-    heaviest days shown; empty days stay a faint cell. A week or less is one row, each cell
+    heaviest days shown; empty days stay a faint cell. `marks` picks out days drawn in the
+    strip's highlight instead (class "mark"), each with words added to its label (Nutrition's
+    days on target). A week or less is one row, each cell
     with its weekday and date under it; up to six weeks is a calendar, a row per week;
     longer is a column per week (Monday on top) with weekday letters down the side and
     months along the top."""
@@ -463,8 +471,12 @@ def heat_strip(by_day: dict[date, float], days: Sequence[date], kind: str, title
             rank = sum(1 for a in amounts if a <= v) / len(amounts)
             level = min(4, max(1, math.ceil(rank * 4)))
         label = f"{d.strftime('%a %b')} {d.day}" + ("" if level else ": none")
+        mark = (marks or {}).get(d)
+        if mark:
+            label += f", {mark}"
+        cls = "mark" if mark else f"lv{level}"
         return (
-            f'<rect class="lv{level}" x="{x}" y="{y}" width="{size}" height="{size}"'
+            f'<rect class="{cls}" x="{x}" y="{y}" width="{size}" height="{size}"'
             f' rx="3"><title>{e(label)}</title></rect>'
         )
 
